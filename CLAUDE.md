@@ -14,13 +14,16 @@ Al clonar el repo, Claude Code carga automáticamente:
 
 ### Configurar la API key del MCP de 21st.dev
 
-Cada ingeniero genera su propia key en [21st.dev/magic](https://21st.dev/magic) y la exporta antes de abrir Claude Code:
+Cada ingeniero genera su propia key en [21st.dev/magic](https://21st.dev/magic). **Nunca se commitea.**
 
 ```bash
-export TWENTY_FIRST_API_KEY="tu_api_key"
+cp .env.example .env
+# editá .env y pegá tu TWENTY_FIRST_API_KEY
+set -a && source .env && set +a   # exporta las vars al shell actual
+claude                             # arrancá Claude Code en la misma terminal
 ```
 
-Recomendado: agregalo a tu `~/.zshrc` / `~/.bashrc` para que persista.
+Alternativa más cómoda: instalá [direnv](https://direnv.net/) y renombrá `.env` a `.envrc` con `export ...` — se carga solo al entrar al directorio.
 
 La primera vez que Claude Code arranque en este repo va a pedir aprobación para correr el MCP — aceptá.
 
