@@ -8,11 +8,16 @@ import {
   Wrench,
   Camera,
   ShieldCheck,
+  AlertOctagon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import {
   PRIORITY_LABEL,
   PRIORITY_TINT,
+  REPORT_TYPE_COLOR,
+  REPORT_TYPE_LABEL,
+  SEVERITY_LABEL,
+  SEVERITY_TINT,
   type ReportDetailData,
   type EquipmentStatus,
   type Recommendation,
@@ -21,6 +26,8 @@ import { imageUrl } from "@/lib/maintenance/types";
 import { ClientHeader } from "@/components/maintenance/client-header";
 import { StatusDonut, StackedStatusBar } from "@/components/maintenance/charts";
 import { StatusBadge } from "@/components/maintenance/status-badge";
+import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -102,13 +109,46 @@ export default async function PublicReportPage({
         </Link>
 
         {/* Hero */}
-        <div className="rounded-xl border border-slate-200 bg-white p-6 lg:p-8">
+        <div
+          className={cn(
+            "relative overflow-hidden rounded-2xl border p-6 lg:p-8",
+            report.report_type === "correctivo"
+              ? "border-orange-200 bg-gradient-to-br from-orange-50 via-white to-white"
+              : "border-slate-200 bg-white",
+          )}
+        >
+          <span
+            aria-hidden
+            className="absolute inset-x-0 top-0 h-1.5"
+            style={{ backgroundColor: REPORT_TYPE_COLOR[report.report_type] }}
+          />
           <div className="grid gap-6 lg:grid-cols-3">
             <div className="lg:col-span-2">
-              <div className="flex items-center gap-2">
-                <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-blue-700 ring-1 ring-inset ring-blue-600/20">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset"
+                  style={{
+                    backgroundColor: `${REPORT_TYPE_COLOR[report.report_type]}1A`,
+                    color: REPORT_TYPE_COLOR[report.report_type],
+                  }}
+                >
+                  <ReportTypeIcon type={report.report_type} className="size-3.5" />
+                  {REPORT_TYPE_LABEL[report.report_type]}
+                </span>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-slate-700">
                   {report.report_number}
                 </span>
+                {report.severity ? (
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset",
+                      SEVERITY_TINT[report.severity],
+                    )}
+                  >
+                    <AlertOctagon className="size-3.5" />
+                    Severidad {SEVERITY_LABEL[report.severity]}
+                  </span>
+                ) : null}
                 {acceptance ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
                     <ShieldCheck className="size-3.5" />
@@ -116,8 +156,8 @@ export default async function PublicReportPage({
                   </span>
                 ) : null}
               </div>
-              <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-                Reporte de Mantenimiento Preventivo
+              <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-900">
+                {REPORT_TYPE_LABEL[report.report_type]}
               </h1>
               <p className="mt-1 text-sm text-slate-500">
                 {formatDateLong(report.performed_at_start)}
@@ -125,6 +165,14 @@ export default async function PublicReportPage({
                   ? ` — ${formatDateLong(report.performed_at_end)}`
                   : ""}
               </p>
+              {report.trigger_event_es ? (
+                <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-orange-700">
+                    Evento que originó el reporte
+                  </p>
+                  <p className="mt-1 text-sm text-orange-900">{report.trigger_event_es}</p>
+                </div>
+              ) : null}
               {report.summary_es ? (
                 <p className="mt-4 text-sm leading-relaxed text-slate-700">{report.summary_es}</p>
               ) : null}
