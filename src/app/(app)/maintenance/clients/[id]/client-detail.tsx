@@ -45,6 +45,7 @@ type Client = {
   id: string;
   org_id: string;
   name: string;
+  category: string | null;
   contact_email: string | null;
   contact_phone: string | null;
   brand_color: string | null;
@@ -960,9 +961,34 @@ function EquipmentRow({ equipment, clientId }: { equipment: Equipment; clientId:
   );
 }
 
+const CATEGORIES = [
+  "restaurante",
+  "hotel",
+  "retail",
+  "oficina",
+  "industrial",
+  "residencial",
+  "salud",
+  "educacion",
+  "otro",
+] as const;
+
+const CATEGORY_LABEL_MAP: Record<string, string> = {
+  restaurante: "Restaurante",
+  hotel: "Hotel",
+  retail: "Retail / Comercio",
+  oficina: "Oficina",
+  industrial: "Industrial",
+  residencial: "Residencial",
+  salud: "Salud",
+  educacion: "Educación",
+  otro: "Otro",
+};
+
 function ClientInfoEditor({ client }: { client: Client }) {
   const router = useRouter();
   const [name, setName] = useState(client.name);
+  const [category, setCategory] = useState(client.category ?? "");
   const [email, setEmail] = useState(client.contact_email ?? "");
   const [phone, setPhone] = useState(client.contact_phone ?? "");
   const [color, setColor] = useState(client.brand_color ?? "#0EA5E9");
@@ -972,6 +998,7 @@ function ClientInfoEditor({ client }: { client: Client }) {
 
   const dirty =
     name !== client.name ||
+    (category || null) !== client.category ||
     (email || null) !== client.contact_email ||
     (phone || null) !== client.contact_phone ||
     color !== client.brand_color ||
@@ -981,6 +1008,7 @@ function ClientInfoEditor({ client }: { client: Client }) {
     startTransition(async () => {
       await updateClient(client.id, {
         name,
+        category: category || null,
         contact_email: email || null,
         contact_phone: phone || null,
         brand_color: color,
@@ -1011,6 +1039,20 @@ function ClientInfoEditor({ client }: { client: Client }) {
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Nombre">
             <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm" />
+          </Field>
+          <Field label="Categoría del negocio">
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm"
+            >
+              <option value="">Sin categoría</option>
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {CATEGORY_LABEL_MAP[c]}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="Color de marca">
             <div className="flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2">

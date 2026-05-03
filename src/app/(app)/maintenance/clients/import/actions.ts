@@ -3,9 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { parseClientFromText, type ImportedClient } from "@/lib/ai/parse-client";
+import { parseClientFromText, type ImportedClient, type ImportedBatch } from "@/lib/ai/parse-client";
 
-type ParseResult = { error: string } | { ok: true; data: ImportedClient };
+type ParseResult = { error: string } | { ok: true; data: ImportedBatch };
 
 export async function parseClientFromInput(formData: FormData): Promise<ParseResult> {
   const text = (formData.get("text") as string | null) ?? "";
@@ -33,7 +33,7 @@ export async function parseClientFromInput(formData: FormData): Promise<ParseRes
   }
 }
 
-type SaveResult = { error: string } | { ok: true; clientId: string };
+type SaveResult = { error: string } | { ok: true; clientIds: string[] };
 
 function frequencyToDate(start: Date, frequency: string, days: number | null): Date {
   const next = new Date(start);
@@ -62,26 +62,17 @@ function frequencyToDate(start: Date, frequency: string, days: number | null): D
   return next;
 }
 
-export async function bulkCreateClient(payload: ImportedClient & { brand_color?: string }): Promise<SaveResult> {
-  const supabase = await createClient();
-  const { data: u } = await supabase.auth.getUser();
-  if (!u.user) return { error: "Sesión expirada" };
-
-  const { data: m } = await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!m) return { error: "Sin organización" };
-  const orgId = m.org_id as string;
-
-  // 1. Create client
+async function insertClient(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  orgId: string,
+  payload: ImportedClient & { brand_color?: string },
+): Promise<{ error?: string; id?: string }> {
   const { data: client, error: cErr } = await supabase
     .from("clients")
     .insert({
       org_id: orgId,
       name: payload.client.name,
+      category: payload.client.category,
       contact_email: payload.client.contact_email,
       contact_phone: payload.client.contact_phone,
       brand_color: payload.brand_color ?? "#0EA5E9",
@@ -91,18 +82,16 @@ export async function bulkCreateClient(payload: ImportedClient & { brand_color?:
     .single();
   if (cErr || !client) return { error: cErr?.message ?? "No se pudo crear cliente" };
 
-  // 2. Create locations
   const locationIdByName = new Map<string, string>();
   for (const loc of payload.locations) {
-    const { data: created, error: lErr } = await supabase
+    const { data: created } = await supabase
       .from("client_locations")
       .insert({ client_id: client.id, name: loc.name, address: loc.address })
       .select("id")
       .single();
-    if (lErr || !created) continue;
+    if (!created) continue;
     locationIdByName.set(loc.name, created.id);
 
-    // 3. Equipment per location
     if (loc.equipment.length > 0) {
       const equipmentRows = loc.equipment.map((e) => ({
         location_id: created.id,
@@ -118,7 +107,6 @@ export async function bulkCreateClient(payload: ImportedClient & { brand_color?:
     }
   }
 
-  // 4. Schedules
   if (payload.schedules.length > 0) {
     const today = new Date();
     const scheduleRows = payload.schedules
@@ -144,8 +132,51 @@ export async function bulkCreateClient(payload: ImportedClient & { brand_color?:
     }
   }
 
+  return { id: client.id };
+}
+
+export async function bulkCreateClient(payload: ImportedClient & { brand_color?: string }): Promise<{ error: string } | { ok: true; clientId: string }> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { error: "Sesión expirada" };
+  const { data: m } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", u.user.id)
+    .limit(1)
+    .single();
+  if (!m) return { error: "Sin organización" };
+  const r = await insertClient(supabase, m.org_id as string, payload);
+  if (r.error || !r.id) return { error: r.error ?? "Error" };
   revalidatePath("/maintenance/clients");
-  return { ok: true, clientId: client.id };
+  return { ok: true, clientId: r.id };
+}
+
+export async function bulkCreateBatch(
+  batch: { clients: (ImportedClient & { brand_color?: string })[] },
+): Promise<SaveResult> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { error: "Sesión expirada" };
+  const { data: m } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", u.user.id)
+    .limit(1)
+    .single();
+  if (!m) return { error: "Sin organización" };
+  const orgId = m.org_id as string;
+
+  const ids: string[] = [];
+  const errors: string[] = [];
+  for (const c of batch.clients) {
+    const r = await insertClient(supabase, orgId, c);
+    if (r.id) ids.push(r.id);
+    if (r.error) errors.push(`${c.client.name}: ${r.error}`);
+  }
+  if (ids.length === 0) return { error: errors.join("; ") || "No se pudo crear ninguno" };
+  revalidatePath("/maintenance/clients");
+  return { ok: true, clientIds: ids };
 }
 
 export async function bulkCreateClientAndRedirect(payload: ImportedClient & { brand_color?: string }) {

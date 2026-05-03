@@ -37,6 +37,7 @@ export async function createClientRecord(input: { name: string; brand_color?: st
 
 export async function updateClient(id: string, patch: {
   name?: string;
+  category?: string | null;
   contact_email?: string | null;
   contact_phone?: string | null;
   brand_color?: string | null;

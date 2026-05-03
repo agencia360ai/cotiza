@@ -1,14 +1,17 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, ChevronRight, MapPin, Box, Sparkles } from "lucide-react";
+import { Building2, ChevronRight, MapPin, Box, Sparkles, Tag } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { CreateClientForm } from "./create-form";
+import { CATEGORY_LABEL, type ClientCategory } from "@/lib/maintenance/types";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 type ClientRow = {
   id: string;
   name: string;
+  category: ClientCategory | null;
   brand_color: string | null;
   contact_email: string | null;
   contact_phone: string | null;
@@ -26,17 +29,34 @@ function initials(name: string): string {
     .toUpperCase();
 }
 
-export default async function ClientsListPage() {
+export default async function ClientsListPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ category?: string }>;
+}) {
+  const sp = await searchParams;
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
 
-  const { data: clients } = (await supabase
+  let q = supabase
     .from("clients")
     .select("*, locations:client_locations(id)")
-    .order("name", { ascending: true })) as { data: ClientRow[] | null };
+    .order("name", { ascending: true });
+  if (sp.category) q = q.eq("category", sp.category);
+  const { data: clients } = (await q) as { data: ClientRow[] | null };
 
   const rows = clients ?? [];
+
+  // Counts per category for filter chips
+  const { data: catCountsRaw } = (await supabase.from("clients").select("category")) as {
+    data: { category: ClientCategory | null }[] | null;
+  };
+  const categoryCounts = new Map<string, number>();
+  for (const r of catCountsRaw ?? []) {
+    const k = r.category ?? "_none";
+    categoryCounts.set(k, (categoryCounts.get(k) ?? 0) + 1);
+  }
 
   // Get equipment counts in a separate query
   const equipmentCounts = new Map<string, number>();
@@ -80,6 +100,44 @@ export default async function ClientsListPage() {
 
       <CreateClientForm />
 
+      {/* Category filter chips */}
+      {Array.from(categoryCounts.keys()).filter((k) => k !== "_none").length > 0 ? (
+        <div className="mt-6 flex flex-wrap items-center gap-1.5">
+          <Tag className="size-3.5 text-slate-400" />
+          <Link
+            href="/maintenance/clients"
+            className={cn(
+              "rounded-full px-3 py-1 text-xs font-medium",
+              !sp.category ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200",
+            )}
+          >
+            Todos
+            <span className={cn("ml-1 tabular-nums", sp.category ? "text-slate-400" : "text-white/70")}>
+              {(catCountsRaw ?? []).length}
+            </span>
+          </Link>
+          {(["restaurante", "hotel", "retail", "oficina", "industrial", "residencial", "salud", "educacion", "otro"] as ClientCategory[])
+            .filter((c) => (categoryCounts.get(c) ?? 0) > 0)
+            .map((c) => (
+              <Link
+                key={c}
+                href={`/maintenance/clients?category=${c}`}
+                className={cn(
+                  "rounded-full px-3 py-1 text-xs font-medium",
+                  sp.category === c
+                    ? "bg-slate-900 text-white"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200",
+                )}
+              >
+                {CATEGORY_LABEL[c]}
+                <span className={cn("ml-1 tabular-nums", sp.category === c ? "text-white/70" : "text-slate-400")}>
+                  {categoryCounts.get(c)}
+                </span>
+              </Link>
+            ))}
+        </div>
+      ) : null}
+
       <div className="mt-8">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-700">
           Cartera ({rows.length})
@@ -103,7 +161,15 @@ export default async function ClientsListPage() {
                     {initials(c.name)}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-slate-900">{c.name}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-semibold text-slate-900">{c.name}</p>
+                      {c.category ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
+                          <Tag className="size-2.5" />
+                          {CATEGORY_LABEL[c.category]}
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="mt-0.5 flex items-center gap-3 text-xs text-slate-500">
                       <span className="inline-flex items-center gap-1">
                         <MapPin className="size-3" />

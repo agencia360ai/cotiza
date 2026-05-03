@@ -161,6 +161,72 @@ export type ServiceProvider = {
   logo_path: string | null;
 };
 
+export type ClientCategory =
+  | "restaurante"
+  | "hotel"
+  | "retail"
+  | "oficina"
+  | "industrial"
+  | "residencial"
+  | "salud"
+  | "educacion"
+  | "otro";
+
+export const CLIENT_CATEGORIES: ClientCategory[] = [
+  "restaurante",
+  "hotel",
+  "retail",
+  "oficina",
+  "industrial",
+  "residencial",
+  "salud",
+  "educacion",
+  "otro",
+];
+
+export const CATEGORY_LABEL: Record<ClientCategory, string> = {
+  restaurante: "Restaurante",
+  hotel: "Hotel",
+  retail: "Retail / Comercio",
+  oficina: "Oficina",
+  industrial: "Industrial",
+  residencial: "Residencial",
+  salud: "Salud",
+  educacion: "Educación",
+  otro: "Otro",
+};
+
+export type ImportedEquipment = {
+  custom_name: string;
+  brand: string | null;
+  model: string | null;
+  category: "nevera" | "congelador" | "aire_acondicionado" | "evaporadora" | "otro" | null;
+  location_label: string | null;
+  voltage: string | null;
+  capacity_btu: number | null;
+};
+
+export type ImportedSchedule = {
+  location_name: string;
+  report_type: "preventivo" | "inspeccion" | "instalacion";
+  frequency: "mensual" | "bimestral" | "trimestral" | "semestral" | "anual" | "custom";
+  frequency_days: number | null;
+};
+
+export type ImportedClient = {
+  client: {
+    name: string;
+    category: ClientCategory | null;
+    contact_email: string | null;
+    contact_phone: string | null;
+    notes: string | null;
+  };
+  locations: { name: string; address: string | null; equipment: ImportedEquipment[] }[];
+  schedules: ImportedSchedule[];
+};
+
+export type ImportedBatch = { clients: ImportedClient[] };
+
 export type Schedule = {
   id: string;
   client_id: string;
