@@ -20,7 +20,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!org) redirect("/onboarding");
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen md:flex">
       <AppSidebar org={{ name: org.name }} user={{ email: user.email ?? null }} />
       <main className="flex-1 min-w-0">{children}</main>
     </div>

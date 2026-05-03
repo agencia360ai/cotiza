@@ -26,7 +26,7 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
   const project = quote.project as { id: string; name: string; client_name: string | null };
 
   return (
-    <div className="px-10 py-8 max-w-5xl">
+    <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
       <nav className="mb-3 text-sm text-muted-foreground flex items-center gap-1.5">
         <Link href="/dashboard" className="hover:text-foreground">Proyectos</Link>
         <ChevronRight className="size-3.5" />

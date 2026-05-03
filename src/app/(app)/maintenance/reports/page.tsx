@@ -86,7 +86,7 @@ export default async function ReportsListPage({
   for (const r of allForCounts ?? []) counts[r.status]++;
 
   return (
-    <div className="px-10 py-8 max-w-6xl">
+    <div className="px-4 py-6 md:px-10 md:py-8 max-w-6xl">
       <header className="mb-8 flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Reportes de mantenimiento</h1>

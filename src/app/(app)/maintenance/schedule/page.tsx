@@ -101,7 +101,7 @@ export default async function SchedulePage({
   const totalOverdue = buckets.overdue.length;
 
   return (
-    <div className="px-10 py-8 max-w-6xl">
+    <div className="px-4 py-6 md:px-10 md:py-8 max-w-6xl">
       <header className="mb-6">
         <div className="flex items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700">

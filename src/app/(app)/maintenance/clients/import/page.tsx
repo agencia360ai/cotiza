@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default function ImportClientPage() {
   return (
-    <div className="px-10 py-8 max-w-4xl">
+    <div className="px-4 py-6 md:px-10 md:py-8 max-w-4xl">
       <Link
         href="/maintenance/clients"
         className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"

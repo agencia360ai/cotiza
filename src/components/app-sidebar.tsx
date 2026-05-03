@@ -1,8 +1,19 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileText, LogOut, Package, Users, Building2, ClipboardCheck, Calendar } from "lucide-react";
+import {
+  FileText,
+  LogOut,
+  Package,
+  Users,
+  Building2,
+  ClipboardCheck,
+  Calendar,
+  Menu,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }>; section?: string };
@@ -23,16 +34,35 @@ type Props = {
 
 export function AppSidebar({ org, user }: Props) {
   const pathname = usePathname();
+  const [open, setOpen] = useState(false);
 
-  return (
-    <aside className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
-      <div className="px-5 py-5 border-b border-border">
-        <p className="text-sm font-semibold tracking-tight">Reportme<span className="text-blue-600">.ai</span></p>
-        <p className="text-xs text-muted-foreground mt-0.5 truncate">{org.name}</p>
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  const sections = Array.from(new Set(NAV.map((n) => n.section ?? "")));
+
+  const navContent = (
+    <>
+      <div className="px-5 py-5 border-b border-border flex items-center justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold tracking-tight">
+            Reportme<span className="text-blue-600">.ai</span>
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">{org.name}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="md:hidden -mr-2 flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent"
+          aria-label="Cerrar menú"
+        >
+          <X className="size-5" />
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3">
-        {Array.from(new Set(NAV.map((n) => n.section ?? ""))).map((section) => {
+        {sections.map((section) => {
           const items = NAV.filter((n) => (n.section ?? "") === section);
           if (items.length === 0) return null;
           return (
@@ -50,6 +80,7 @@ export function AppSidebar({ org, user }: Props) {
                     <Link
                       key={item.href}
                       href={item.href}
+                      onClick={() => setOpen(false)}
                       className={cn(
                         "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
                         active
@@ -80,6 +111,56 @@ export function AppSidebar({ org, user }: Props) {
           </button>
         </form>
       </div>
-    </aside>
+    </>
+  );
+
+  const activeItem = NAV.find(
+    (n) => pathname === n.href || pathname.startsWith(`${n.href}/`),
+  );
+
+  return (
+    <>
+      {/* Mobile top bar */}
+      <header className="md:hidden sticky top-0 z-30 flex items-center gap-3 border-b border-border bg-card/95 px-4 py-3 backdrop-blur">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="-ml-2 flex size-9 items-center justify-center rounded-lg text-foreground hover:bg-accent"
+          aria-label="Abrir menú"
+        >
+          <Menu className="size-5" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold tracking-tight">
+            {activeItem?.label ?? (
+              <>
+                Reportme<span className="text-blue-600">.ai</span>
+              </>
+            )}
+          </p>
+          <p className="truncate text-[11px] text-muted-foreground">{org.name}</p>
+        </div>
+      </header>
+
+      {/* Desktop sidebar */}
+      <aside className="hidden md:flex w-60 shrink-0 border-r border-border bg-card flex-col">
+        {navContent}
+      </aside>
+
+      {/* Mobile drawer */}
+      {open ? (
+        <div className="md:hidden fixed inset-0 z-50">
+          <button
+            type="button"
+            aria-label="Cerrar menú"
+            onClick={() => setOpen(false)}
+            className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
+          />
+          <aside className="absolute left-0 top-0 bottom-0 flex w-72 max-w-[85vw] flex-col bg-card shadow-xl">
+            {navContent}
+          </aside>
+        </div>
+      ) : null}
+    </>
   );
 }

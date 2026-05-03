@@ -19,7 +19,7 @@ export default async function DashboardPage() {
     .order("updated_at", { ascending: false });
 
   return (
-    <div className="px-10 py-8 max-w-5xl">
+    <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
       <header className="flex items-center justify-between mb-10">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Proyectos</h1>
