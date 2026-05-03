@@ -283,3 +283,91 @@ export function imageUrl(path: string): string {
   const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
   return `${base}/storage/v1/object/public/cotiza-maintenance/${path}`;
 }
+
+export type Technician = {
+  id: string;
+  org_id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  role: string;
+  active: boolean;
+  last_used_at: string | null;
+};
+
+export type CaptureKind = "photo" | "voice" | "text";
+
+export type CaptureItem = {
+  id: string;
+  kind: CaptureKind;
+  text: string | null;
+  photo_path: string | null;
+  equipment_id: string | null;
+  captured_at: string;
+};
+
+export type TechnicianClient = Client & {
+  locations: (Location & { equipment_count: number })[];
+};
+
+export type TechnicianDraft = {
+  id: string;
+  client_id: string;
+  client_name: string;
+  location_id: string | null;
+  location_name: string | null;
+  report_number: string;
+  report_type: ReportType;
+  severity: ReportSeverity | null;
+  performed_at_start: string;
+  capture_count: number;
+  item_count: number;
+  ai_draft_at: string | null;
+  updated_at: string;
+};
+
+export type TechnicianSubmitted = {
+  id: string;
+  client_id: string;
+  client_name: string;
+  location_id: string | null;
+  location_name: string | null;
+  report_number: string;
+  report_type: ReportType;
+  status: "draft" | "published" | "accepted";
+  performed_at_start: string;
+  published_at: string | null;
+  updated_at: string;
+};
+
+export type TechnicianPortalData = {
+  technician: Technician;
+  clients: TechnicianClient[];
+  drafts: TechnicianDraft[];
+  submitted: TechnicianSubmitted[];
+};
+
+export type TechnicianReportData = {
+  technician: Technician;
+  client: Client;
+  location: Location;
+  report: {
+    id: string;
+    client_id: string;
+    location_id: string;
+    org_id: string;
+    report_number: string;
+    report_type: ReportType;
+    severity: ReportSeverity | null;
+    trigger_event_es: string | null;
+    performed_at_start: string;
+    performed_at_end: string | null;
+    performed_by_name: string | null;
+    summary_es: string | null;
+    status: "draft" | "published" | "accepted";
+    capture_data: CaptureItem[];
+    ai_draft_at: string | null;
+    ai_generated: boolean;
+  };
+  items: ReportItem[];
+};
