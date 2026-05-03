@@ -54,15 +54,18 @@ export default async function PublicReportsListPage({
   searchParams,
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ type?: string }>;
+  searchParams: Promise<{ type?: string; location?: string }>;
 }) {
   const { token } = await params;
-  const { type: typeFilterRaw } = await searchParams;
+  const { type: typeFilterRaw, location: locationFilter } = await searchParams;
   const data = await loadDashboard(token);
   if (!data) notFound();
 
-  const { client, reports } = data;
+  const { client, locations, reports } = data;
   const typeFilter = (typeFilterRaw as ReportType | undefined) ?? null;
+  const activeLocation = locationFilter
+    ? locations.find((l) => l.id === locationFilter) ?? null
+    : null;
 
   const typeCounts: Record<ReportType, number> = {
     preventivo: 0,
@@ -72,7 +75,13 @@ export default async function PublicReportsListPage({
   };
   for (const r of reports) typeCounts[r.report_type]++;
 
-  const filtered = typeFilter ? reports.filter((r) => r.report_type === typeFilter) : reports;
+  let filtered = reports;
+  if (typeFilter) filtered = filtered.filter((r) => r.report_type === typeFilter);
+  if (activeLocation) {
+    filtered = filtered.filter(
+      (r) => r.location_id === activeLocation.id || r.location_id === null,
+    );
+  }
   const grouped = groupByYearMonth(filtered);
 
   return (
@@ -146,25 +155,32 @@ export default async function PublicReportsListPage({
         })}
       </div>
 
-      {/* Filter chip if active */}
-      {typeFilter ? (
-        <div className="mb-4 flex items-center gap-2 text-sm text-slate-600">
-          <span>Filtrando por</span>
-          <span
-            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset"
-            style={{
-              backgroundColor: `${REPORT_TYPE_COLOR[typeFilter]}1A`,
-              color: REPORT_TYPE_COLOR[typeFilter],
-              borderColor: REPORT_TYPE_COLOR[typeFilter],
-            }}
-          >
-            {REPORT_TYPE_LABEL[typeFilter]}
-          </span>
+      {/* Active filter chips */}
+      {typeFilter || activeLocation ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+          <span>Filtrando por:</span>
+          {typeFilter ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset"
+              style={{
+                backgroundColor: `${REPORT_TYPE_COLOR[typeFilter]}1A`,
+                color: REPORT_TYPE_COLOR[typeFilter],
+                borderColor: REPORT_TYPE_COLOR[typeFilter],
+              }}
+            >
+              {REPORT_TYPE_LABEL[typeFilter]}
+            </span>
+          ) : null}
+          {activeLocation ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
+              📍 {activeLocation.name}
+            </span>
+          ) : null}
           <Link
             href={`/p/${token}/reports`}
             className="text-xs text-slate-500 underline-offset-2 hover:text-slate-900 hover:underline"
           >
-            Limpiar
+            Limpiar todos
           </Link>
         </div>
       ) : null}

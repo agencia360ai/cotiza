@@ -14,7 +14,6 @@ import {
   Minus,
   ArrowRight,
   ShieldCheck,
-  MapPin,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -27,10 +26,10 @@ import {
 } from "@/lib/maintenance/types";
 import { HealthRing } from "@/components/maintenance/health-ring";
 import { StackedStatusBar } from "@/components/maintenance/charts";
-import { EquipmentCard } from "@/components/maintenance/equipment-card";
 import { StatusDot } from "@/components/maintenance/status-badge";
 import { ReportCard } from "@/components/maintenance/report-card";
 import { HistoryHeatmap } from "@/components/maintenance/history-heatmap";
+import { LocationCard } from "@/components/maintenance/location-card";
 import { imageUrl } from "@/lib/maintenance/types";
 
 export const dynamic = "force-dynamic";
@@ -270,88 +269,39 @@ export default async function PublicDashboardPage({
 
       {/* BODY */}
       <main className="mx-auto max-w-7xl px-6 py-10 lg:px-8 lg:py-14">
-        {/* Equipment by location */}
+        {/* Sucursales — main content */}
         <section>
-          <header className="mb-6 flex items-end justify-between">
+          <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-                Equipos por sucursal
+                Sucursales
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Estado actual de cada equipo basado en su última inspección
+                {locations.length} sucursal{locations.length === 1 ? "" : "es"} con un total de {total} equipos bajo monitoreo
               </p>
             </div>
-            <p className="hidden text-sm font-medium text-slate-500 sm:block">
-              {locations.length} sucursal{locations.length === 1 ? "" : "es"} · {total} equipos
-            </p>
           </header>
 
-          <div className="space-y-10">
-            {locations.map((loc) => {
-              const locCounts = aggregateStatus(loc.equipment);
-              const locScore = healthScore(locCounts);
-              return (
-                <div key={loc.id}>
-                  <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-3">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-                        <MapPin className="size-4" />
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-semibold tracking-tight text-slate-900">
-                          {loc.name}
-                        </h3>
-                        <p className="text-xs text-slate-500">
-                          {loc.equipment.length} equipo{loc.equipment.length === 1 ? "" : "s"}
-                          {loc.address ? ` · ${loc.address}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-3 text-xs">
-                        {locCounts.operativo > 0 ? (
-                          <span className="flex items-center gap-1 font-medium text-emerald-700">
-                            <StatusDot status="operativo" />
-                            {locCounts.operativo}
-                          </span>
-                        ) : null}
-                        {locCounts.atencion > 0 ? (
-                          <span className="flex items-center gap-1 font-medium text-amber-700">
-                            <StatusDot status="atencion" />
-                            {locCounts.atencion}
-                          </span>
-                        ) : null}
-                        {locCounts.critico > 0 ? (
-                          <span className="flex items-center gap-1 font-medium text-red-700">
-                            <StatusDot status="critico" />
-                            {locCounts.critico}
-                          </span>
-                        ) : null}
-                      </div>
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold tabular-nums text-slate-700">
-                        {locScore}% salud
-                      </span>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    {loc.equipment.map((e) => (
-                      <EquipmentCard key={e.id} equipment={e} href={`/p/${token}/equipment/${e.id}`} />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="space-y-6">
+            {locations.map((loc) => (
+              <LocationCard
+                key={loc.id}
+                location={loc}
+                token={token}
+                reports={reports}
+              />
+            ))}
           </div>
         </section>
 
         {/* Heatmap of equipment history */}
-        <section className="mt-12">
+        <section className="mt-14">
           <header className="mb-5">
             <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-              Mapa histórico
+              Mapa histórico global
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Ve de un vistazo cómo evolucionó el estado de cada equipo a lo largo del tiempo
+              Cómo evolucionó el estado de cada equipo en cada inspección
             </p>
           </header>
           <HistoryHeatmap locations={locations} token={token} />
