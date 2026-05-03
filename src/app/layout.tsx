@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cotiza",
-  description: "Plataforma de cotizaciones HVAC para Panamá.",
+  title: "Reportme.ai",
+  description: "Reportes de mantenimiento HVAC asistidos por IA para Panamá.",
 };
 
 export default function RootLayout({

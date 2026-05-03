@@ -71,7 +71,7 @@ export default async function PublicReportPage({
   const data = await loadReport(token, id);
   if (!data) notFound();
 
-  const { client, report, items, acceptance } = data;
+  const { client, service_provider, report, items, acceptance } = data;
   const counts = aggregateItemStatus(items);
   const total = items.length;
 
@@ -95,7 +95,7 @@ export default async function PublicReportPage({
     <>
       <ClientHeader
         client={client}
-        serviceProvider="DICEC, INC"
+        serviceProvider={service_provider?.name ?? "Reportme.ai"}
         subtitle={`Reporte ${report.report_number} · ${formatDateLong(report.performed_at_start)}`}
       />
 

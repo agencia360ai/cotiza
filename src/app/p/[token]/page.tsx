@@ -78,7 +78,7 @@ export default async function PublicDashboardPage({
   const data = await loadDashboard(token);
   if (!data) notFound();
 
-  const { client, locations, reports } = data;
+  const { client, locations, reports, service_provider } = data;
   const allEquipment = locations.flatMap((l) => l.equipment);
   const counts = aggregateStatus(allEquipment);
   const total = allEquipment.length;
@@ -134,7 +134,7 @@ export default async function PublicDashboardPage({
             </div>
             <div className="hidden items-center gap-2 rounded-full bg-white/5 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/10 backdrop-blur sm:inline-flex">
               <ShieldCheck className="size-3.5 text-emerald-400" />
-              Servicio prestado por <span className="font-semibold text-white">DICEC, INC</span>
+              Servicio prestado por <span className="font-semibold text-white">{service_provider?.name ?? "Reportme.ai"}</span>
             </div>
           </div>
 

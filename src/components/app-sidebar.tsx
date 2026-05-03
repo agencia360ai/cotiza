@@ -26,7 +26,7 @@ export function AppSidebar({ org, user }: Props) {
   return (
     <aside className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
       <div className="px-5 py-5 border-b border-border">
-        <p className="text-sm font-semibold tracking-tight">Cotiza</p>
+        <p className="text-sm font-semibold tracking-tight">Reportme<span className="text-blue-600">.ai</span></p>
         <p className="text-xs text-muted-foreground mt-0.5 truncate">{org.name}</p>
       </div>
 

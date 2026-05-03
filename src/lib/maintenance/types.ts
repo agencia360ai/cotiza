@@ -156,10 +156,33 @@ export type ReportSummary = {
   item_counts: Partial<Record<EquipmentStatus, number>> | null;
 };
 
+export type ServiceProvider = {
+  name: string;
+  logo_path: string | null;
+};
+
+export type Schedule = {
+  id: string;
+  client_id: string;
+  location_id: string | null;
+  location_name: string | null;
+  report_type: ReportType;
+  frequency: "mensual" | "bimestral" | "trimestral" | "semestral" | "anual" | "custom";
+  frequency_days: number | null;
+  start_date: string;
+  next_due_date: string;
+  last_completed_at: string | null;
+  assigned_technician_id: string | null;
+  notes: string | null;
+  active: boolean;
+};
+
 export type DashboardData = {
   client: Client;
+  service_provider: ServiceProvider;
   locations: Location[];
   reports: ReportSummary[];
+  schedules: Schedule[];
 };
 
 export type ReportItem = {
@@ -179,6 +202,7 @@ export type ReportItem = {
 
 export type ReportDetailData = {
   client: Client;
+  service_provider: ServiceProvider;
   location: Location | null;
   report: Omit<ReportSummary, "location_name" | "item_counts"> & {
     performed_by_phone: string | null;

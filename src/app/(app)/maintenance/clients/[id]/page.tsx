@@ -32,6 +32,18 @@ export default async function ClientDetailPage({
     .eq("kind", "client_view")
     .order("created_at", { ascending: false });
 
+  const { data: schedules } = await supabase
+    .from("maintenance_schedules")
+    .select("*")
+    .eq("client_id", id)
+    .order("next_due_date", { ascending: true });
+
+  const { data: technicians } = await supabase
+    .from("technicians")
+    .select("id, name, active")
+    .eq("active", true)
+    .order("name", { ascending: true });
+
   return (
     <div className="px-10 py-8 max-w-5xl">
       <Link
@@ -46,6 +58,8 @@ export default async function ClientDetailPage({
         client={client}
         locations={locationsRaw ?? []}
         shareLinks={shareLinks ?? []}
+        schedules={schedules ?? []}
+        technicians={technicians ?? []}
       />
     </div>
   );

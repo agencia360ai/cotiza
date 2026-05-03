@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Settings,
@@ -15,8 +15,14 @@ import {
   ChevronDown,
   ChevronRight,
   Save,
+  Upload,
+  Calendar,
+  Repeat,
+  ImageIcon,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { imageUrl, type ReportType } from "@/lib/maintenance/types";
 import {
   updateClient,
   deleteClientRecord,
@@ -28,6 +34,11 @@ import {
   deleteEquipment,
   createShareLink,
   deleteShareLink,
+  uploadClientLogo,
+  removeClientLogo,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
 } from "../actions";
 
 type Client = {
@@ -37,7 +48,29 @@ type Client = {
   contact_email: string | null;
   contact_phone: string | null;
   brand_color: string | null;
+  logo_path: string | null;
   notes: string | null;
+};
+
+type Schedule = {
+  id: string;
+  client_id: string;
+  location_id: string | null;
+  report_type: "preventivo" | "inspeccion" | "instalacion";
+  frequency: "mensual" | "bimestral" | "trimestral" | "semestral" | "anual" | "custom";
+  frequency_days: number | null;
+  start_date: string;
+  next_due_date: string;
+  last_completed_at: string | null;
+  assigned_technician_id: string | null;
+  notes: string | null;
+  active: boolean;
+};
+
+type Technician = {
+  id: string;
+  name: string;
+  active: boolean;
 };
 
 type Equipment = {
@@ -71,15 +104,25 @@ export function ClientDetailEditor({
   client,
   locations,
   shareLinks,
+  schedules,
+  technicians,
 }: {
   client: Client;
   locations: Location[];
   shareLinks: ShareLink[];
+  schedules: Schedule[];
+  technicians: Technician[];
 }) {
   return (
     <>
       <ClientHeader client={client} />
       <ShareLinksSection clientId={client.id} clientName={client.name} links={shareLinks} />
+      <SchedulesSection
+        clientId={client.id}
+        locations={locations}
+        schedules={schedules}
+        technicians={technicians}
+      />
       <LocationsSection clientId={client.id} locations={locations} />
       <ClientInfoEditor client={client} />
     </>
@@ -87,21 +130,69 @@ export function ClientDetailEditor({
 }
 
 function ClientHeader({ client }: { client: Client }) {
+  const router = useRouter();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await uploadClientLogo(client.id, fd);
+    setUploading(false);
+    if ("error" in r) setError(r.error);
+    else router.refresh();
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  async function handleRemove() {
+    if (!confirm("¿Eliminar el logo?")) return;
+    setError(null);
+    const r = await removeClientLogo(client.id);
+    if ("error" in r) setError(r.error);
+    else router.refresh();
+  }
+
   return (
     <div className="mb-6 flex items-center gap-4">
-      <div
-        className="flex size-14 items-center justify-center rounded-2xl text-lg font-bold text-white"
-        style={{ backgroundColor: client.brand_color ?? "#0EA5E9" }}
-      >
-        {client.name
-          .split(/\s+/)
-          .map((s) => s[0])
-          .filter(Boolean)
-          .slice(0, 2)
-          .join("")
-          .toUpperCase()}
+      <div className="group relative">
+        {client.logo_path ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={imageUrl(client.logo_path)}
+            alt={client.name}
+            className="size-14 rounded-2xl object-cover ring-1 ring-slate-200"
+          />
+        ) : (
+          <div
+            className="flex size-14 items-center justify-center rounded-2xl text-lg font-bold text-white"
+            style={{ backgroundColor: client.brand_color ?? "#0EA5E9" }}
+          >
+            {client.name
+              .split(/\s+/)
+              .map((s) => s[0])
+              .filter(Boolean)
+              .slice(0, 2)
+              .join("")
+              .toUpperCase()}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={uploading}
+          className="absolute inset-0 flex items-center justify-center rounded-2xl bg-black/0 text-white opacity-0 transition-all hover:bg-black/40 hover:opacity-100"
+          title="Cambiar logo"
+        >
+          {uploading ? <Loader2 className="size-5 animate-spin" /> : <Upload className="size-5" />}
+        </button>
       </div>
-      <div>
+      <input ref={fileRef} type="file" accept="image/*" hidden onChange={handleFile} />
+      <div className="flex-1">
         <h1 className="text-2xl font-semibold tracking-tight">{client.name}</h1>
         {client.contact_email || client.contact_phone ? (
           <p className="text-sm text-slate-500">
@@ -110,8 +201,334 @@ function ClientHeader({ client }: { client: Client }) {
             {client.contact_phone}
           </p>
         ) : null}
+        {client.logo_path ? (
+          <button
+            type="button"
+            onClick={handleRemove}
+            className="mt-1 text-xs text-slate-400 hover:text-red-600"
+          >
+            Quitar logo
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="mt-1 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline disabled:opacity-50"
+          >
+            <ImageIcon className="size-3" />
+            Subir logo del cliente
+          </button>
+        )}
+        {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : null}
       </div>
     </div>
+  );
+}
+
+const FREQ_OPTIONS: { value: Schedule["frequency"]; label: string }[] = [
+  { value: "mensual", label: "Mensual" },
+  { value: "bimestral", label: "Bimestral" },
+  { value: "trimestral", label: "Trimestral" },
+  { value: "semestral", label: "Semestral" },
+  { value: "anual", label: "Anual" },
+  { value: "custom", label: "Personalizada (días)" },
+];
+
+type ScheduleType = "preventivo" | "inspeccion" | "instalacion";
+
+const TYPE_OPTIONS: { value: ScheduleType; label: string }[] = [
+  { value: "preventivo", label: "Preventivo" },
+  { value: "inspeccion", label: "Inspección" },
+  { value: "instalacion", label: "Instalación" },
+];
+
+function relativeUntil(iso: string): string {
+  const days = Math.floor((+new Date(iso) - Date.now()) / 86400000);
+  if (days < 0) return `vencido hace ${Math.abs(days)}d`;
+  if (days === 0) return "hoy";
+  if (days < 30) return `en ${days}d`;
+  if (days < 365) return `en ${Math.floor(days / 30)} mes`;
+  return `en ${Math.floor(days / 365)} año`;
+}
+
+function SchedulesSection({
+  clientId,
+  locations,
+  schedules,
+  technicians,
+}: {
+  clientId: string;
+  locations: Location[];
+  schedules: Schedule[];
+  technicians: Technician[];
+}) {
+  const router = useRouter();
+  const [showForm, setShowForm] = useState(false);
+  const [locationId, setLocationId] = useState<string>(locations[0]?.id ?? "");
+  const [reportType, setReportType] = useState<ScheduleType>("preventivo");
+  const [frequency, setFrequency] = useState<Schedule["frequency"]>("bimestral");
+  const [frequencyDays, setFrequencyDays] = useState("30");
+  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [techId, setTechId] = useState<string>("");
+  const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function add() {
+    if (!locationId) {
+      setError("Elegí una sucursal");
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const r = await createSchedule(clientId, {
+        location_id: locationId,
+        report_type: reportType,
+        frequency,
+        frequency_days: frequency === "custom" ? Number(frequencyDays) : null,
+        start_date: startDate,
+        assigned_technician_id: techId || null,
+      });
+      if ("error" in r) setError(r.error);
+      else {
+        setShowForm(false);
+        router.refresh();
+      }
+    });
+  }
+
+  return (
+    <section className="mb-8 rounded-2xl border border-border bg-card">
+      <header className="flex items-center justify-between border-b border-border px-5 py-4">
+        <div className="flex items-center gap-2">
+          <Repeat className="size-4 text-slate-700" />
+          <h2 className="text-base font-semibold">Mantenimientos programados ({schedules.length})</h2>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowForm(!showForm)}
+          disabled={locations.length === 0}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          {showForm ? "Cancelar" : <><Plus className="size-3.5" /> Programar</>}
+        </button>
+      </header>
+
+      {locations.length === 0 ? (
+        <p className="px-5 py-6 text-center text-sm text-slate-500">
+          Agregá al menos una sucursal antes de programar mantenimientos
+        </p>
+      ) : null}
+
+      {showForm ? (
+        <div className="border-b border-border bg-blue-50/30 px-5 py-4">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Field label="Sucursal">
+              <select
+                value={locationId}
+                onChange={(e) => setLocationId(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>{l.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Tipo">
+              <select
+                value={reportType}
+                onChange={(e) => setReportType(e.target.value as ScheduleType)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                {TYPE_OPTIONS.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Frecuencia">
+              <select
+                value={frequency}
+                onChange={(e) => setFrequency(e.target.value as Schedule["frequency"])}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                {FREQ_OPTIONS.map((f) => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </select>
+            </Field>
+            {frequency === "custom" ? (
+              <Field label="Cada cuántos días">
+                <input
+                  type="number"
+                  min="1"
+                  value={frequencyDays}
+                  onChange={(e) => setFrequencyDays(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </Field>
+            ) : null}
+            <Field label="Fecha de inicio">
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              />
+            </Field>
+            <Field label="Técnico asignado (opcional)">
+              <select
+                value={techId}
+                onChange={(e) => setTechId(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              >
+                <option value="">Sin asignar</option>
+                {technicians.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={add}
+              disabled={isPending}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {isPending ? "Programando…" : "Programar"}
+            </button>
+            <button onClick={() => setShowForm(false)} className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
+              Cancelar
+            </button>
+            {error ? <span className="text-xs text-red-600">{error}</span> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {schedules.length === 0 ? (
+        <p className="px-5 py-6 text-center text-sm text-slate-500">
+          Sin mantenimientos programados todavía
+        </p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {schedules.map((s) => (
+            <ScheduleRow
+              key={s.id}
+              schedule={s}
+              clientId={clientId}
+              locations={locations}
+              technicians={technicians}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ScheduleRow({
+  schedule,
+  clientId,
+  locations,
+  technicians,
+}: {
+  schedule: Schedule;
+  clientId: string;
+  locations: Location[];
+  technicians: Technician[];
+}) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  const loc = locations.find((l) => l.id === schedule.location_id);
+  const tech = technicians.find((t) => t.id === schedule.assigned_technician_id);
+  const overdue = new Date(schedule.next_due_date) < new Date();
+
+  function handleDelete() {
+    if (!confirm("¿Eliminar este mantenimiento programado?")) return;
+    startTransition(async () => {
+      await deleteSchedule(schedule.id, clientId);
+      router.refresh();
+    });
+  }
+
+  function reassign(techId: string) {
+    startTransition(async () => {
+      await updateSchedule(schedule.id, clientId, { assigned_technician_id: techId || null });
+      router.refresh();
+    });
+  }
+
+  function changeNextDue(date: string) {
+    startTransition(async () => {
+      await updateSchedule(schedule.id, clientId, { next_due_date: date });
+      router.refresh();
+    });
+  }
+
+  return (
+    <li className="flex flex-wrap items-start gap-3 px-5 py-4">
+      <div
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center rounded-lg",
+          overdue ? "bg-red-100 text-red-700" : "bg-blue-100 text-blue-700",
+        )}
+      >
+        <Calendar className="size-5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-semibold text-slate-900">{loc?.name ?? "Todas las sucursales"}</p>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+            {TYPE_OPTIONS.find((t) => t.value === schedule.report_type)?.label}
+          </span>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+            {FREQ_OPTIONS.find((f) => f.value === schedule.frequency)?.label}
+            {schedule.frequency === "custom" && schedule.frequency_days ? ` · ${schedule.frequency_days}d` : ""}
+          </span>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+          <span className={cn(overdue ? "font-semibold text-red-700" : "text-slate-700")}>
+            Próximo: <strong>{new Date(schedule.next_due_date).toLocaleDateString("es-PA", { day: "numeric", month: "short", year: "numeric" })}</strong>
+            <span className="ml-1 text-slate-400">({relativeUntil(schedule.next_due_date)})</span>
+          </span>
+          {schedule.last_completed_at ? (
+            <span className="text-slate-500">
+              Último: {new Date(schedule.last_completed_at).toLocaleDateString("es-PA")}
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <select
+            value={schedule.assigned_technician_id ?? ""}
+            onChange={(e) => reassign(e.target.value)}
+            disabled={isPending}
+            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+          >
+            <option value="">Sin asignar</option>
+            {technicians.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={schedule.next_due_date}
+            onChange={(e) => changeNextDue(e.target.value)}
+            disabled={isPending}
+            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+          />
+          {tech ? <span className="text-xs text-slate-500">→ {tech.name}</span> : null}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={handleDelete}
+        disabled={isPending}
+        className="rounded p-1.5 text-red-600 hover:bg-red-50"
+      >
+        <Trash2 className="size-3.5" />
+      </button>
+    </li>
   );
 }
 

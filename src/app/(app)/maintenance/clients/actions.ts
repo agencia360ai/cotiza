@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 
 type Result = { error: string } | { ok: true };
@@ -54,6 +54,142 @@ export async function deleteClientRecord(id: string): Promise<Result> {
   const { error } = await supabase.from("clients").delete().eq("id", id);
   if (error) return { error: error.message };
   revalidatePath("/maintenance/clients");
+  return { ok: true };
+}
+
+// LOGO
+
+export async function uploadClientLogo(clientId: string, formData: FormData): Promise<Result> {
+  const file = formData.get("file") as File | null;
+  if (!file) return { error: "Archivo faltante" };
+  const { supabase, orgId } = await userOrgId();
+  const ext = (file.name.split(".").pop() ?? "png").toLowerCase();
+  const path = `${orgId}/clients/${clientId}/logo-${randomUUID()}.${ext}`;
+  const buf = await file.arrayBuffer();
+  const { error: upErr } = await supabase.storage
+    .from("cotiza-maintenance")
+    .upload(path, buf, { contentType: file.type || "image/png", upsert: false });
+  if (upErr) return { error: upErr.message };
+
+  const { data: prev } = await supabase
+    .from("clients")
+    .select("logo_path")
+    .eq("id", clientId)
+    .single();
+  const { error } = await supabase.from("clients").update({ logo_path: path }).eq("id", clientId);
+  if (error) return { error: error.message };
+  if (prev?.logo_path) {
+    await supabase.storage.from("cotiza-maintenance").remove([prev.logo_path]).catch(() => {});
+  }
+  revalidatePath(`/maintenance/clients/${clientId}`);
+  return { ok: true };
+}
+
+export async function removeClientLogo(clientId: string): Promise<Result> {
+  const { supabase } = await userOrgId();
+  const { data: prev } = await supabase
+    .from("clients")
+    .select("logo_path")
+    .eq("id", clientId)
+    .single();
+  const { error } = await supabase.from("clients").update({ logo_path: null }).eq("id", clientId);
+  if (error) return { error: error.message };
+  if (prev?.logo_path) {
+    await supabase.storage.from("cotiza-maintenance").remove([prev.logo_path]).catch(() => {});
+  }
+  revalidatePath(`/maintenance/clients/${clientId}`);
+  return { ok: true };
+}
+
+// SCHEDULES
+
+type Frequency = "mensual" | "bimestral" | "trimestral" | "semestral" | "anual" | "custom";
+
+function addFrequency(date: Date, frequency: Frequency, days: number | null): Date {
+  const next = new Date(date);
+  switch (frequency) {
+    case "mensual":
+      next.setMonth(next.getMonth() + 1);
+      break;
+    case "bimestral":
+      next.setMonth(next.getMonth() + 2);
+      break;
+    case "trimestral":
+      next.setMonth(next.getMonth() + 3);
+      break;
+    case "semestral":
+      next.setMonth(next.getMonth() + 6);
+      break;
+    case "anual":
+      next.setFullYear(next.getFullYear() + 1);
+      break;
+    case "custom":
+      next.setDate(next.getDate() + (days ?? 30));
+      break;
+  }
+  return next;
+}
+
+export async function createSchedule(
+  clientId: string,
+  input: {
+    location_id: string | null;
+    report_type: "preventivo" | "inspeccion" | "instalacion";
+    frequency: Frequency;
+    frequency_days?: number | null;
+    start_date: string;
+    assigned_technician_id?: string | null;
+    notes?: string | null;
+  },
+): Promise<Result> {
+  const { supabase, orgId } = await userOrgId();
+  const start = new Date(input.start_date + "T00:00:00");
+  const next = addFrequency(start, input.frequency, input.frequency_days ?? null);
+  const { error } = await supabase.from("maintenance_schedules").insert({
+    org_id: orgId,
+    client_id: clientId,
+    location_id: input.location_id,
+    report_type: input.report_type,
+    frequency: input.frequency,
+    frequency_days: input.frequency === "custom" ? input.frequency_days ?? 30 : null,
+    start_date: input.start_date,
+    next_due_date: next.toISOString().slice(0, 10),
+    assigned_technician_id: input.assigned_technician_id ?? null,
+    notes: input.notes ?? null,
+    active: true,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/maintenance/clients/${clientId}`);
+  revalidatePath("/maintenance/schedule");
+  return { ok: true };
+}
+
+export async function updateSchedule(
+  id: string,
+  clientId: string,
+  patch: Partial<{
+    frequency: Frequency;
+    frequency_days: number | null;
+    next_due_date: string;
+    assigned_technician_id: string | null;
+    notes: string | null;
+    active: boolean;
+  }>,
+): Promise<Result> {
+  const { supabase } = await userOrgId();
+  const { error } = await supabase.from("maintenance_schedules").update(patch).eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath(`/maintenance/clients/${clientId}`);
+  revalidatePath("/maintenance/schedule");
+  return { ok: true };
+}
+
+export async function deleteSchedule(id: string, clientId: string): Promise<Result> {
+  const { supabase } = await userOrgId();
+  const { error } = await supabase.from("maintenance_schedules").delete().eq("id", id);
+  if (error) return { error: error.message };
+  revalidatePath(`/maintenance/clients/${clientId}`);
+  revalidatePath("/maintenance/schedule");
   return { ok: true };
 }
 
