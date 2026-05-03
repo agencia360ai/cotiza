@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, ChevronRight, MapPin, Box } from "lucide-react";
+import { Building2, ChevronRight, MapPin, Box, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { CreateClientForm } from "./create-form";
 
@@ -60,6 +60,23 @@ export default async function ClientsListPage() {
           Tus clientes con sus sucursales y equipos
         </p>
       </header>
+
+      <Link
+        href="/maintenance/clients/import"
+        className="group mb-3 flex items-center gap-3 rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-blue-50 p-5 transition-all hover:-translate-y-0.5 hover:shadow-md"
+      >
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600 to-blue-600 text-white">
+          <Sparkles className="size-5" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-slate-900">Crear cliente con IA</p>
+          <p className="text-xs text-slate-600">
+            Pegá una descripción o subí un PDF — la IA arma el cliente con sus sucursales,
+            equipos y mantenimientos
+          </p>
+        </div>
+        <ChevronRight className="size-5 text-violet-600 transition-transform group-hover:translate-x-1" />
+      </Link>
 
       <CreateClientForm />
 
