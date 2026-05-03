@@ -30,7 +30,12 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user && process.env.DEMO_MODE !== "false") {
+  const { pathname } = request.nextUrl;
+  const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/auth");
+  const isPublicShareRoute = pathname.startsWith("/p/") || pathname.startsWith("/t/");
+  const isPublicRoute = isAuthRoute || isPublicShareRoute || pathname === "/";
+
+  if (!user && process.env.DEMO_MODE !== "false" && !isPublicShareRoute) {
     const { error } = await supabase.auth.signInWithPassword({
       email: "demo@cotiza.local",
       password: "demo-cotiza-public-2025",
@@ -40,10 +45,6 @@ export async function updateSession(request: NextRequest) {
       user = refreshed.data.user;
     }
   }
-
-  const { pathname } = request.nextUrl;
-  const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/auth");
-  const isPublicRoute = isAuthRoute || pathname === "/";
 
   if (!user && !isPublicRoute) {
     const url = request.nextUrl.clone();
