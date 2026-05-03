@@ -30,6 +30,7 @@ import { StackedStatusBar } from "@/components/maintenance/charts";
 import { EquipmentCard } from "@/components/maintenance/equipment-card";
 import { StatusDot } from "@/components/maintenance/status-badge";
 import { ReportCard } from "@/components/maintenance/report-card";
+import { HistoryHeatmap } from "@/components/maintenance/history-heatmap";
 import { imageUrl } from "@/lib/maintenance/types";
 
 export const dynamic = "force-dynamic";
@@ -334,13 +335,26 @@ export default async function PublicDashboardPage({
                   </div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     {loc.equipment.map((e) => (
-                      <EquipmentCard key={e.id} equipment={e} />
+                      <EquipmentCard key={e.id} equipment={e} href={`/p/${token}/equipment/${e.id}`} />
                     ))}
                   </div>
                 </div>
               );
             })}
           </div>
+        </section>
+
+        {/* Heatmap of equipment history */}
+        <section className="mt-12">
+          <header className="mb-5">
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+              Mapa histórico
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Ve de un vistazo cómo evolucionó el estado de cada equipo a lo largo del tiempo
+            </p>
+          </header>
+          <HistoryHeatmap locations={locations} token={token} />
         </section>
 
         {/* Reports timeline */}

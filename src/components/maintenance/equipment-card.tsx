@@ -1,4 +1,5 @@
-import { Snowflake, Wind, Box, Refrigerator } from "lucide-react";
+import Link from "next/link";
+import { Snowflake, Wind, Box, Refrigerator, ChevronRight } from "lucide-react";
 import { StatusBadge } from "./status-badge";
 import { StatusSparkline } from "./charts";
 import type { Equipment } from "@/lib/maintenance/types";
@@ -21,14 +22,20 @@ function formatRelativeDate(iso: string | null): string {
   return `hace ${Math.floor(days / 365)} año`;
 }
 
-export function EquipmentCard({ equipment }: { equipment: Equipment }) {
+export function EquipmentCard({
+  equipment,
+  href,
+}: {
+  equipment: Equipment;
+  href?: string;
+}) {
   const Icon = (equipment.category ? CATEGORY_ICON[equipment.category] : null) ?? Box;
   const status = equipment.latest_status ?? "sin_inspeccion";
 
-  return (
-    <div className="group relative flex flex-col rounded-xl border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md">
+  const inner = (
+    <>
       <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 group-hover:bg-slate-200">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-slate-200">
           <Icon className="size-5" />
         </div>
         <StatusBadge status={status} size="sm" short />
@@ -57,6 +64,23 @@ export function EquipmentCard({ equipment }: { equipment: Equipment }) {
         </div>
         <StatusSparkline history={equipment.history} />
       </div>
-    </div>
+
+      {href ? (
+        <ChevronRight className="absolute right-3 top-3 size-4 text-slate-300 opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
+      ) : null}
+    </>
   );
+
+  const baseClass =
+    "group relative flex flex-col rounded-xl border border-slate-200 bg-white p-4 transition-all";
+
+  if (href) {
+    return (
+      <Link href={href} className={`${baseClass} hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md`}>
+        {inner}
+      </Link>
+    );
+  }
+
+  return <div className={`${baseClass} hover:shadow-md`}>{inner}</div>;
 }

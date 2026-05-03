@@ -254,6 +254,30 @@ export function trendDelta(
   return { delta: current - previous, previous };
 }
 
+export type EquipmentHistoryEntry = {
+  item_id: string;
+  report_id: string;
+  report_number: string;
+  report_type: ReportType;
+  severity: ReportSeverity | null;
+  performed_at_start: string;
+  performed_by_name: string | null;
+  status: EquipmentStatus;
+  observations_es: string | null;
+  recommendations: Recommendation[];
+  parts_replaced: { name: string; quantity?: number }[];
+  checklist_items: string[];
+  photo_paths: string[];
+  readings: Record<string, number | string>;
+};
+
+export type EquipmentHistoryData = {
+  client: Client;
+  location: Location;
+  equipment: Equipment;
+  history: EquipmentHistoryEntry[];
+};
+
 export function imageUrl(path: string): string {
   if (path.startsWith("http")) return path;
   const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
