@@ -17,5 +17,5 @@ export default async function Home() {
 
   if (!memberships || memberships.length === 0) redirect("/onboarding");
 
-  redirect("/dashboard");
+  redirect("/maintenance/schedule");
 }

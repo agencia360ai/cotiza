@@ -8,12 +8,12 @@ import { cn } from "@/lib/utils";
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }>; section?: string };
 
 const NAV: NavItem[] = [
-  { href: "/dashboard", label: "Proyectos", icon: FileText, section: "Cotizaciones" },
-  { href: "/catalog", label: "Catálogo", icon: Package, section: "Cotizaciones" },
   { href: "/maintenance/schedule", label: "Cronograma", icon: Calendar, section: "Mantenimiento" },
   { href: "/maintenance/reports", label: "Reportes", icon: ClipboardCheck, section: "Mantenimiento" },
   { href: "/maintenance/clients", label: "Clientes", icon: Building2, section: "Mantenimiento" },
   { href: "/maintenance/technicians", label: "Técnicos", icon: Users, section: "Mantenimiento" },
+  { href: "/dashboard", label: "Proyectos", icon: FileText, section: "Cotizaciones" },
+  { href: "/catalog", label: "Catálogo", icon: Package, section: "Cotizaciones" },
 ];
 
 type Props = {
