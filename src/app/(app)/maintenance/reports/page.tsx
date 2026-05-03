@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ChevronRight, FileText, Calendar, User } from "lucide-react";
+import { ChevronRight, FileText, Calendar, User, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import {
   REPORT_TYPE_COLOR,
@@ -87,13 +87,21 @@ export default async function ReportsListPage({
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-6xl">
-      <header className="mb-8 flex items-end justify-between">
+      <header className="mb-8 flex items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Reportes de mantenimiento</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Revisá los borradores enviados por técnicos y publicalos para que el cliente los vea
+            Revisá borradores, editá campos e items, o creá un reporte manualmente
           </p>
         </div>
+        <Link
+          href="/maintenance/reports/new"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+        >
+          <Plus className="size-4" />
+          <span className="hidden sm:inline">Nuevo reporte</span>
+          <span className="sm:hidden">Nuevo</span>
+        </Link>
       </header>
 
       {/* Status tabs */}

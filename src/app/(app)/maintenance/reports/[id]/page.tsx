@@ -32,6 +32,7 @@ import {
 import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
 import { cn } from "@/lib/utils";
 import { PublishControls, SummaryEditor } from "./controls";
+import { ReportHeaderEditor, EditableItemsList } from "./editor";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +80,7 @@ type Item = {
   checklist_items: string[];
   photo_paths: string[];
   position: number;
-  equipment: { brand: string | null; model: string | null; custom_name: string; location_label: string | null } | null;
+  equipment: { id: string; brand: string | null; model: string | null; custom_name: string; location_label: string | null } | null;
 };
 
 export default async function ReportDetailPage({
@@ -104,11 +105,34 @@ export default async function ReportDetailPage({
 
   const { data: items } = (await supabase
     .from("report_items")
-    .select("*, equipment:client_equipment(brand, model, custom_name, location_label)")
+    .select("*, equipment:client_equipment(id, brand, model, custom_name, location_label)")
     .eq("report_id", id)
     .order("position", { ascending: true })) as { data: Item[] | null };
 
   const allItems = items ?? [];
+
+  // Equipment options: equipment from this report's location (or all if no location)
+  let equipmentQuery = supabase
+    .from("client_equipment")
+    .select("id, brand, model, custom_name, location_label, location_id");
+  if (report.location_id) {
+    equipmentQuery = equipmentQuery.eq("location_id", report.location_id);
+  } else {
+    // pull all equipment for this client across locations
+    const { data: locs } = await supabase
+      .from("client_locations")
+      .select("id")
+      .eq("client_id", report.client_id);
+    const locIds = (locs ?? []).map((l) => l.id);
+    if (locIds.length > 0) equipmentQuery = equipmentQuery.in("location_id", locIds);
+  }
+  const { data: availableEquipment } = await equipmentQuery;
+
+  const { data: technicians } = await supabase
+    .from("technicians")
+    .select("id, name")
+    .eq("active", true)
+    .order("name", { ascending: true });
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
@@ -158,22 +182,19 @@ export default async function ReportDetailPage({
                 <strong>{report.client?.name ?? "—"}</strong>
                 {report.location?.name ? ` · ${report.location.name}` : ""}
               </p>
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
-                <span className="inline-flex items-center gap-1">
-                  <Calendar className="size-3" />
-                  {new Date(report.performed_at_start).toLocaleDateString("es-PA", { day: "numeric", month: "long", year: "numeric" })}
-                </span>
-                {report.performed_by_name ? (
-                  <span className="inline-flex items-center gap-1">
-                    <User className="size-3" />
-                    {report.performed_by_name}
-                  </span>
-                ) : null}
-              </div>
             </div>
           </div>
           <PublishControls reportId={report.id} status={report.status} />
         </div>
+
+        <ReportHeaderEditor
+          reportId={report.id}
+          performedByName={report.performed_by_name}
+          performedAtStart={report.performed_at_start}
+          technicianId={(report as ReportRow & { technician_id?: string | null }).technician_id ?? null}
+          technicians={technicians ?? []}
+          status={report.status}
+        />
 
         {report.trigger_event_es ? (
           <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm">
@@ -222,95 +243,12 @@ export default async function ReportDetailPage({
         </section>
       ) : null}
 
-      {/* Items */}
-      <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-700">
-          Equipos inspeccionados ({allItems.length})
-        </h2>
-        <div className="space-y-3">
-          {allItems.map((it) => {
-            const Icon = STATUS_ICON[it.equipment_status];
-            const color = STATUS_COLOR[it.equipment_status];
-            return (
-              <div key={it.id} className="overflow-hidden rounded-xl border border-border bg-card">
-                <div className="flex items-start gap-3 border-b border-border bg-slate-50/50 px-4 py-3">
-                  <div
-                    className="flex size-9 shrink-0 items-center justify-center rounded-lg"
-                    style={{ backgroundColor: `${color}15`, color }}
-                  >
-                    <Icon className="size-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900">
-                      {it.equipment?.brand ?? ""} {it.equipment?.model ?? ""}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {it.equipment?.location_label ?? it.equipment?.custom_name ?? ""}
-                    </p>
-                  </div>
-                  <span
-                    className="rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset"
-                    style={{
-                      backgroundColor: `${color}15`,
-                      color,
-                      borderColor: color,
-                    }}
-                  >
-                    {STATUS_LABEL[it.equipment_status]}
-                  </span>
-                </div>
-                <div className="space-y-3 p-4">
-                  {it.observations_es ? (
-                    <p className="text-sm text-slate-700">{it.observations_es}</p>
-                  ) : null}
-                  {it.recommendations.length > 0 ? (
-                    <ul className="space-y-1">
-                      {it.recommendations.map((r, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs">
-                          <span
-                            className={cn(
-                              "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ring-1 ring-inset",
-                              PRIORITY_TINT[r.priority],
-                            )}
-                          >
-                            {r.priority}
-                          </span>
-                          <span className="text-slate-700">{r.description}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {it.checklist_items.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {it.checklist_items.map((c, i) => (
-                        <span
-                          key={i}
-                          className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700"
-                        >
-                          ✓ {c}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {it.photo_paths.length > 0 ? (
-                    <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6">
-                      {it.photo_paths.map((p, i) => (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          key={i}
-                          src={imageUrl(p)}
-                          alt={`foto ${i + 1}`}
-                          className="aspect-square w-full rounded object-cover ring-1 ring-slate-200"
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      <EditableItemsList
+        reportId={report.id}
+        items={allItems}
+        availableEquipment={availableEquipment ?? []}
+        status={report.status}
+      />
 
       {/* Suppress unused */}
       <span hidden>
