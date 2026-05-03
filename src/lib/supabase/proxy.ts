@@ -30,7 +30,7 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user && process.env.DEMO_MODE === "true") {
+  if (!user && process.env.DEMO_MODE !== "false") {
     const { error } = await supabase.auth.signInWithPassword({
       email: "demo@cotiza.local",
       password: "demo-cotiza-public-2025",
