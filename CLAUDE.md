@@ -7,9 +7,9 @@ Plataforma de cotizaciones HVAC para Panamá. Multi-tenant, IA-asistida.
 - **Framework**: Next.js 16 (App Router, Turbopack) + React 19 + TypeScript
 - **Estilos**: Tailwind CSS v4 + componentes estilo shadcn/ui (Radix primitives + CVA)
 - **Backend**: Supabase (Postgres + Auth + Storage)
-  - Proyecto compartido: `cflvvmujnaekrbrxzwoj` (org Agencia360)
-  - Schema dedicado: `cotiza` (aislado del `public` que usa otra app)
-- **IA**: Anthropic Claude API (Sonnet 4.6 por defecto, Opus 4.7 para casos complejos) — Phase 2
+  - Proyecto dedicado: `hliyxksrgqgfatorgbne` (org Agencia360)
+  - Schema: `cotiza`
+- **IA**: Anthropic Claude API (Sonnet 4.6 por defecto, Opus 4.7 para casos complejos)
 
 ## Comandos
 
@@ -28,8 +28,10 @@ src/
 ├── app/
 │   ├── (app)/             # rutas autenticadas con sidebar
 │   │   ├── layout.tsx     # shell + verifica que el usuario tenga org
-│   │   ├── dashboard/     # lista de proyectos (placeholder hasta Phase 2)
-│   │   └── catalog/       # catálogo de equipos (Phase 2)
+│   │   ├── dashboard/     # lista de proyectos
+│   │   ├── projects/      # CRUD + flujo IA (upload → extract → quote)
+│   │   ├── quotes/        # ver/editar cotización + export PDF
+│   │   └── catalog/       # catálogo de equipos
 │   ├── login/             # signin/signup (form único, server actions)
 │   ├── onboarding/        # crear primera organización
 │   ├── logout/route.ts    # POST → signOut → /login
@@ -46,13 +48,21 @@ src/
 
 ## Schema (Supabase, schema `cotiza`)
 
-- `profiles` (1:1 con `auth.users`)
+Tablas:
 - `organizations` (multi-tenant)
 - `org_members` (user × org × role: owner/admin/engineer/viewer)
-- RLS activo, helpers `is_org_member()` y `org_role()` con SECURITY DEFINER
-- Trigger `on_auth_user_created_cotiza` crea profile al alta de usuario
+- `projects` (status: draft → parsing → clarifying → quoting → completed)
+- `documents` (archivos subidos al bucket `cotiza-documents`)
+- `project_extractions` (output IA por documento + tokens usados)
+- `equipment_catalog` (HVAC SKUs, global)
+- `quotes`, `quote_items` (`line_total_usd` es columna calculada)
 
-⚠️ **Setup obligatorio una vez**: en el dashboard de Supabase del proyecto compartido, ir a Project Settings → API → Exposed schemas y agregar `cotiza`. Sin esto el cliente no puede leer las tablas.
+Setup:
+- RLS activo en todas, con helpers `cotiza.is_org_member()` y `cotiza.org_role()` (SECURITY DEFINER, search_path vacío)
+- Storage bucket `cotiza-documents` (privado, solo authenticated)
+- Triggers `set_updated_at` en organizations/projects/equipment_catalog/quotes
+
+⚠️ **Setup obligatorio una vez** por proyecto Supabase: dashboard → Project Settings → API → Exposed schemas → agregar `cotiza`. Sin esto el cliente PostgREST no puede leer las tablas.
 
 ## Setup para ingenieros del equipo
 
