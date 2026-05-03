@@ -26,9 +26,20 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  const {
+  let {
     data: { user },
   } = await supabase.auth.getUser();
+
+  if (!user && process.env.DEMO_MODE === "true") {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: "demo@cotiza.local",
+      password: "demo-cotiza-public-2025",
+    });
+    if (!error) {
+      const refreshed = await supabase.auth.getUser();
+      user = refreshed.data.user;
+    }
+  }
 
   const { pathname } = request.nextUrl;
   const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/auth");
