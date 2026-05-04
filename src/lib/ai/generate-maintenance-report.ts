@@ -15,9 +15,31 @@ const equipmentStatusEnum = z.enum([
 const priorityEnum = z.enum(["alta", "media", "baja"]);
 
 const reportItemSchema = z.object({
-  equipment_id: z.string().describe("UUID del equipo de la lista provista"),
+  equipment_id: z
+    .string()
+    .nullable()
+    .describe(
+      "UUID exacto del equipo existente de la lista provista. SOLO devolvé null si el equipo NO estaba en la lista (caso: el técnico instaló o detectó un equipo nuevo).",
+    ),
+  new_equipment: z
+    .object({
+      brand: z.string().nullable(),
+      model: z.string().nullable(),
+      category: z
+        .enum(["nevera", "congelador", "aire_acondicionado", "evaporadora", "otro"])
+        .nullable(),
+      location_label: z.string().nullable().describe("Ubicación dentro de la sucursal"),
+      voltage: z.string().nullable(),
+      capacity_btu: z.number().nullable(),
+    })
+    .nullable()
+    .describe(
+      "Si equipment_id es null porque el equipo NO estaba en la lista, completá acá los datos detectados desde la captura. Se va a agregar automáticamente a la sucursal como equipo nuevo.",
+    ),
   status: equipmentStatusEnum.describe("Estado del equipo según la inspección"),
-  observations_es: z.string().describe("Observaciones del estado actual en español, 1-3 oraciones concretas"),
+  observations_es: z
+    .string()
+    .describe("Observaciones del estado actual en español, 1-3 oraciones concretas"),
   recommendations: z
     .array(
       z.object({
@@ -37,7 +59,9 @@ const reportItemSchema = z.object({
   checklist_items: z
     .array(z.string())
     .describe("Elementos verificados durante la inspección (Tomacorrientes, Empaques, Filtros, etc)"),
-  photo_paths: z.array(z.string()).describe("Lista de paths de fotos en el bucket cotiza-maintenance que corresponden a este equipo"),
+  photo_paths: z
+    .array(z.string())
+    .describe("Lista de paths de fotos en el bucket cotiza-maintenance que corresponden a este equipo"),
 });
 
 const reportOutputSchema = z.object({
@@ -53,6 +77,7 @@ Tu trabajo: a partir de fotos, transcripciones de voz y notas de texto que el t�
 
 Pautas:
 - Una entrada por cada equipo de la lista provista. Si no hay evidencia clara de un equipo en la captura, asignale status "operativo" y dejá observations_es como "Inspección visual sin novedades, funcionamiento normal." (no inventes problemas)
+- EQUIPOS NUEVOS: Si el técnico menciona en su captura (foto/voz/texto) un equipo que NO está en la lista provista (ej: "se instaló una nevera nueva marca X", "encontré un aire que no estaba en el inventario"), devolvé un item adicional con equipment_id=null y completá new_equipment con los datos detectados (marca, modelo, categoría, voltaje, ubicación). Va a agregarse a la sucursal automáticamente.
 - Status:
   - "operativo" → funcionamiento normal, sin observaciones
   - "atencion" → problemas menores que NO impiden operación pero requieren mantenimiento (empaques, controles remotos faltantes, cables expuestos, falta de protectores)
@@ -62,7 +87,7 @@ Pautas:
 - Recomendaciones: priorizá "alta" sólo para acciones críticas/seguridad, "media" para mantenimiento que no es urgente, "baja" para sugerencias preventivas.
 - Checklist típico HVAC en Panamá: Tomacorrientes, Enchufe de alimentación, Empaques de puertas, Funcionamiento normal, Cordón de alimentación, Protector de voltaje, Filtros, Cables de señal, Drenaje de condensado.
 - NO inventes lecturas (temperaturas, presiones) si no hay evidencia.
-- Resumen general: qué se encontró, qué necesita acción. Mencioná críticos primero.`;
+- Resumen general: qué se encontró, qué necesita acción. Mencioná críticos primero. Si hay equipos nuevos, mencionalos.`;
 
 export async function generateReportFromCapture(input: {
   client_name: string;
@@ -141,7 +166,7 @@ A continuación van las fotos en el mismo orden listado arriba. Asociá cada fot
   const model = pickModel("default");
   const response = await anthropic.messages.parse({
     model,
-    max_tokens: 4000,
+    max_tokens: 16000,
     system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: userBlocks }],
     output_config: {
