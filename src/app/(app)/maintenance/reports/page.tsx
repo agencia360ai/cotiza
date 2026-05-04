@@ -1,12 +1,16 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ChevronRight, FileText, Calendar, User, Plus } from "lucide-react";
+import { ChevronRight, FileText, Calendar, User, Plus, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import {
   REPORT_TYPE_COLOR,
   REPORT_TYPE_LABEL_SHORT,
+  SUBSTATE_LABEL,
+  SUBSTATE_TINT,
+  reportSubState,
   type ReportType,
   type ReportSeverity,
+  type ReportSubState,
 } from "@/lib/maintenance/types";
 import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
 import { cn } from "@/lib/utils";
@@ -21,6 +25,7 @@ type ReportRow = {
   report_type: ReportType;
   severity: ReportSeverity | null;
   performed_at_start: string;
+  performed_at_end: string | null;
   performed_by_name: string | null;
   summary_es: string | null;
   status: "draft" | "published" | "accepted";
@@ -30,18 +35,6 @@ type ReportRow = {
   created_at: string;
   client: { name: string } | null;
   location: { name: string } | null;
-};
-
-const STATUS_LABEL = {
-  draft: "En revisión",
-  published: "Publicado",
-  accepted: "Aceptado",
-};
-
-const STATUS_TINT = {
-  draft: "bg-amber-50 text-amber-700 ring-amber-600/20",
-  published: "bg-blue-50 text-blue-700 ring-blue-600/20",
-  accepted: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
 };
 
 function formatDate(iso: string): string {
@@ -55,35 +48,39 @@ function formatDate(iso: string): string {
 export default async function ReportsListPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ sub?: string }>;
 }) {
-  const { status: statusFilter } = await searchParams;
+  const { sub: subFilterRaw } = await searchParams;
+  const validSubs: ReportSubState[] = ["capturando", "generado", "en_revision", "publicado", "aceptado"];
+  const subFilter = (validSubs as string[]).includes(subFilterRaw ?? "") ? (subFilterRaw as ReportSubState) : null;
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) redirect("/login");
 
-  let query = supabase
+  // Fetch all and filter in memory by sub-state (so counts are exact)
+  const { data: reports } = (await supabase
     .from("maintenance_reports")
     .select("*, client:clients(name), location:client_locations(name)")
-    .order("performed_at_start", { ascending: false });
+    .order("performed_at_start", { ascending: false })) as { data: ReportRow[] | null };
+  const allReports = reports ?? [];
 
-  if (statusFilter && ["draft", "published", "accepted"].includes(statusFilter)) {
-    query = query.eq("status", statusFilter);
-  }
+  const subOf = (r: ReportRow) =>
+    reportSubState({
+      status: r.status,
+      ai_draft_at: r.ai_draft_at,
+      performed_at_end: r.performed_at_end,
+    });
 
-  const { data: reports } = (await query) as { data: ReportRow[] | null };
-  const all = reports ?? [];
-
-  const counts = {
-    draft: 0,
-    published: 0,
-    accepted: 0,
+  const counts: Record<ReportSubState, number> = {
+    capturando: 0,
+    generado: 0,
+    en_revision: 0,
+    publicado: 0,
+    aceptado: 0,
   };
-  // Need a separate query without filter for accurate counts
-  const { data: allForCounts } = (await supabase
-    .from("maintenance_reports")
-    .select("status")) as { data: { status: keyof typeof counts }[] | null };
-  for (const r of allForCounts ?? []) counts[r.status]++;
+  for (const r of allReports) counts[subOf(r)]++;
+
+  const all = subFilter ? allReports.filter((r) => subOf(r) === subFilter) : allReports;
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-6xl">
@@ -104,48 +101,53 @@ export default async function ReportsListPage({
         </Link>
       </header>
 
-      {/* Status tabs */}
-      <div className="mb-6 flex gap-2">
+      {/* Sub-state filter chips */}
+      <div className="mb-6 flex flex-wrap gap-2">
         <FilterTab
           href="/maintenance/reports"
           label="Todos"
-          count={counts.draft + counts.published + counts.accepted}
-          active={!statusFilter}
+          count={allReports.length}
+          active={!subFilter}
         />
-        <FilterTab
-          href="/maintenance/reports?status=draft"
-          label="En revisión"
-          count={counts.draft}
-          active={statusFilter === "draft"}
-          tint="bg-amber-50 text-amber-700 ring-amber-600/30"
-        />
-        <FilterTab
-          href="/maintenance/reports?status=published"
-          label="Publicados"
-          count={counts.published}
-          active={statusFilter === "published"}
-          tint="bg-blue-50 text-blue-700 ring-blue-600/30"
-        />
-        <FilterTab
-          href="/maintenance/reports?status=accepted"
-          label="Aceptados"
-          count={counts.accepted}
-          active={statusFilter === "accepted"}
-          tint="bg-emerald-50 text-emerald-700 ring-emerald-600/30"
-        />
+        {(["capturando", "generado", "en_revision", "publicado", "aceptado"] as ReportSubState[]).map((s) => (
+          <FilterTab
+            key={s}
+            href={`/maintenance/reports?sub=${s}`}
+            label={SUBSTATE_LABEL[s]}
+            count={counts[s]}
+            active={subFilter === s}
+            tint={SUBSTATE_TINT[s].replace(/ring-[a-z]+-[0-9]+\/[0-9]+/, "ring-slate-300/30")}
+          />
+        ))}
       </div>
+
+      {subFilter === "capturando" ? (
+        <p className="mb-4 rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-800 ring-1 ring-inset ring-violet-200">
+          <strong>Capturando:</strong> el técnico está cargando info, todavía no procesó con IA. Visible aquí para que veas el progreso, pero <strong>no actúes</strong> hasta que esté en &ldquo;Listo para publicar&rdquo;.
+        </p>
+      ) : subFilter === "generado" ? (
+        <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-200">
+          <strong>IA generada:</strong> el técnico ya procesó con IA, está revisando los items antes de enviar.
+        </p>
+      ) : subFilter === "en_revision" ? (
+        <p className="mb-4 rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-800 ring-1 ring-inset ring-orange-200">
+          <strong>Listo para publicar:</strong> el técnico envió, esperando que vos publiques para que el cliente lo vea.
+        </p>
+      ) : null}
 
       {all.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border py-20 text-center">
           <FileText className="mx-auto mb-3 size-6 text-muted-foreground" />
-          <p className="text-sm font-medium">Sin reportes {statusFilter ? "en este estado" : ""}</p>
+          <p className="text-sm font-medium">Sin reportes {subFilter ? "en este estado" : ""}</p>
           <p className="mt-1 text-xs text-muted-foreground">
             Los técnicos crean reportes desde su portal personal
           </p>
         </div>
       ) : (
         <ul className="space-y-2">
-          {all.map((r) => (
+          {all.map((r) => {
+            const sub = subOf(r);
+            return (
             <li key={r.id}>
               <Link
                 href={`/maintenance/reports/${r.id}`}
@@ -162,15 +164,17 @@ export default async function ReportsListPage({
                     <p className="font-semibold text-slate-900">{r.report_number}</p>
                     <span
                       className={cn(
-                        "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
-                        STATUS_TINT[r.status],
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
+                        SUBSTATE_TINT[sub],
                       )}
                     >
-                      {STATUS_LABEL[r.status]}
+                      {sub === "generado" ? <Sparkles className="size-2.5" /> : null}
+                      {SUBSTATE_LABEL[sub]}
                     </span>
-                    {r.ai_generated ? (
+                    {r.ai_generated && sub !== "generado" ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-600/20">
-                        ✨ IA
+                        <Sparkles className="size-2.5" />
+                        IA
                       </span>
                     ) : null}
                   </div>
@@ -201,7 +205,8 @@ export default async function ReportsListPage({
                 <ChevronRight className="size-5 shrink-0 text-slate-300 transition-transform group-hover:translate-x-1" />
               </Link>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>

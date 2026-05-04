@@ -10,16 +10,19 @@ import {
   CheckCircle2,
   Hourglass,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import {
   REPORT_TYPE_LABEL_SHORT,
   REPORT_TYPE_COLOR,
+  SUBSTATE_LABEL,
+  SUBSTATE_TINT,
+  reportSubState,
   type TechnicianPortalData,
   type TechnicianDraft,
   type TechnicianSubmitted,
 } from "@/lib/maintenance/types";
 import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
-import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -225,36 +228,61 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 function DraftCard({ draft, token }: { draft: TechnicianDraft; token: string }) {
   const accent = REPORT_TYPE_COLOR[draft.report_type];
+  const substate = reportSubState({
+    status: draft.status ?? "draft",
+    ai_draft_at: draft.ai_draft_at,
+    performed_at_end: draft.performed_at_end,
+  });
+  // Recently active = updated in last hour AND still capturando
+  const minutesSinceEdit = (Date.now() - +new Date(draft.updated_at)) / 60000;
+  const isActive = substate === "capturando" && minutesSinceEdit < 60;
+  const borderColor =
+    substate === "capturando"
+      ? "border-violet-200 bg-violet-50/40"
+      : substate === "generado"
+        ? "border-amber-200 bg-amber-50/40"
+        : "border-orange-200 bg-orange-50/40";
   return (
     <Link
       href={`/t/${token}/reports/${draft.id}`}
-      className="group block overflow-hidden rounded-2xl border border-amber-200 bg-amber-50/40 transition-all hover:-translate-y-0.5 hover:shadow-md"
+      className={cn(
+        "group block overflow-hidden rounded-2xl border transition-all hover:-translate-y-0.5 hover:shadow-md",
+        borderColor,
+      )}
     >
       <div className="flex items-start gap-3 p-4">
         <div
-          className="flex size-11 shrink-0 items-center justify-center rounded-xl text-white"
+          className="relative flex size-11 shrink-0 items-center justify-center rounded-xl text-white"
           style={{ backgroundColor: accent }}
         >
           <ReportTypeIcon type={draft.report_type} className="size-5" />
+          {isActive ? (
+            <span className="absolute -right-0.5 -top-0.5 inline-flex size-3 rounded-full bg-emerald-500 ring-2 ring-white">
+              <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-75" />
+            </span>
+          ) : null}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-semibold text-slate-900">{draft.client_name}</p>
-            {draft.ai_draft_at ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-600/20">
-                <Sparkles className="size-2.5" />
-                IA listo
-              </span>
-            ) : null}
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
+                SUBSTATE_TINT[substate],
+              )}
+            >
+              {substate === "generado" ? <Sparkles className="size-2.5" /> : null}
+              {SUBSTATE_LABEL[substate]}
+            </span>
           </div>
           <p className="text-xs text-slate-500">
             {draft.location_name ?? "Todas las sucursales"} ·{" "}
             {REPORT_TYPE_LABEL_SHORT[draft.report_type]}
           </p>
-          <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-500">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
             <span className="inline-flex items-center gap-1">
               <Clock className="size-3" />
-              Editado {relativeFromNow(draft.updated_at)}
+              {relativeFromNow(draft.updated_at)}
             </span>
             <span>·</span>
             <span>
@@ -264,6 +292,12 @@ function DraftCard({ draft, token }: { draft: TechnicianDraft; token: string }) 
               <>
                 <span>·</span>
                 <span>{draft.item_count} equipos</span>
+              </>
+            ) : null}
+            {substate === "en_revision" ? (
+              <>
+                <span>·</span>
+                <span className="font-semibold text-orange-700">esperando admin</span>
               </>
             ) : null}
           </div>

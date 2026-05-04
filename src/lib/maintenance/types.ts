@@ -374,6 +374,41 @@ export function imageUrl(path: string): string {
   return `${base}/storage/v1/object/public/cotiza-maintenance/${path}`;
 }
 
+export type ReportSubState =
+  | "capturando"      // status=draft, no AI yet, tech still collecting
+  | "generado"        // status=draft, AI generated, tech reviewing
+  | "en_revision"     // status=draft, tech submitted, admin must publish
+  | "publicado"       // status=published
+  | "aceptado";       // status=accepted
+
+export const SUBSTATE_LABEL: Record<ReportSubState, string> = {
+  capturando: "Capturando",
+  generado: "IA generada",
+  en_revision: "Listo para publicar",
+  publicado: "Publicado",
+  aceptado: "Aceptado",
+};
+
+export const SUBSTATE_TINT: Record<ReportSubState, string> = {
+  capturando: "bg-violet-50 text-violet-700 ring-violet-600/20",
+  generado: "bg-amber-50 text-amber-700 ring-amber-600/20",
+  en_revision: "bg-orange-50 text-orange-700 ring-orange-600/20",
+  publicado: "bg-blue-50 text-blue-700 ring-blue-600/20",
+  aceptado: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+};
+
+export function reportSubState(report: {
+  status: "draft" | "published" | "accepted";
+  ai_draft_at: string | null;
+  performed_at_end: string | null;
+}): ReportSubState {
+  if (report.status === "accepted") return "aceptado";
+  if (report.status === "published") return "publicado";
+  if (report.performed_at_end) return "en_revision";
+  if (report.ai_draft_at) return "generado";
+  return "capturando";
+}
+
 export type Technician = {
   id: string;
   org_id: string;
@@ -410,10 +445,12 @@ export type TechnicianDraft = {
   report_type: ReportType;
   severity: ReportSeverity | null;
   performed_at_start: string;
+  performed_at_end: string | null;
   capture_count: number;
   item_count: number;
   ai_draft_at: string | null;
   updated_at: string;
+  status: "draft" | "published" | "accepted";
 };
 
 export type TechnicianSubmitted = {

@@ -65,6 +65,7 @@ export function ReportScreen({
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setUploading] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [showTextModal, setShowTextModal] = useState(false);
@@ -89,6 +90,7 @@ export function ReportScreen({
         if ("error" in r) throw new Error(r.error);
         setCaptures((prev) => [...prev, r.data.capture]);
       }
+      setLastSavedAt(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error subiendo foto");
     } finally {
@@ -105,6 +107,7 @@ export function ReportScreen({
       setError(r.error);
       return;
     }
+    setLastSavedAt(new Date());
     await refresh();
     setShowTextModal(false);
     setShowVoiceModal(false);
@@ -115,6 +118,7 @@ export function ReportScreen({
     setCaptures((prev) => prev.filter((c) => c.id !== captureId));
     const r = await removeCapture(token, report.id, captureId);
     if ("error" in r) setError(r.error);
+    else setLastSavedAt(new Date());
   }
 
   function handleGenerate() {
@@ -240,8 +244,19 @@ export function ReportScreen({
         <section>
           <header className="mb-3 flex items-center justify-between">
             <h2 className="text-base font-bold text-slate-900">1. Captura</h2>
-            <span className="text-xs text-slate-500">{captures.length} item(s)</span>
+            <div className="flex items-center gap-2 text-xs">
+              {lastSavedAt ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                  <CheckCircle2 className="size-3" />
+                  Guardado
+                </span>
+              ) : null}
+              <span className="text-slate-500">{captures.length} item{captures.length === 1 ? "" : "s"}</span>
+            </div>
           </header>
+          <p className="mb-3 text-xs text-slate-500">
+            Cargá fotos, voz y notas de a poco. <strong>Cada cambio se guarda en el server al instante</strong> — podés cerrar el celular y volver mañana, no se pierde nada.
+          </p>
 
           <div className="grid grid-cols-3 gap-2">
             <CaptureButton
