@@ -23,11 +23,26 @@ async function userOrgId() {
 
 // CLIENTS
 
-export async function createClientRecord(input: { name: string; brand_color?: string }) {
+export async function createClientRecord(input: {
+  name: string;
+  category?: string | null;
+  brand_color?: string;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  notes?: string | null;
+}) {
   const { supabase, orgId } = await userOrgId();
   const { data, error } = await supabase
     .from("clients")
-    .insert({ org_id: orgId, name: input.name, brand_color: input.brand_color ?? null })
+    .insert({
+      org_id: orgId,
+      name: input.name,
+      category: input.category ?? null,
+      brand_color: input.brand_color ?? null,
+      contact_email: input.contact_email ?? null,
+      contact_phone: input.contact_phone ?? null,
+      notes: input.notes ?? null,
+    })
     .select("id")
     .single();
   if (error || !data) return { error: error?.message ?? "No se pudo crear" };

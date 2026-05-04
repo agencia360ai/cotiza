@@ -434,12 +434,21 @@ export default async function MaintenanceDashboard() {
           <div className="rounded-2xl border border-dashed border-border bg-card py-16 text-center">
             <Building2 className="mx-auto mb-2 size-6 text-slate-400" />
             <p className="text-sm font-medium">Sin clientes aún</p>
-            <Link
-              href="/maintenance/clients/import"
-              className="mt-2 inline-block text-sm font-semibold text-blue-600 hover:underline"
-            >
-              Crear el primero con IA →
-            </Link>
+            <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
+              <Link
+                href="/maintenance/clients/new"
+                className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                Crear cliente
+                <ChevronRight className="size-4" />
+              </Link>
+              <Link
+                href="/maintenance/clients/import"
+                className="text-xs font-semibold text-violet-600 hover:underline"
+              >
+                o crear varios con IA →
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-border bg-card">

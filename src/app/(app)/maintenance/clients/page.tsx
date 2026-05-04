@@ -74,11 +74,19 @@ export default async function ClientsListPage({
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Clientes</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Tus clientes con sus sucursales y equipos
-        </p>
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Clientes</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Tus clientes con sus sucursales y equipos
+          </p>
+        </div>
+        <Link
+          href="/maintenance/clients/new"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+        >
+          + Nuevo cliente
+        </Link>
       </header>
 
       <Link
