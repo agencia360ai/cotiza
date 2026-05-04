@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileText, LogOut, Package, Users, Building2, ClipboardCheck, Calendar, Home, Menu, X } from "lucide-react";
+import { FileText, LogOut, Package, Users, Building2, ClipboardCheck, Calendar, Home, Menu, X, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }>; section?: string };
@@ -95,6 +95,19 @@ export function AppSidebar({ org, user }: Props) {
 
       <div className="p-3 border-t border-border flex flex-col gap-2">
         <p className="text-xs text-muted-foreground truncate px-3">{user.email}</p>
+        <Link
+          href="/settings"
+          onClick={() => setOpen(false)}
+          className={cn(
+            "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+            pathname.startsWith("/settings")
+              ? "bg-accent text-accent-foreground"
+              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+          )}
+        >
+          <Settings className="size-4" />
+          Configuración
+        </Link>
         <form action="/logout" method="post">
           <button
             type="submit"
