@@ -40,6 +40,7 @@ import {
   deleteReport,
 } from "../../actions";
 import { useRouter } from "next/navigation";
+import { compressImage } from "@/lib/image-compress";
 
 const STATUS_BUTTONS: { value: EquipmentStatus; label: string; icon: typeof CheckCircle2 }[] = [
   { value: "operativo", label: "Operativo", icon: CheckCircle2 },
@@ -80,7 +81,8 @@ export function ReportScreen({
     setUploading(true);
     setError(null);
     try {
-      for (const file of files) {
+      for (const original of files) {
+        const file = await compressImage(original, { maxDimension: 1600, quality: 0.85 });
         const fd = new FormData();
         fd.append("file", file);
         const r = await uploadCapture(token, report.id, fd);

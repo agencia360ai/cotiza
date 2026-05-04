@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { imageUrl, type ReportType } from "@/lib/maintenance/types";
+import { compressImage } from "@/lib/image-compress";
 import {
   updateClient,
   deleteClientRecord,
@@ -137,10 +138,11 @@ function ClientHeader({ client }: { client: Client }) {
   const [error, setError] = useState<string | null>(null);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const original = e.target.files?.[0];
+    if (!original) return;
     setUploading(true);
     setError(null);
+    const file = await compressImage(original, { maxDimension: 400, quality: 0.9 });
     const fd = new FormData();
     fd.append("file", file);
     const r = await uploadClientLogo(client.id, fd);

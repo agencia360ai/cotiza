@@ -35,6 +35,7 @@ import {
   removeItemPhoto,
   updateReportFields,
 } from "../actions";
+import { compressImage } from "@/lib/image-compress";
 
 const STATUS_BUTTONS: { value: EquipmentStatus; label: string; icon: typeof CheckCircle2 }[] = [
   { value: "operativo", label: "Operativo", icon: CheckCircle2 },
@@ -708,7 +709,8 @@ function PhotosEditor({
     setError(null);
     try {
       const newPaths: string[] = [...paths];
-      for (const f of files) {
+      for (const original of files) {
+        const f = await compressImage(original, { maxDimension: 1600, quality: 0.85 });
         const fd = new FormData();
         fd.append("file", f);
         const r = await uploadItemPhoto(reportId, itemId, fd);

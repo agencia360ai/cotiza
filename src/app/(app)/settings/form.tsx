@@ -4,6 +4,7 @@ import { useState, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, Upload, Trash2, Loader2, Save, ImageIcon } from "lucide-react";
 import { imageUrl } from "@/lib/maintenance/types";
+import { compressImage } from "@/lib/image-compress";
 import { updateOrgName, uploadOrgLogo, removeOrgLogo } from "./actions";
 
 type Org = {
@@ -58,10 +59,11 @@ export function OrgSettingsForm({
   }
 
   async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const original = e.target.files?.[0];
+    if (!original) return;
     setUploading(true);
     setError(null);
+    const file = await compressImage(original, { maxDimension: 400, quality: 0.9 });
     const fd = new FormData();
     fd.append("file", file);
     const r = await uploadOrgLogo(fd);
