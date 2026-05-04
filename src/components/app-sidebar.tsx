@@ -3,22 +3,13 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  FileText,
-  LogOut,
-  Package,
-  Users,
-  Building2,
-  ClipboardCheck,
-  Calendar,
-  Menu,
-  X,
-} from "lucide-react";
+import { FileText, LogOut, Package, Users, Building2, ClipboardCheck, Calendar, Home, Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }>; section?: string };
 
 const NAV: NavItem[] = [
+  { href: "/maintenance", label: "Inicio", icon: Home, section: "Mantenimiento" },
   { href: "/maintenance/schedule", label: "Cronograma", icon: Calendar, section: "Mantenimiento" },
   { href: "/maintenance/reports", label: "Reportes", icon: ClipboardCheck, section: "Mantenimiento" },
   { href: "/maintenance/clients", label: "Clientes", icon: Building2, section: "Mantenimiento" },
@@ -74,7 +65,10 @@ export function AppSidebar({ org, user }: Props) {
               ) : null}
               <div className="flex flex-col gap-0.5">
                 {items.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  const active =
+                    item.href === "/maintenance"
+                      ? pathname === "/maintenance"
+                      : pathname === item.href || pathname.startsWith(`${item.href}/`);
                   const Icon = item.icon;
                   return (
                     <Link
@@ -114,8 +108,10 @@ export function AppSidebar({ org, user }: Props) {
     </>
   );
 
-  const activeItem = NAV.find(
-    (n) => pathname === n.href || pathname.startsWith(`${n.href}/`),
+  const activeItem = NAV.find((n) =>
+    n.href === "/maintenance"
+      ? pathname === "/maintenance"
+      : pathname === n.href || pathname.startsWith(`${n.href}/`),
   );
 
   return (
