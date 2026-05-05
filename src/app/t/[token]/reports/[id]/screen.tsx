@@ -24,6 +24,9 @@ import {
   REPORT_TYPE_COLOR,
   REPORT_TYPE_LABEL_SHORT,
   STATUS_COLOR,
+  STATUS_LABEL_SHORT,
+  PRIORITY_TINT,
+  PRIORITY_LABEL,
   imageUrl,
   type CaptureItem,
   type EquipmentStatus,
@@ -71,6 +74,7 @@ export function ReportScreen({
   const [showTextModal, setShowTextModal] = useState(false);
 
   const accent = REPORT_TYPE_COLOR[report.report_type];
+  const isSubmitted = !!report.performed_at_end || report.status !== "draft";
 
   async function refresh() {
     router.refresh();
@@ -187,13 +191,15 @@ export function ReportScreen({
             <ArrowLeft className="size-4" />
             Portal
           </Link>
-          <button
-            type="button"
-            onClick={handleDelete}
-            className="text-xs text-slate-400 hover:text-red-600"
-          >
-            Eliminar borrador
-          </button>
+          {!isSubmitted ? (
+            <button
+              type="button"
+              onClick={handleDelete}
+              className="text-xs text-slate-400 hover:text-red-600"
+            >
+              Eliminar borrador
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -240,7 +246,19 @@ export function ReportScreen({
           </div>
         </section>
 
+        {/* If submitted, render read-only structured view */}
+        {isSubmitted ? (
+          <SubmittedView
+            summary={report.summary_es ?? ""}
+            items={items}
+            location={location}
+            performedAtEnd={report.performed_at_end}
+            status={report.status}
+          />
+        ) : null}
+
         {/* SECTION 1: Capture */}
+        {!isSubmitted ? (
         <section>
           <header className="mb-3 flex items-center justify-between">
             <h2 className="text-base font-bold text-slate-900">1. Captura</h2>
@@ -324,9 +342,10 @@ export function ReportScreen({
             </button>
           ) : null}
         </section>
+        ) : null}
 
-        {/* SECTION 2: Review (after AI) */}
-        {items.length > 0 ? (
+        {/* SECTION 2: Review (after AI) — only while still draft */}
+        {!isSubmitted && items.length > 0 ? (
           <section className="mt-10">
             <header className="mb-3 flex items-center justify-between">
               <h2 className="text-base font-bold text-slate-900">2. Reporte generado</h2>
@@ -376,8 +395,8 @@ export function ReportScreen({
         ) : null}
       </main>
 
-      {/* Sticky submit bar */}
-      {items.length > 0 ? (
+      {/* Sticky submit bar — only while draft */}
+      {!isSubmitted && items.length > 0 ? (
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white px-5 py-3">
           <div className="mx-auto flex max-w-3xl gap-2">
             <button
@@ -641,7 +660,9 @@ function VoiceCaptureModal({
         continuous: boolean;
         interimResults: boolean;
         lang: string;
-        onresult: ((e: { resultIndex: number; results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null;
+        onresult:
+          | ((e: { resultIndex: number; results: ArrayLike<{ isFinal?: boolean; 0: { transcript: string } }> }) => void)
+          | null;
         onend: (() => void) | null;
         onerror: ((e: unknown) => void) | null;
         start: () => void;
@@ -656,14 +677,16 @@ function VoiceCaptureModal({
     }
     const recognition = new SR();
     recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.interimResults = false;
     recognition.lang = "es-PA";
     recognition.onresult = (e) => {
-      let final = "";
+      let finalChunk = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        final += e.results[i][0].transcript;
+        const result = e.results[i] as { isFinal?: boolean; 0: { transcript: string } };
+        if (result.isFinal === false) continue;
+        finalChunk += result[0].transcript;
       }
-      setText((prev) => prev + final);
+      if (finalChunk) setText((prev) => (prev ? prev + " " : "") + finalChunk.trim());
     };
     recognition.onend = () => setListening(false);
     recRef.current = recognition;
@@ -778,6 +801,211 @@ function Modal({
         {children}
       </div>
     </div>
+  );
+}
+
+function SubmittedView({
+  summary,
+  items,
+  location,
+  performedAtEnd,
+  status,
+}: {
+  summary: string;
+  items: ReportItem[];
+  location: TechnicianReportData["location"];
+  performedAtEnd: string | null;
+  status: "draft" | "published" | "accepted";
+}) {
+  const banner =
+    status === "accepted"
+      ? { tone: "emerald" as const, title: "Aceptado por el cliente", body: "Reporte cerrado." }
+      : status === "published"
+        ? { tone: "blue" as const, title: "Publicado", body: "El cliente ya puede verlo. Esperando aceptación." }
+        : { tone: "orange" as const, title: "Enviado para revisión", body: "Un administrador lo revisará y publicará." };
+
+  const toneClass = {
+    emerald: "bg-emerald-50 text-emerald-900 ring-emerald-600/20",
+    blue: "bg-blue-50 text-blue-900 ring-blue-600/20",
+    orange: "bg-orange-50 text-orange-900 ring-orange-600/20",
+  }[banner.tone];
+
+  const statusCounts: Partial<Record<EquipmentStatus, number>> = {};
+  for (const it of items) {
+    statusCounts[it.equipment_status] = (statusCounts[it.equipment_status] ?? 0) + 1;
+  }
+
+  return (
+    <>
+      <div className={cn("mb-6 flex items-start gap-3 rounded-2xl px-4 py-3 ring-1 ring-inset", toneClass)}>
+        <CheckCircle2 className="mt-0.5 size-5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold">{banner.title}</p>
+          <p className="text-xs">
+            {banner.body}
+            {performedAtEnd
+              ? ` · ${new Date(performedAtEnd).toLocaleString("es-PA", { dateStyle: "short", timeStyle: "short" })}`
+              : ""}
+          </p>
+        </div>
+      </div>
+
+      {summary ? (
+        <section className="mb-6">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-600">Resumen</h2>
+          <p className="rounded-xl border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-800 whitespace-pre-line">
+            {summary}
+          </p>
+        </section>
+      ) : null}
+
+      {Object.keys(statusCounts).length > 0 ? (
+        <section className="mb-6">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-600">Estado de equipos</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {(Object.keys(statusCounts) as EquipmentStatus[]).map((s) => (
+              <span
+                key={s}
+                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset"
+                style={{
+                  backgroundColor: `${STATUS_COLOR[s]}15`,
+                  color: STATUS_COLOR[s],
+                  boxShadow: `inset 0 0 0 1px ${STATUS_COLOR[s]}30`,
+                }}
+              >
+                <span className="size-2 rounded-full" style={{ backgroundColor: STATUS_COLOR[s] }} />
+                {STATUS_LABEL_SHORT[s]} · {statusCounts[s]}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="space-y-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+          Equipos inspeccionados ({items.length})
+        </h2>
+        {items.map((it) => {
+          const eq = location.equipment.find((e) => e.id === it.equipment_id);
+          const statusColor = STATUS_COLOR[it.equipment_status];
+          return (
+            <article key={it.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <header
+                className="flex items-center gap-3 px-4 py-3"
+                style={{ backgroundColor: `${statusColor}10`, borderBottom: `1px solid ${statusColor}25` }}
+              >
+                <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: statusColor }} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-900">
+                    {eq?.brand ?? ""} {eq?.model ?? ""}
+                  </p>
+                  <p className="truncate text-xs text-slate-500">
+                    {eq?.location_label ?? eq?.custom_name ?? "Equipo"}
+                  </p>
+                </div>
+                <span
+                  className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+                  style={{ backgroundColor: statusColor, color: "white" }}
+                >
+                  {STATUS_LABEL_SHORT[it.equipment_status]}
+                </span>
+              </header>
+
+              <div className="space-y-3 p-4">
+                {it.observations_es ? (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Observaciones
+                    </p>
+                    <p className="mt-1 text-sm leading-relaxed text-slate-800 whitespace-pre-line">
+                      {it.observations_es}
+                    </p>
+                  </div>
+                ) : null}
+
+                {it.recommendations.length > 0 ? (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Recomendaciones
+                    </p>
+                    <ul className="mt-1 space-y-1.5">
+                      {it.recommendations.map((r, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm">
+                          <span
+                            className={cn(
+                              "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase ring-1 ring-inset",
+                              PRIORITY_TINT[r.priority],
+                            )}
+                            title={PRIORITY_LABEL[r.priority]}
+                          >
+                            {r.priority}
+                          </span>
+                          <span className="text-slate-700">{r.description}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {it.parts_replaced.length > 0 ? (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Partes reemplazadas
+                    </p>
+                    <ul className="mt-1 space-y-0.5 text-sm text-slate-700">
+                      {it.parts_replaced.map((p, i) => (
+                        <li key={i}>
+                          • {p.name}
+                          {p.quantity ? ` × ${p.quantity}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {it.checklist_items.length > 0 ? (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Elementos revisados
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {it.checklist_items.map((c, i) => (
+                        <span
+                          key={i}
+                          className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
+                        >
+                          <CheckCircle2 className="size-3" />
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {it.photo_paths.length > 0 ? (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Fotos
+                    </p>
+                    <div className="mt-1 grid grid-cols-3 gap-1.5 sm:grid-cols-4">
+                      {it.photo_paths.map((p, i) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          key={i}
+                          src={imageUrl(p)}
+                          alt={`foto ${i + 1}`}
+                          className="aspect-square w-full rounded-lg object-cover ring-1 ring-slate-200"
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </section>
+    </>
   );
 }
 

@@ -186,16 +186,48 @@ export async function generateWithAI(token: string, reportId: string): Promise<R
     return { error: e instanceof Error ? e.message : "Falló la generación con IA" };
   }
 
-  // Save items
-  const items = result.items.map((it) => ({
-    equipment_id: it.equipment_id,
-    equipment_status: it.status,
-    observations_es: it.observations_es,
-    recommendations: it.recommendations,
-    parts_replaced: it.parts_replaced,
-    checklist_items: it.checklist_items,
-    photo_paths: it.photo_paths,
-  }));
+  // Process new_equipment: insert any equipment the AI detected as new into client_equipment
+  // and remap equipment_id so save_technician_report_items has a valid FK.
+  for (const it of result.items) {
+    if (!it.equipment_id && it.new_equipment) {
+      const ne = it.new_equipment;
+      const customName =
+        `${ne.brand ?? ""} ${ne.model ?? ""}`.trim() ||
+        (ne.category ? ne.category.replace(/_/g, " ") : "Equipo nuevo");
+      const { data: inserted, error: eqErr } = (await supabase
+        .from("client_equipment")
+        .insert({
+          org_id: report.report.org_id,
+          location_id: report.report.location_id,
+          custom_name: customName,
+          brand: ne.brand,
+          model: ne.model,
+          category: ne.category,
+          location_label: ne.location_label,
+          voltage: ne.voltage,
+          capacity_btu: ne.capacity_btu,
+        })
+        .select("id")
+        .single()) as { data: { id: string } | null; error: { message: string } | null };
+      if (eqErr || !inserted) {
+        return { error: `Falló al agregar equipo nuevo detectado: ${eqErr?.message ?? "sin id"}` };
+      }
+      it.equipment_id = inserted.id;
+    }
+  }
+
+  // Save items (drop any item that still has no equipment_id — shouldn't happen but be safe)
+  const items = result.items
+    .filter((it) => !!it.equipment_id)
+    .map((it) => ({
+      equipment_id: it.equipment_id as string,
+      equipment_status: it.status,
+      observations_es: it.observations_es,
+      recommendations: it.recommendations,
+      parts_replaced: it.parts_replaced,
+      checklist_items: it.checklist_items,
+      photo_paths: it.photo_paths,
+    }));
 
   const { error: saveErr } = await supabase.rpc("save_technician_report_items", {
     _token: token,
