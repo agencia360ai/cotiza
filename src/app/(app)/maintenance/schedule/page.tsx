@@ -133,7 +133,7 @@ export default async function SchedulePage({
         <FilterSelect
           name="technician"
           value={sp.technician ?? ""}
-          options={[{ value: "", label: "Todos los técnicos" }, ...(technicians ?? []).map((t) => ({ value: t.id, label: t.name }))]}
+          options={[{ value: "", label: "Todo el personal" }, ...(technicians ?? []).map((t) => ({ value: t.id, label: t.name }))]}
           searchParams={sp}
         />
         <FilterSelect
@@ -252,7 +252,7 @@ function ScheduleCard({ schedule }: { schedule: ScheduleRow }) {
               {schedule.technician.name}
             </span>
           ) : (
-            <span className="text-amber-600">Sin técnico asignado</span>
+            <span className="text-amber-600">Sin personal asignado</span>
           )}
           <span className="text-slate-400">· cada {schedule.frequency}</span>
         </div>

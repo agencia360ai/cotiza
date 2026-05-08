@@ -31,9 +31,9 @@ export default async function TechniciansPage() {
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Técnicos</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Personal</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Cada técnico tiene un link único persistente para acceder a su portal
+          Cada miembro tiene un link único persistente para acceder a su portal
         </p>
       </header>
 
@@ -45,7 +45,7 @@ export default async function TechniciansPage() {
         </h2>
         {techs.length === 0 ? (
           <p className="rounded-xl border border-dashed border-border py-16 text-center text-sm text-muted-foreground">
-            Sin técnicos aún. Agregá el primero arriba.
+            Sin personal cargado. Agregá el primero arriba.
           </p>
         ) : (
           <TechniciansList technicians={techs} />

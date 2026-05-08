@@ -690,7 +690,7 @@ export default async function MaintenanceDashboard() {
         <section className="mt-8 rounded-2xl border border-border bg-card px-5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
             <p className="text-slate-700">
-              <strong>{allTechs.length}</strong> técnico{allTechs.length === 1 ? "" : "s"} activo{allTechs.length === 1 ? "" : "s"}
+              <strong>{allTechs.length}</strong> miembro{allTechs.length === 1 ? "" : "s"} de personal activo{allTechs.length === 1 ? "" : "s"}
             </p>
             <Link href="/maintenance/technicians" className="text-xs font-semibold text-slate-600 hover:text-slate-900">
               Gestionar equipo →

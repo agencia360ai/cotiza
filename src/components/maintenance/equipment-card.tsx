@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { Snowflake, Wind, Box, Refrigerator, ChevronRight } from "lucide-react";
+import { Snowflake, Wind, Box, Refrigerator, ChevronRight, Clock, AlertTriangle } from "lucide-react";
 import { StatusBadge } from "./status-badge";
 import { StatusSparkline } from "./charts";
 import type { Equipment } from "@/lib/maintenance/types";
+import { cn } from "@/lib/utils";
 
 const CATEGORY_ICON: Record<string, typeof Snowflake> = {
   nevera: Refrigerator,
@@ -11,15 +12,23 @@ const CATEGORY_ICON: Record<string, typeof Snowflake> = {
   evaporadora: Wind,
 };
 
-function formatRelativeDate(iso: string | null): string {
-  if (!iso) return "Sin inspección";
+const CATEGORY_FALLBACK_LABEL: Record<string, string> = {
+  nevera: "Nevera",
+  congelador: "Congelador",
+  aire_acondicionado: "Aire acondicionado",
+  evaporadora: "Evaporadora",
+  otro: "Equipo",
+};
+
+function formatRelativeDate(iso: string | null): { text: string; days: number | null } {
+  if (!iso) return { text: "Sin inspección", days: null };
   const date = new Date(iso);
   const days = Math.floor((Date.now() - date.getTime()) / 86400000);
-  if (days < 1) return "hoy";
-  if (days < 7) return `hace ${days} día${days === 1 ? "" : "s"}`;
-  if (days < 30) return `hace ${Math.floor(days / 7)} sem`;
-  if (days < 365) return `hace ${Math.floor(days / 30)} mes`;
-  return `hace ${Math.floor(days / 365)} año`;
+  if (days < 1) return { text: "hoy", days };
+  if (days < 7) return { text: `hace ${days} día${days === 1 ? "" : "s"}`, days };
+  if (days < 30) return { text: `hace ${Math.floor(days / 7)} sem`, days };
+  if (days < 365) return { text: `hace ${Math.floor(days / 30)} mes`, days };
+  return { text: `hace ${Math.floor(days / 365)} año`, days };
 }
 
 export function EquipmentCard({
@@ -32,6 +41,20 @@ export function EquipmentCard({
   const Icon = (equipment.category ? CATEGORY_ICON[equipment.category] : null) ?? Box;
   const status = equipment.latest_status ?? "sin_inspeccion";
 
+  // Title priority: location_label (área) > custom_name > category fallback.
+  const title =
+    equipment.location_label?.trim() ||
+    (equipment.custom_name && equipment.custom_name.trim() !== "" ? equipment.custom_name : null) ||
+    (equipment.category ? CATEGORY_FALLBACK_LABEL[equipment.category] ?? "Equipo" : "Equipo");
+
+  // Specifics line: brand · model (skip "S/A" placeholders).
+  const brand = equipment.brand?.trim();
+  const model = equipment.model && equipment.model !== "S/A" ? equipment.model.trim() : null;
+  const specifics = [brand, model].filter(Boolean).join(" · ");
+
+  const inspection = formatRelativeDate(equipment.latest_inspection_at);
+  const stale = inspection.days === null || inspection.days > 90;
+
   const inner = (
     <>
       <div className="mb-3 flex items-start justify-between gap-3">
@@ -41,26 +64,33 @@ export function EquipmentCard({
         <StatusBadge status={status} size="sm" short />
       </div>
 
-      <div className="mb-3 min-h-[3rem]">
-        <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
-          {equipment.brand ?? ""}
-        </p>
-        <p className="mt-0.5 line-clamp-2 text-sm font-semibold text-slate-900">
-          {equipment.model && equipment.model !== "S/A"
-            ? equipment.model
-            : equipment.custom_name}
-        </p>
-        {equipment.location_label ? (
-          <p className="mt-0.5 truncate text-xs text-slate-500">{equipment.location_label}</p>
+      <div className="mb-4">
+        <p className="line-clamp-2 text-base font-bold leading-snug text-slate-900">{title}</p>
+        {specifics ? (
+          <p className="mt-1 truncate text-xs text-slate-500">{specifics}</p>
         ) : null}
       </div>
 
-      <div className="mt-auto flex items-end justify-between gap-2 border-t border-slate-100 pt-3">
-        <div>
-          <p className="text-[10px] uppercase tracking-wider text-slate-400">Última inspección</p>
-          <p className="text-xs font-medium text-slate-700">
-            {formatRelativeDate(equipment.latest_inspection_at)}
-          </p>
+      <div
+        className={cn(
+          "mt-auto flex items-center justify-between gap-2 rounded-lg px-3 py-2 ring-1 ring-inset",
+          stale
+            ? "bg-amber-50 ring-amber-600/15 text-amber-900"
+            : "bg-slate-50 ring-slate-200 text-slate-800",
+        )}
+      >
+        <div className="flex items-center gap-2">
+          {stale ? (
+            <AlertTriangle className="size-3.5 shrink-0 text-amber-600" />
+          ) : (
+            <Clock className="size-3.5 shrink-0 text-slate-500" />
+          )}
+          <div className="min-w-0">
+            <p className="text-[9px] font-semibold uppercase tracking-wider opacity-75">
+              Última inspección
+            </p>
+            <p className="text-sm font-bold tabular-nums">{inspection.text}</p>
+          </div>
         </div>
         <StatusSparkline history={equipment.history} />
       </div>
