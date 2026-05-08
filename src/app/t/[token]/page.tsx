@@ -9,6 +9,7 @@ import {
   Sparkles,
   CheckCircle2,
   Hourglass,
+  Hammer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
@@ -22,15 +23,45 @@ import {
   type TechnicianDraft,
   type TechnicianSubmitted,
 } from "@/lib/maintenance/types";
+import {
+  PROJECT_STATUS_COLOR,
+  PROJECT_STATUS_LABEL,
+  PROJECT_STATUS_TINT,
+  PROJECT_TYPE_COLOR,
+  PROJECT_TYPE_LABEL,
+  projectImageUrl,
+  type ProjectStatus,
+  type ProjectType,
+} from "@/lib/projects/types";
 import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
 
 export const dynamic = "force-dynamic";
+
+type TechProjectRow = {
+  id: string;
+  name: string;
+  project_type: ProjectType;
+  status: ProjectStatus;
+  cover_photo_path: string | null;
+  expected_completion_date: string | null;
+  client_name: string | null;
+  location_name: string | null;
+  milestone_count: number;
+  completed_count: number;
+  updated_at: string;
+};
 
 async function loadPortal(token: string): Promise<TechnicianPortalData | null> {
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("get_technician_portal", { _token: token });
   if (error || !data) return null;
   return data as TechnicianPortalData;
+}
+
+async function loadTechnicianProjects(token: string): Promise<TechProjectRow[]> {
+  const supabase = await createClient();
+  const { data } = await supabase.rpc("get_technician_projects", { _token: token });
+  return (data as TechProjectRow[]) ?? [];
 }
 
 function formatDateLong(iso: string | null): string {
@@ -71,10 +102,12 @@ export default async function TechnicianDashboard({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const data = await loadPortal(token);
+  const [data, projects] = await Promise.all([loadPortal(token), loadTechnicianProjects(token)]);
   if (!data) notFound();
 
   const { technician, clients, drafts, submitted } = data;
+  const activeProjects = projects.filter((p) => p.status !== "aceptado");
+  const closedProjects = projects.filter((p) => p.status === "aceptado");
   const totalEquipment = clients.reduce(
     (sum, c) => sum + c.locations.reduce((s, l) => s + l.equipment_count, 0),
     0,
@@ -113,22 +146,53 @@ export default async function TechnicianDashboard({
       </header>
 
       <main className="mx-auto max-w-3xl px-5 py-6 sm:py-8">
-        {/* Primary CTA */}
-        <Link
-          href={`/t/${token}/new`}
-          className="group flex items-center gap-4 rounded-2xl bg-slate-900 p-5 text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg"
-        >
-          <div className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20">
-            <Plus className="size-6" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-base font-semibold">Crear nuevo reporte</p>
-            <p className="text-sm text-white/60">
-              Capturá fotos, voz y notas — la IA arma el borrador
-            </p>
-          </div>
-          <ChevronRight className="size-5 text-white/60 transition-transform group-hover:translate-x-1" />
-        </Link>
+        {/* Primary CTAs: reportes + proyectos */}
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Link
+            href={`/t/${token}/new`}
+            className="group flex items-center gap-3 rounded-2xl bg-slate-900 p-4 text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg"
+          >
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20">
+              <Plus className="size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">Nuevo reporte</p>
+              <p className="text-xs text-white/60">Mantenimiento, correctivo, inspección</p>
+            </div>
+            <ChevronRight className="size-4 text-white/60 transition-transform group-hover:translate-x-1" />
+          </Link>
+          <Link
+            href={`/t/${token}/projects/new`}
+            className="group flex items-center gap-3 rounded-2xl bg-gradient-to-br from-blue-600 to-blue-700 p-4 text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg"
+          >
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20">
+              <Hammer className="size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">Nuevo proyecto</p>
+              <p className="text-xs text-white/70">Cuarto frío, obra, instalación nueva</p>
+            </div>
+            <ChevronRight className="size-4 text-white/70 transition-transform group-hover:translate-x-1" />
+          </Link>
+        </div>
+
+        {/* Projects in progress */}
+        {activeProjects.length > 0 ? (
+          <section className="mt-8">
+            <header className="mb-3 flex items-center gap-2">
+              <Hammer className="size-4 text-blue-600" />
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700">
+                Proyectos en curso
+              </h2>
+              <span className="text-xs text-slate-500">{activeProjects.length}</span>
+            </header>
+            <div className="space-y-2">
+              {activeProjects.map((p) => (
+                <ProjectCard key={p.id} project={p} token={token} />
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {/* Drafts in progress */}
         {drafts.length > 0 ? (
@@ -179,6 +243,24 @@ export default async function TechnicianDashboard({
             </div>
           )}
         </section>
+
+        {/* Closed projects */}
+        {closedProjects.length > 0 ? (
+          <section className="mt-8">
+            <header className="mb-3 flex items-center gap-2">
+              <CheckCircle2 className="size-4 text-emerald-600" />
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700">
+                Proyectos cerrados
+              </h2>
+              <span className="text-xs text-slate-500">{closedProjects.length}</span>
+            </header>
+            <div className="space-y-2">
+              {closedProjects.map((p) => (
+                <ProjectCard key={p.id} project={p} token={token} />
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {/* Clients quick access */}
         {clients.length > 0 ? (
@@ -304,6 +386,65 @@ function DraftCard({ draft, token }: { draft: TechnicianDraft; token: string }) 
         </div>
         <ChevronRight className="size-5 shrink-0 text-slate-300 transition-transform group-hover:translate-x-1" />
       </div>
+    </Link>
+  );
+}
+
+function ProjectCard({ project, token }: { project: TechProjectRow; token: string }) {
+  const accent = PROJECT_TYPE_COLOR[project.project_type];
+  const total = project.milestone_count;
+  const done = project.completed_count;
+  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+  return (
+    <Link
+      href={`/t/${token}/projects/${project.id}`}
+      className="group flex items-center gap-3 overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all hover:-translate-y-0.5 hover:shadow-md"
+    >
+      <div
+        className="relative flex size-20 shrink-0 items-center justify-center bg-slate-100"
+        style={{
+          backgroundImage: project.cover_photo_path
+            ? `url(${projectImageUrl(project.cover_photo_path)})`
+            : undefined,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+        }}
+      >
+        {!project.cover_photo_path ? <Hammer className="size-6 text-slate-300" /> : null}
+      </div>
+      <div className="min-w-0 flex-1 py-3 pr-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="truncate text-sm font-semibold text-slate-900">{project.name}</p>
+          <span
+            className={cn(
+              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset",
+              PROJECT_STATUS_TINT[project.status],
+            )}
+          >
+            {PROJECT_STATUS_LABEL[project.status]}
+          </span>
+        </div>
+        <p className="truncate text-xs text-slate-500">
+          {project.client_name ?? "—"}
+          {project.location_name ? ` · ${project.location_name}` : ""}
+          {" · "}
+          <span style={{ color: accent }} className="font-semibold">
+            {PROJECT_TYPE_LABEL[project.project_type]}
+          </span>
+        </p>
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full"
+              style={{ width: `${pct}%`, backgroundColor: PROJECT_STATUS_COLOR[project.status] }}
+            />
+          </div>
+          <span className="tabular-nums">
+            {done}/{total} · {pct}%
+          </span>
+        </div>
+      </div>
+      <ChevronRight className="size-5 shrink-0 self-center pr-3 text-slate-300 transition-transform group-hover:translate-x-1" />
     </Link>
   );
 }
