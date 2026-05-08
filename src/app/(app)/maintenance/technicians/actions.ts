@@ -70,3 +70,43 @@ export async function deleteTechnician(id: string): Promise<Result> {
   revalidatePath("/maintenance/technicians");
   return { ok: true };
 }
+
+export type AssignmentInput = { client_id: string; location_id: string | null };
+
+export async function setTechnicianAssignments(
+  technicianId: string,
+  assignments: AssignmentInput[],
+): Promise<Result> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { error: "Sesión expirada" };
+
+  const { data: tech } = (await supabase
+    .from("technicians")
+    .select("org_id")
+    .eq("id", technicianId)
+    .single()) as { data: { org_id: string } | null };
+  if (!tech) return { error: "Personal no encontrado" };
+
+  // Replace all assignments for this tech atomically.
+  const { error: delErr } = await supabase
+    .from("technician_assignments")
+    .delete()
+    .eq("technician_id", technicianId);
+  if (delErr) return { error: delErr.message };
+
+  if (assignments.length > 0) {
+    const rows = assignments.map((a) => ({
+      org_id: tech.org_id,
+      technician_id: technicianId,
+      client_id: a.client_id,
+      location_id: a.location_id,
+    }));
+    const { error: insErr } = await supabase.from("technician_assignments").insert(rows);
+    if (insErr) return { error: insErr.message };
+  }
+
+  revalidatePath("/maintenance/technicians");
+  revalidatePath(`/maintenance/technicians/${technicianId}`);
+  return { ok: true };
+}

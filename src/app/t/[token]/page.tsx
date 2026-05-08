@@ -132,7 +132,7 @@ export default async function TechnicianDashboard({
               {initials(technician.name)}
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.18em] text-white/50">Portal técnico</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-white/50">Portal personal</p>
               <p className="text-lg font-semibold tracking-tight">{technician.name}</p>
             </div>
           </div>

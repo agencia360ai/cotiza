@@ -378,7 +378,7 @@ function SchedulesSection({
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
               />
             </Field>
-            <Field label="Técnico asignado (opcional)">
+            <Field label="Personal asignado (opcional)">
               <select
                 value={techId}
                 onChange={(e) => setTechId(e.target.value)}

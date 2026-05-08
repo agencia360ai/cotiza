@@ -123,20 +123,20 @@ export function ReportHeaderEditor({
       </div>
       <div>
         <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-          Técnico (texto libre)
+          Nombre (texto libre)
         </label>
         <input
           type="text"
           disabled={!editable || isPending}
           defaultValue={performedByName ?? ""}
           onBlur={(e) => patch("performed_by_name", e.target.value || null)}
-          placeholder="Nombre del técnico"
+          placeholder="Nombre"
           className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-500"
         />
       </div>
       <div>
         <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-          Asignar a técnico del sistema
+          Asignar a personal del sistema
         </label>
         <select
           disabled={!editable || isPending}

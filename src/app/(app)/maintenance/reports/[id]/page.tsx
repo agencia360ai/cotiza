@@ -217,7 +217,7 @@ export default async function ReportDetailPage({
       {report.capture_data.length > 0 ? (
         <section className="mb-6">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-700">
-            Capturas del técnico ({report.capture_data.length})
+            Capturas del personal ({report.capture_data.length})
           </h2>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {report.capture_data.map((c) => (

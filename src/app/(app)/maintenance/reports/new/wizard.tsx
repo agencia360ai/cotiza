@@ -231,13 +231,13 @@ export function NewReportWizard({ clients, technicians }: { clients: Client[]; t
 
       {/* Step 4: technician (optional) */}
       {reportType ? (
-        <Section step={4} title="Técnico (opcional)" done={true}>
+        <Section step={4} title="Personal (opcional)" done={true}>
           <select
             value={techId}
             onChange={(e) => setTechId(e.target.value)}
             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
           >
-            <option value="">Sin técnico asignado</option>
+            <option value="">Sin personal asignado</option>
             {technicians.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}

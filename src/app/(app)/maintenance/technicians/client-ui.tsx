@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Copy, RefreshCw, Trash2, UserPlus, Check, Power, ExternalLink } from "lucide-react";
+import Link from "next/link";
+import { Copy, RefreshCw, Trash2, UserPlus, Check, Power, ExternalLink, Pencil } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { createTechnician, regenerateToken, deleteTechnician, updateTechnician } from "./actions";
@@ -62,8 +63,9 @@ export function NewTechnicianForm() {
     >
       <div className="mb-3 flex items-center gap-2">
         <UserPlus className="size-4 text-slate-700" />
-        <h3 className="text-sm font-semibold text-slate-900">Agregar técnico</h3>
+        <h3 className="text-sm font-semibold text-slate-900">Agregar personal</h3>
       </div>
+      <p className="sr-only">Cargá nombre, teléfono y email. Después podés editarlo y asignarle clientes específicos.</p>
       <div className="grid gap-3 sm:grid-cols-3">
         <input
           required
@@ -88,14 +90,14 @@ export function NewTechnicianForm() {
       </div>
       <div className="mt-3 flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
-          Se genera un link único — copialo y mandáselo por WhatsApp al técnico
+          Se genera un link único — copialo y mandáselo por WhatsApp al personal
         </p>
         <button
           type="submit"
           disabled={!name.trim() || isPending}
           className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
         >
-          {isPending ? "Creando…" : "Crear técnico"}
+          {isPending ? "Creando…" : "Crear personal"}
         </button>
       </div>
       {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
@@ -205,12 +207,20 @@ function TechRow({ tech }: { tech: Tech }) {
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
             {copied ? "Copiado" : "Copiar link"}
           </button>
+          <Link
+            href={`/maintenance/technicians/${tech.id}`}
+            className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+            title="Editar"
+          >
+            <Pencil className="size-3.5" />
+            Editar
+          </Link>
           <a
             href={`/t/${tech.access_token}`}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-200"
-            title="Abrir portal del técnico"
+            title="Abrir portal del personal"
           >
             <ExternalLink className="size-3.5" />
           </a>

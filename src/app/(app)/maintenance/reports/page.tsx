@@ -123,15 +123,15 @@ export default async function ReportsListPage({
 
       {subFilter === "capturando" ? (
         <p className="mb-4 rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-800 ring-1 ring-inset ring-violet-200">
-          <strong>Capturando:</strong> el técnico está cargando info, todavía no procesó con IA. Visible aquí para que veas el progreso, pero <strong>no actúes</strong> hasta que esté en &ldquo;Listo para publicar&rdquo;.
+          <strong>Capturando:</strong> el personal está cargando info, todavía no procesó con IA. Visible aquí para que veas el progreso, pero <strong>no actúes</strong> hasta que esté en &ldquo;Listo para publicar&rdquo;.
         </p>
       ) : subFilter === "generado" ? (
         <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-200">
-          <strong>IA generada:</strong> el técnico ya procesó con IA, está revisando los items antes de enviar.
+          <strong>IA generada:</strong> el personal ya procesó con IA, está revisando los items antes de enviar.
         </p>
       ) : subFilter === "en_revision" ? (
         <p className="mb-4 rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-800 ring-1 ring-inset ring-orange-200">
-          <strong>Listo para publicar:</strong> el técnico envió, esperando que vos publiques para que el cliente lo vea.
+          <strong>Listo para publicar:</strong> el personal envió, esperando que vos publiques para que el cliente lo vea.
         </p>
       ) : null}
 
@@ -140,7 +140,7 @@ export default async function ReportsListPage({
           <FileText className="mx-auto mb-3 size-6 text-muted-foreground" />
           <p className="text-sm font-medium">Sin reportes {subFilter ? "en este estado" : ""}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Los técnicos crean reportes desde su portal personal
+            El personal crea reportes desde su portal
           </p>
         </div>
       ) : (
