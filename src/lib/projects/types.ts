@@ -67,6 +67,28 @@ export type ProjectMedia = {
   position: number;
 };
 
+export type ProjectMilestoneEntry = {
+  id: string;
+  occurred_on: string | null;
+  text_es: string | null;
+  position: number;
+  ai_generated?: boolean;
+  created_at: string;
+  media: ProjectMedia[];
+};
+
+export type ProjectCaptureKind = "photo" | "video" | "voice" | "text";
+
+export type ProjectCapture = {
+  id: string;
+  kind: ProjectCaptureKind;
+  text: string | null;
+  media_path: string | null;
+  hint: string | null;
+  captured_at: string;
+  processed_at: string | null;
+};
+
 export type ProjectMilestone = {
   id: string;
   project_id?: string;
@@ -77,6 +99,7 @@ export type ProjectMilestone = {
   occurred_on: string | null;
   completed_at: string | null;
   created_at: string;
+  entries: ProjectMilestoneEntry[];
   media: ProjectMedia[];
 };
 
@@ -96,6 +119,8 @@ export type ClientProject = {
   started_at: string | null;
   completed_at: string | null;
   accepted_at: string | null;
+  capture_data?: ProjectCapture[];
+  ai_last_run_at?: string | null;
   created_at: string;
   updated_at: string;
 };

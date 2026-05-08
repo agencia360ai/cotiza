@@ -35,21 +35,29 @@ import {
   projectImageUrl,
   type ClientProject,
   type MilestoneStatus,
+  type ProjectCapture,
+  type ProjectMedia,
   type ProjectMilestone,
   type ProjectStatus,
 } from "@/lib/projects/types";
 import { compressImage } from "@/lib/image-compress";
 import {
+  addAdminProjectCapture,
   addMilestone,
   deleteMilestone,
   deleteProject,
+  removeAdminProjectCapture,
   removeMilestoneMedia,
   setCoverPhoto,
   shareProjectLink,
+  structureAdminProjectWithAI,
   updateMilestone,
   updateProject,
+  uploadAdminProjectCaptureMedia,
   uploadMilestoneMedia,
 } from "../actions";
+import { ProjectCaptureSection } from "@/components/projects/capture-section";
+import { MilestoneEntriesList } from "@/components/projects/milestone-entries";
 
 const PROJECT_STATUS_FLOW: ProjectStatus[] = [
   "planificado",
@@ -66,11 +74,13 @@ export function ProjectEditor({
   client,
   location,
   milestones: initialMilestones,
+  captures: initialCaptures,
 }: {
   project: ClientProject;
   client: { id: string; name: string };
   location: { id: string; name: string } | null;
   milestones: ProjectMilestone[];
+  captures: ProjectCapture[];
 }) {
   const router = useRouter();
   const [milestones, setMilestones] = useState<ProjectMilestone[]>(initialMilestones);
@@ -161,6 +171,7 @@ export function ProjectEditor({
         completed_at: input.status === "completado" ? new Date().toISOString() : null,
         created_at: new Date().toISOString(),
         media: [],
+        entries: [],
       },
     ]);
     setShowAddForm(false);
@@ -365,6 +376,30 @@ export function ProjectEditor({
             {error}
           </p>
         ) : null}
+
+        {/* Capture & AI structuring */}
+        <div className="mt-6">
+          <ProjectCaptureSection
+            captures={initialCaptures}
+            onUpload={async (fd) => {
+              const r = await uploadAdminProjectCaptureMedia(project.id, fd);
+              return r;
+            }}
+            onAddText={async (kind, text) => {
+              const r = await addAdminProjectCapture(project.id, { kind, text });
+              return r;
+            }}
+            onRemove={async (id) => {
+              const r = await removeAdminProjectCapture(project.id, id);
+              return r;
+            }}
+            onStructure={async () => {
+              const r = await structureAdminProjectWithAI(project.id);
+              return r;
+            }}
+            onAfterChange={() => router.refresh()}
+          />
+        </div>
 
         {/* Timeline */}
         <section className="mt-8">
@@ -722,6 +757,14 @@ function MilestoneRow({
                 </button>
               </div>
             </header>
+
+            {/* AI-generated entries (sub-events within this milestone) */}
+            {milestone.entries.length > 0 ? (
+              <MilestoneEntriesList
+                entries={milestone.entries}
+                onPreview={(m) => onPreview({ kind: m.kind, path: m.path })}
+              />
+            ) : null}
 
             {/* Media grid */}
             {media.length > 0 ? (

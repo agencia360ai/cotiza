@@ -294,6 +294,67 @@ function PublicMilestone({
           ) : null}
         </header>
 
+        {milestone.entries.length > 0 ? (
+          <div className="border-t border-slate-100 px-4 py-4 sm:px-6 sm:py-5">
+            <ol className="space-y-4 border-l-2 border-slate-200 pl-5 sm:pl-6">
+              {milestone.entries.map((e) => (
+                <li key={e.id} className="relative">
+                  <span className="absolute -left-[27px] top-1.5 size-4 rounded-full border-[3px] border-white bg-slate-300 sm:-left-[33px] sm:size-5" />
+                  {e.occurred_on ? (
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      {new Date(e.occurred_on).toLocaleDateString("es-PA", {
+                        day: "2-digit",
+                        month: "long",
+                        year: "numeric",
+                      })}
+                    </p>
+                  ) : null}
+                  {e.text_es ? (
+                    <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-slate-800 sm:text-base">
+                      {e.text_es}
+                    </p>
+                  ) : null}
+                  {e.media.length > 0 ? (
+                    <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-4">
+                      {e.media.map((mm) => (
+                        <button
+                          key={mm.id}
+                          type="button"
+                          onClick={() => onPreview(mm)}
+                          className="group relative aspect-square overflow-hidden rounded-lg ring-1 ring-slate-200"
+                        >
+                          {mm.kind === "photo" ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={projectImageUrl(mm.path)}
+                              alt={mm.caption_es ?? milestone.title}
+                              loading="lazy"
+                              className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+                            />
+                          ) : (
+                            <>
+                              <video
+                                src={projectImageUrl(mm.path)}
+                                className="size-full object-cover"
+                                muted
+                                playsInline
+                                preload="metadata"
+                              />
+                              <span className="absolute inset-0 flex items-center justify-center bg-black/25 transition-colors group-hover:bg-black/15">
+                                <Play className="size-7 fill-white text-white drop-shadow-md" />
+                              </span>
+                            </>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
+
         {milestone.media.length > 0 ? (
           <div className="border-t border-slate-100">
             <div className="grid grid-cols-2 gap-px bg-slate-100 sm:grid-cols-3 md:grid-cols-4">

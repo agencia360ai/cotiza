@@ -1,12 +1,34 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import type { ClientProject, MilestoneStatus, ProjectMilestone } from "@/lib/projects/types";
+import type {
+  ClientProject,
+  MilestoneStatus,
+  ProjectCapture,
+  ProjectMilestone,
+} from "@/lib/projects/types";
 import { TechnicianProjectScreen } from "./screen";
 
 export const dynamic = "force-dynamic";
 
+type RpcMedia = {
+  id: string;
+  kind: "photo" | "video";
+  path: string;
+  caption_es: string | null;
+  position: number;
+};
+type RpcEntry = {
+  id: string;
+  occurred_on: string | null;
+  text_es: string | null;
+  position: number;
+  ai_generated: boolean;
+  created_at: string;
+  media: RpcMedia[];
+};
+
 type RpcResult = {
-  project: ClientProject;
+  project: ClientProject & { capture_data?: ProjectCapture[] };
   client: { id: string; name: string };
   location: { id: string; name: string } | null;
   milestones: {
@@ -18,13 +40,8 @@ type RpcResult = {
     occurred_on: string | null;
     completed_at: string | null;
     created_at: string;
-    media: {
-      id: string;
-      kind: "photo" | "video";
-      path: string;
-      caption_es: string | null;
-      position: number;
-    }[];
+    media: RpcMedia[];
+    entries: RpcEntry[];
   }[];
 };
 
@@ -52,6 +69,23 @@ export default async function TechnicianProjectPage({
     completed_at: m.completed_at,
     created_at: m.created_at,
     media: (m.media ?? []).slice().sort((a, b) => a.position - b.position),
+    entries: (m.entries ?? [])
+      .slice()
+      .sort((a, b) => {
+        const ad = a.occurred_on ?? "";
+        const bd = b.occurred_on ?? "";
+        if (ad !== bd) return ad < bd ? -1 : 1;
+        return a.position - b.position;
+      })
+      .map((e) => ({
+        id: e.id,
+        occurred_on: e.occurred_on,
+        text_es: e.text_es,
+        position: e.position,
+        ai_generated: e.ai_generated,
+        created_at: e.created_at,
+        media: (e.media ?? []).slice().sort((a, b) => a.position - b.position),
+      })),
   }));
 
   return (
@@ -61,6 +95,7 @@ export default async function TechnicianProjectPage({
       client={result.client}
       location={result.location}
       milestones={milestones}
+      captures={result.project.capture_data ?? []}
     />
   );
 }

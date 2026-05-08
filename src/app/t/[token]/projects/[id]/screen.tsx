@@ -33,21 +33,28 @@ import {
   projectImageUrl,
   type ClientProject,
   type MilestoneStatus,
+  type ProjectCapture,
   type ProjectMedia,
   type ProjectMilestone,
   type ProjectStatus,
 } from "@/lib/projects/types";
 import { compressImage } from "@/lib/image-compress";
 import {
+  addProjectCapture,
   addTechnicianMilestone,
   deleteTechnicianMilestone,
   deleteTechnicianProject,
+  removeProjectCapture,
   removeTechnicianMilestoneMedia,
   setTechnicianProjectCover,
+  structureTechnicianProjectWithAI,
   updateTechnicianMilestone,
   updateTechnicianProject,
+  uploadProjectCaptureMedia,
   uploadTechnicianMilestoneMedia,
 } from "../actions";
+import { ProjectCaptureSection } from "@/components/projects/capture-section";
+import { MilestoneEntriesList } from "@/components/projects/milestone-entries";
 
 const PROJECT_STATUS_FLOW: ProjectStatus[] = [
   "planificado",
@@ -64,12 +71,14 @@ export function TechnicianProjectScreen({
   client,
   location,
   milestones: initialMilestones,
+  captures: initialCaptures,
 }: {
   token: string;
   project: ClientProject;
   client: { id: string; name: string };
   location: { id: string; name: string } | null;
   milestones: ProjectMilestone[];
+  captures: ProjectCapture[];
 }) {
   const router = useRouter();
   const [milestones, setMilestones] = useState<ProjectMilestone[]>(initialMilestones);
@@ -155,6 +164,7 @@ export function TechnicianProjectScreen({
         completed_at: input.status === "completado" ? new Date().toISOString() : null,
         created_at: new Date().toISOString(),
         media: [],
+        entries: [],
       },
     ]);
     setShowAddForm(false);
@@ -308,6 +318,19 @@ export function TechnicianProjectScreen({
           <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20">
             {error}
           </p>
+        ) : null}
+
+        {status !== "aceptado" ? (
+          <div className="mt-5">
+            <ProjectCaptureSection
+              captures={initialCaptures}
+              onUpload={async (fd) => uploadProjectCaptureMedia(token, project.id, fd)}
+              onAddText={async (kind, text) => addProjectCapture(token, project.id, { kind, text })}
+              onRemove={async (id) => removeProjectCapture(token, project.id, id)}
+              onStructure={async () => structureTechnicianProjectWithAI(token, project.id)}
+              onAfterChange={() => router.refresh()}
+            />
+          </div>
         ) : null}
 
         <section className="mt-7">
@@ -672,6 +695,13 @@ function MilestoneRow({
                 </div>
               ) : null}
             </header>
+
+            {milestone.entries.length > 0 ? (
+              <MilestoneEntriesList
+                entries={milestone.entries}
+                onPreview={(m) => onPreview(m)}
+              />
+            ) : null}
 
             {media.length > 0 ? (
               <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-4">

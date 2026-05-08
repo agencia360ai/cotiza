@@ -7,9 +7,12 @@ import { createClient } from "@/lib/supabase/server";
 import type {
   ClientProject,
   MilestoneStatus,
+  ProjectCapture,
+  ProjectCaptureKind,
   ProjectStatus,
   ProjectType,
 } from "@/lib/projects/types";
+import { structureProjectFromCaptures } from "@/lib/ai/structure-project";
 
 type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
 
@@ -355,3 +358,197 @@ export type ProjectDetail = {
     }[];
   }[];
 };
+
+// ============================================================================
+// Project captures (admin)
+// ============================================================================
+
+async function loadProjectCaptureData(
+  projectId: string,
+): Promise<{ org_id: string; capture_data: ProjectCapture[] } | null> {
+  const supabase = await createClient();
+  const { data } = (await supabase
+    .from("client_projects")
+    .select("org_id, capture_data")
+    .eq("id", projectId)
+    .maybeSingle()) as {
+    data: { org_id: string; capture_data: ProjectCapture[] | null } | null;
+  };
+  if (!data) return null;
+  return { org_id: data.org_id, capture_data: data.capture_data ?? [] };
+}
+
+export async function addAdminProjectCapture(
+  projectId: string,
+  payload: { kind: ProjectCaptureKind; text?: string | null; media_path?: string | null; hint?: string | null },
+): Promise<Result<{ capture: ProjectCapture }>> {
+  const supabase = await createClient();
+  const ctx = await loadProjectCaptureData(projectId);
+  if (!ctx) return { error: "Proyecto no encontrado" };
+
+  const newItem: ProjectCapture = {
+    id: randomUUID(),
+    kind: payload.kind,
+    text: payload.text?.trim() || null,
+    media_path: payload.media_path ?? null,
+    hint: payload.hint?.trim() || null,
+    captured_at: new Date().toISOString(),
+    processed_at: null,
+  };
+  const next = [...ctx.capture_data, newItem];
+
+  const { error } = await supabase
+    .from("client_projects")
+    .update({ capture_data: next })
+    .eq("id", projectId);
+  if (error) return { error: error.message };
+
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true, data: { capture: newItem } };
+}
+
+export async function uploadAdminProjectCaptureMedia(
+  projectId: string,
+  formData: FormData,
+): Promise<Result<{ capture: ProjectCapture }>> {
+  const file = formData.get("file") as File | null;
+  if (!file) return { error: "Archivo faltante" };
+
+  const supabase = await createClient();
+  const ctx = await loadProjectCaptureData(projectId);
+  if (!ctx) return { error: "Proyecto no encontrado" };
+
+  const isVideo = file.type.startsWith("video/");
+  const kind: ProjectCaptureKind = isVideo ? "video" : "photo";
+  const ext = (file.name.split(".").pop() ?? (isVideo ? "mp4" : "jpg")).toLowerCase();
+  const path = `${ctx.org_id}/${projectId}/captures/${randomUUID()}.${ext}`;
+
+  const buf = await file.arrayBuffer();
+  const { error: upErr } = await supabase.storage
+    .from("cotiza-projects")
+    .upload(path, buf, {
+      contentType: file.type || (isVideo ? "video/mp4" : "image/jpeg"),
+      upsert: false,
+    });
+  if (upErr) return { error: `Falló subida: ${upErr.message}` };
+
+  return await addAdminProjectCapture(projectId, { kind, media_path: path });
+}
+
+export async function removeAdminProjectCapture(
+  projectId: string,
+  captureId: string,
+): Promise<Result> {
+  const supabase = await createClient();
+  const ctx = await loadProjectCaptureData(projectId);
+  if (!ctx) return { error: "Proyecto no encontrado" };
+
+  const target = ctx.capture_data.find((c) => c.id === captureId);
+  const next = ctx.capture_data.filter((c) => c.id !== captureId);
+
+  const { error } = await supabase
+    .from("client_projects")
+    .update({ capture_data: next })
+    .eq("id", projectId);
+  if (error) return { error: error.message };
+
+  if (target?.media_path) {
+    await supabase.storage.from("cotiza-projects").remove([target.media_path]).catch(() => {});
+  }
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function structureAdminProjectWithAI(
+  projectId: string,
+): Promise<Result<{ added: number }>> {
+  const supabase = await createClient();
+  const ctx = await loadProjectCaptureData(projectId);
+  if (!ctx) return { error: "Proyecto no encontrado" };
+
+  const unprocessed = ctx.capture_data.filter((c) => !c.processed_at);
+  if (unprocessed.length === 0) return { error: "No hay capturas nuevas para procesar" };
+
+  // Project + client + location + milestone metadata
+  type ProjectInfo = {
+    id: string;
+    name: string;
+    project_type: ProjectType;
+    description_es: string | null;
+    expected_completion_date: string | null;
+    client: { name: string } | { name: string }[];
+    location: { name: string } | { name: string }[] | null;
+  };
+  const { data: prj } = (await supabase
+    .from("client_projects")
+    .select(
+      "id, name, project_type, description_es, expected_completion_date, client:clients!inner(name), location:client_locations(name)",
+    )
+    .eq("id", projectId)
+    .single()) as { data: ProjectInfo | null };
+  if (!prj) return { error: "Proyecto no encontrado" };
+  const client = Array.isArray(prj.client) ? prj.client[0] : prj.client;
+  const location = Array.isArray(prj.location) ? prj.location[0] : prj.location;
+
+  type MilestoneRow = {
+    id: string;
+    title: string;
+    status: string;
+    description_es: string | null;
+    project_milestone_entries: { id: string }[] | null;
+  };
+  const { data: ms } = (await supabase
+    .from("project_milestones")
+    .select("id, title, status, description_es, project_milestone_entries(id)")
+    .eq("project_id", projectId)) as { data: MilestoneRow[] | null };
+
+  const photoBuffers: { id: string; path: string; data: Buffer; mimeType: string }[] = [];
+  for (const c of unprocessed) {
+    if (c.kind === "photo" && c.media_path) {
+      const { data } = await supabase.storage.from("cotiza-projects").download(c.media_path);
+      if (data) {
+        photoBuffers.push({
+          id: c.id,
+          path: c.media_path,
+          data: Buffer.from(await data.arrayBuffer()),
+          mimeType: data.type || "image/jpeg",
+        });
+      }
+    }
+  }
+
+  let result;
+  try {
+    result = await structureProjectFromCaptures({
+      project: {
+        id: prj.id,
+        name: prj.name,
+        project_type: prj.project_type,
+        description_es: prj.description_es,
+        expected_completion_date: prj.expected_completion_date,
+      },
+      client_name: client?.name ?? "—",
+      location_name: location?.name ?? null,
+      existing_milestones: (ms ?? []).map((m) => ({
+        id: m.id,
+        title: m.title,
+        status: m.status,
+        description_es: m.description_es,
+        entry_count: (m.project_milestone_entries ?? []).length,
+      })),
+      captures: unprocessed,
+      photos: photoBuffers,
+    });
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Falló estructurar con IA" };
+  }
+
+  const { error } = await supabase.rpc("apply_admin_project_structuring", {
+    _project_id: projectId,
+    _structured: result,
+  });
+  if (error) return { error: error.message };
+
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true, data: { added: result.processed_capture_ids.length } };
+}

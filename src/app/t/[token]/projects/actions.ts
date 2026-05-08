@@ -4,9 +4,72 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
-import type { MilestoneStatus, ProjectStatus, ProjectType } from "@/lib/projects/types";
+import type {
+  MilestoneStatus,
+  ProjectCapture,
+  ProjectCaptureKind,
+  ProjectStatus,
+  ProjectType,
+} from "@/lib/projects/types";
+import { structureProjectFromCaptures } from "@/lib/ai/structure-project";
 
 type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
+
+async function loadProjectForToken(
+  token: string,
+  projectId: string,
+): Promise<{
+  project: {
+    id: string;
+    name: string;
+    project_type: ProjectType;
+    description_es: string | null;
+    expected_completion_date: string | null;
+    capture_data: ProjectCapture[];
+  };
+  client: { name: string };
+  location: { name: string } | null;
+  milestones: { id: string; title: string; status: string; description_es: string | null; entry_count: number }[];
+} | null> {
+  const supabase = await createClient();
+  const { data } = await supabase.rpc("get_technician_project", {
+    _token: token,
+    _project_id: projectId,
+  });
+  if (!data) return null;
+  type RpcShape = {
+    project: {
+      id: string;
+      name: string;
+      project_type: ProjectType;
+      description_es: string | null;
+      expected_completion_date: string | null;
+      capture_data: ProjectCapture[];
+    };
+    client: { name: string };
+    location: { name: string } | null;
+    milestones: {
+      id: string;
+      title: string;
+      status: string;
+      description_es: string | null;
+      entries: unknown[];
+    }[];
+  };
+  const r = data as RpcShape;
+  return {
+    project: r.project,
+    client: r.client,
+    location: r.location,
+    milestones: r.milestones.map((m) => ({
+      id: m.id,
+      title: m.title,
+      status: m.status,
+      description_es: m.description_es,
+      entry_count: (m.entries ?? []).length,
+    })),
+  };
+}
 
 export async function createTechnicianProject(
   token: string,
@@ -223,4 +286,149 @@ export async function setTechnicianProjectCover(
   revalidatePath(`/t/${token}/projects/${projectId}`);
   revalidatePath(`/t/${token}`);
   return { ok: true, data: { path } };
+}
+
+// ============================================================================
+// Project captures (raw uploads — accumulated until AI structures them)
+// ============================================================================
+
+export async function addProjectCapture(
+  token: string,
+  projectId: string,
+  payload: { kind: ProjectCaptureKind; text?: string | null; media_path?: string | null; hint?: string | null },
+): Promise<Result<{ capture: ProjectCapture }>> {
+  const supabase = await createClient();
+  const { data: project } = (await supabase.rpc("get_technician_project", {
+    _token: token,
+    _project_id: projectId,
+  })) as { data: { project: { capture_data: ProjectCapture[] } } | null };
+  if (!project) return { error: "Proyecto no encontrado" };
+
+  const newItem: ProjectCapture = {
+    id: randomUUID(),
+    kind: payload.kind,
+    text: payload.text?.trim() || null,
+    media_path: payload.media_path ?? null,
+    hint: payload.hint?.trim() || null,
+    captured_at: new Date().toISOString(),
+    processed_at: null,
+  };
+  const next = [...(project.project.capture_data ?? []), newItem];
+
+  const { error } = await supabase.rpc("update_technician_project_capture", {
+    _token: token,
+    _project_id: projectId,
+    _capture_data: next,
+  });
+  if (error) return { error: error.message };
+
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true, data: { capture: newItem } };
+}
+
+export async function uploadProjectCaptureMedia(
+  token: string,
+  projectId: string,
+  formData: FormData,
+): Promise<Result<{ capture: ProjectCapture }>> {
+  const file = formData.get("file") as File | null;
+  if (!file) return { error: "Archivo faltante" };
+
+  const supabase = await createClient();
+  const isVideo = file.type.startsWith("video/");
+  const kind: ProjectCaptureKind = isVideo ? "video" : "photo";
+  const ext = (file.name.split(".").pop() ?? (isVideo ? "mp4" : "jpg")).toLowerCase();
+  const path = `tech/${token.slice(0, 8)}/${projectId}/captures/${randomUUID()}.${ext}`;
+
+  const buf = await file.arrayBuffer();
+  const { error: upErr } = await supabase.storage
+    .from("cotiza-projects")
+    .upload(path, buf, {
+      contentType: file.type || (isVideo ? "video/mp4" : "image/jpeg"),
+      upsert: false,
+    });
+  if (upErr) return { error: `Falló subida: ${upErr.message}` };
+
+  return await addProjectCapture(token, projectId, { kind, media_path: path });
+}
+
+export async function removeProjectCapture(
+  token: string,
+  projectId: string,
+  captureId: string,
+): Promise<Result> {
+  const supabase = await createClient();
+  const { data: project } = (await supabase.rpc("get_technician_project", {
+    _token: token,
+    _project_id: projectId,
+  })) as { data: { project: { capture_data: ProjectCapture[] } } | null };
+  if (!project) return { error: "Proyecto no encontrado" };
+
+  const target = project.project.capture_data.find((c) => c.id === captureId);
+  const next = project.project.capture_data.filter((c) => c.id !== captureId);
+
+  const { error } = await supabase.rpc("update_technician_project_capture", {
+    _token: token,
+    _project_id: projectId,
+    _capture_data: next,
+  });
+  if (error) return { error: error.message };
+
+  if (target?.media_path) {
+    await supabase.storage.from("cotiza-projects").remove([target.media_path]).catch(() => {});
+  }
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function structureTechnicianProjectWithAI(
+  token: string,
+  projectId: string,
+): Promise<Result<{ added: number }>> {
+  const supabase = await createClient();
+  const ctx = await loadProjectForToken(token, projectId);
+  if (!ctx) return { error: "Proyecto no encontrado" };
+
+  const unprocessed = (ctx.project.capture_data ?? []).filter((c) => !c.processed_at);
+  if (unprocessed.length === 0) return { error: "No hay capturas nuevas para procesar" };
+
+  // Download photos referenced in unprocessed captures
+  const photoBuffers: { id: string; path: string; data: Buffer; mimeType: string }[] = [];
+  for (const c of unprocessed) {
+    if (c.kind === "photo" && c.media_path) {
+      const { data } = await supabase.storage.from("cotiza-projects").download(c.media_path);
+      if (data) {
+        photoBuffers.push({
+          id: c.id,
+          path: c.media_path,
+          data: Buffer.from(await data.arrayBuffer()),
+          mimeType: data.type || "image/jpeg",
+        });
+      }
+    }
+  }
+
+  let result;
+  try {
+    result = await structureProjectFromCaptures({
+      project: ctx.project,
+      client_name: ctx.client.name,
+      location_name: ctx.location?.name ?? null,
+      existing_milestones: ctx.milestones,
+      captures: unprocessed,
+      photos: photoBuffers,
+    });
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Falló estructurar con IA" };
+  }
+
+  const { error } = await supabase.rpc("apply_technician_project_structuring", {
+    _token: token,
+    _project_id: projectId,
+    _structured: result,
+  });
+  if (error) return { error: error.message };
+
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true, data: { added: result.processed_capture_ids.length } };
 }
