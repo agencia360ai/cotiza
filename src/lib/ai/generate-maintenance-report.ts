@@ -26,7 +26,25 @@ const reportItemSchema = z.object({
       brand: z.string().nullable(),
       model: z.string().nullable(),
       category: z
-        .enum(["nevera", "congelador", "aire_acondicionado", "evaporadora", "otro"])
+        .enum([
+          "nevera",
+          "congelador",
+          "cuarto_frio",
+          "mesa_fria",
+          "vitrina_refrigerada",
+          "ice_maker",
+          "botellero",
+          "mini_split_cassette",
+          "central_ac",
+          "paquete_rooftop",
+          "chiller",
+          "manejadora",
+          "piso_techo",
+          "fan_coil",
+          "evaporadora",
+          "campana_extractora",
+          "otro",
+        ])
         .nullable(),
       location_label: z.string().nullable().describe("Ubicación dentro de la sucursal"),
       voltage: z.string().nullable(),

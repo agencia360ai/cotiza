@@ -7,6 +7,10 @@ import {
   Snowflake,
   Wind,
   Refrigerator,
+  Container,
+  IceCream,
+  Fan,
+  ChefHat,
   Box,
   ClipboardCheck,
   Wrench,
@@ -36,8 +40,20 @@ export const dynamic = "force-dynamic";
 const CATEGORY_ICON: Record<string, typeof Snowflake> = {
   nevera: Refrigerator,
   congelador: Snowflake,
-  aire_acondicionado: Wind,
+  cuarto_frio: Container,
+  mesa_fria: Refrigerator,
+  vitrina_refrigerada: Refrigerator,
+  ice_maker: IceCream,
+  botellero: Refrigerator,
+  mini_split_cassette: Wind,
+  central_ac: Wind,
+  paquete_rooftop: Wind,
+  chiller: Snowflake,
+  manejadora: Fan,
+  piso_techo: Wind,
+  fan_coil: Fan,
   evaporadora: Wind,
+  campana_extractora: ChefHat,
 };
 
 async function loadEquipment(token: string, equipmentId: string): Promise<EquipmentHistoryData | null> {

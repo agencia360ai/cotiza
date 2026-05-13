@@ -13,9 +13,29 @@ const equipmentSchema = z.object({
   brand: z.string().nullable().describe("Marca (TRUE, HISENSE, RCA, etc) — null si desconocida"),
   model: z.string().nullable().describe("Modelo del equipo — null si desconocido"),
   category: z
-    .enum(["nevera", "congelador", "aire_acondicionado", "evaporadora", "otro"])
+    .enum([
+      "nevera",
+      "congelador",
+      "cuarto_frio",
+      "mesa_fria",
+      "vitrina_refrigerada",
+      "ice_maker",
+      "botellero",
+      "mini_split_cassette",
+      "central_ac",
+      "paquete_rooftop",
+      "chiller",
+      "manejadora",
+      "piso_techo",
+      "fan_coil",
+      "evaporadora",
+      "campana_extractora",
+      "otro",
+    ])
     .nullable()
-    .describe("Categoría del equipo. Null si no se puede inferir."),
+    .describe(
+      "Categoría del equipo. Refrigeración: nevera, congelador, cuarto_frio (walk-in), mesa_fria (prep-table), vitrina_refrigerada, ice_maker, botellero. Aire: mini_split_cassette (lo más común), central_ac (con ductos), paquete_rooftop, chiller, manejadora, piso_techo, fan_coil. Otros: evaporadora, campana_extractora, otro. Null si no se puede inferir.",
+    ),
   location_label: z
     .string()
     .nullable()
@@ -102,7 +122,11 @@ Pautas:
 - NO inventes información. Si algo no está claro, dejá el campo en null.
 - Si la entrada menciona "mantenimiento preventivo" sin especificar frecuencia, asumí 'bimestral' (es lo más común en Panamá para HVAC).
 - Inferí la categoría del negocio del contexto: si nombran restaurante/cocina/comedor → restaurante; oficinas/edificios corporativos → oficina; tiendas/locales comerciales → retail; clínica/hospital → salud, etc.
-- Categorías de equipo válidas: nevera, congelador, aire_acondicionado, evaporadora, otro.
+- Categorías de equipo válidas:
+  · Refrigeración: nevera, congelador, cuarto_frio, mesa_fria, vitrina_refrigerada, ice_maker, botellero
+  · Aire acondicionado: mini_split_cassette, central_ac, paquete_rooftop, chiller, manejadora, piso_techo, fan_coil
+  · Otros: evaporadora, campana_extractora, otro
+- Para "AC", "A/C" o "aire acondicionado" genérico sin más contexto → usá mini_split_cassette (es lo más común en restaurantes/comercios en Panamá).
 - BTU típicos: A/C residencial 9000-36000, A/C comercial hasta 60000. NO uses BTU para refrigeración.
 - Voltajes en Panamá: 110V (residencial / equipos chicos) y 220V (cargas mayores / A/C grandes).
 - Si el usuario menciona equipos sin agruparlos por sucursal, asumí una única sucursal "Sede principal".

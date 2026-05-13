@@ -196,11 +196,96 @@ export const CATEGORY_LABEL: Record<ClientCategory, string> = {
   otro: "Otro",
 };
 
+export type EquipmentCategory =
+  | "nevera"
+  | "congelador"
+  | "cuarto_frio"
+  | "mesa_fria"
+  | "vitrina_refrigerada"
+  | "ice_maker"
+  | "botellero"
+  | "mini_split_cassette"
+  | "central_ac"
+  | "paquete_rooftop"
+  | "chiller"
+  | "manejadora"
+  | "piso_techo"
+  | "fan_coil"
+  | "evaporadora"
+  | "campana_extractora"
+  | "otro";
+
+export const EQUIPMENT_CATEGORIES: EquipmentCategory[] = [
+  "nevera",
+  "congelador",
+  "cuarto_frio",
+  "mesa_fria",
+  "vitrina_refrigerada",
+  "ice_maker",
+  "botellero",
+  "mini_split_cassette",
+  "central_ac",
+  "paquete_rooftop",
+  "chiller",
+  "manejadora",
+  "piso_techo",
+  "fan_coil",
+  "evaporadora",
+  "campana_extractora",
+  "otro",
+];
+
+export const EQUIPMENT_CATEGORY_LABEL: Record<EquipmentCategory, string> = {
+  nevera: "Nevera",
+  congelador: "Congelador",
+  cuarto_frio: "Cuarto frío",
+  mesa_fria: "Mesa fría",
+  vitrina_refrigerada: "Vitrina refrigerada",
+  ice_maker: "Productor de hielo",
+  botellero: "Botellero",
+  mini_split_cassette: "Mini split / cassette",
+  central_ac: "Central AC / AC de ductos",
+  paquete_rooftop: "Paquete / rooftop",
+  chiller: "Chiller",
+  manejadora: "Manejadora de aire",
+  piso_techo: "Piso techo",
+  fan_coil: "Fan coil",
+  evaporadora: "Evaporadora",
+  campana_extractora: "Campana extractora",
+  otro: "Otro",
+};
+
+export const EQUIPMENT_CATEGORY_GROUP: Record<EquipmentCategory, "refrigeracion" | "aire" | "otros"> = {
+  nevera: "refrigeracion",
+  congelador: "refrigeracion",
+  cuarto_frio: "refrigeracion",
+  mesa_fria: "refrigeracion",
+  vitrina_refrigerada: "refrigeracion",
+  ice_maker: "refrigeracion",
+  botellero: "refrigeracion",
+  mini_split_cassette: "aire",
+  central_ac: "aire",
+  paquete_rooftop: "aire",
+  chiller: "aire",
+  manejadora: "aire",
+  piso_techo: "aire",
+  fan_coil: "aire",
+  evaporadora: "otros",
+  campana_extractora: "otros",
+  otro: "otros",
+};
+
+export const EQUIPMENT_CATEGORY_GROUP_LABEL: Record<"refrigeracion" | "aire" | "otros", string> = {
+  refrigeracion: "Refrigeración",
+  aire: "Aire acondicionado",
+  otros: "Otros",
+};
+
 export type ImportedEquipment = {
   custom_name: string;
   brand: string | null;
   model: string | null;
-  category: "nevera" | "congelador" | "aire_acondicionado" | "evaporadora" | "otro" | null;
+  category: EquipmentCategory | null;
   location_label: string | null;
   voltage: string | null;
   capacity_btu: number | null;
