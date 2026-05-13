@@ -23,7 +23,13 @@ import {
 import { useRouter } from "next/navigation";
 import { parseClientFromInput, bulkCreateBatch } from "./actions";
 import type { ImportedClient, ImportedBatch, ClientCategory } from "@/lib/maintenance/types";
-import { CATEGORY_LABEL } from "@/lib/maintenance/types";
+import {
+  CATEGORY_LABEL,
+  EQUIPMENT_CATEGORIES,
+  EQUIPMENT_CATEGORY_LABEL,
+  EQUIPMENT_CATEGORY_GROUP,
+  EQUIPMENT_CATEGORY_GROUP_LABEL,
+} from "@/lib/maintenance/types";
 
 const FREQ_LABEL: Record<string, string> = {
   mensual: "Mensual",
@@ -486,10 +492,15 @@ function ClientPreviewCard({
                           className="rounded border border-slate-200 bg-white px-1.5 py-0.5"
                         >
                           <option value="">Cat…</option>
-                          <option value="nevera">Nevera</option>
-                          <option value="congelador">Congelador</option>
-                          <option value="aire_acondicionado">A/C</option>
-                          <option value="evaporadora">Evap</option>
+                          {(["refrigeracion", "aire", "otros"] as const).map((g) => (
+                            <optgroup key={g} label={EQUIPMENT_CATEGORY_GROUP_LABEL[g]}>
+                              {EQUIPMENT_CATEGORIES.filter((c) => EQUIPMENT_CATEGORY_GROUP[c] === g).map((c) => (
+                                <option key={c} value={c}>
+                                  {EQUIPMENT_CATEGORY_LABEL[c]}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
                         </select>
                         <input
                           placeholder="Ubicación"

@@ -1,23 +1,39 @@
 import Link from "next/link";
-import { Snowflake, Wind, Box, Refrigerator, ChevronRight, Clock, AlertTriangle } from "lucide-react";
+import {
+  Snowflake,
+  Wind,
+  Box,
+  Refrigerator,
+  Container,
+  IceCream,
+  Fan,
+  ChefHat,
+  ChevronRight,
+  Clock,
+  AlertTriangle,
+} from "lucide-react";
 import { StatusBadge } from "./status-badge";
 import { StatusSparkline } from "./charts";
-import type { Equipment } from "@/lib/maintenance/types";
+import { EQUIPMENT_CATEGORY_LABEL, type Equipment, type EquipmentCategory } from "@/lib/maintenance/types";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_ICON: Record<string, typeof Snowflake> = {
   nevera: Refrigerator,
   congelador: Snowflake,
-  aire_acondicionado: Wind,
+  cuarto_frio: Container,
+  mesa_fria: Refrigerator,
+  vitrina_refrigerada: Refrigerator,
+  ice_maker: IceCream,
+  botellero: Refrigerator,
+  mini_split_cassette: Wind,
+  central_ac: Wind,
+  paquete_rooftop: Wind,
+  chiller: Snowflake,
+  manejadora: Fan,
+  piso_techo: Wind,
+  fan_coil: Fan,
   evaporadora: Wind,
-};
-
-const CATEGORY_FALLBACK_LABEL: Record<string, string> = {
-  nevera: "Nevera",
-  congelador: "Congelador",
-  aire_acondicionado: "Aire acondicionado",
-  evaporadora: "Evaporadora",
-  otro: "Equipo",
+  campana_extractora: ChefHat,
 };
 
 function formatRelativeDate(iso: string | null): { text: string; days: number | null } {
@@ -42,10 +58,13 @@ export function EquipmentCard({
   const status = equipment.latest_status ?? "sin_inspeccion";
 
   // Title priority: location_label (área) > custom_name > category fallback.
+  const categoryLabel = equipment.category
+    ? EQUIPMENT_CATEGORY_LABEL[equipment.category as EquipmentCategory] ?? "Equipo"
+    : "Equipo";
   const title =
     equipment.location_label?.trim() ||
     (equipment.custom_name && equipment.custom_name.trim() !== "" ? equipment.custom_name : null) ||
-    (equipment.category ? CATEGORY_FALLBACK_LABEL[equipment.category] ?? "Equipo" : "Equipo");
+    categoryLabel;
 
   // Specifics line: brand · model (skip "S/A" placeholders).
   const brand = equipment.brand?.trim();

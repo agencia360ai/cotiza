@@ -22,7 +22,14 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { imageUrl, type ReportType } from "@/lib/maintenance/types";
+import {
+  imageUrl,
+  EQUIPMENT_CATEGORIES,
+  EQUIPMENT_CATEGORY_LABEL,
+  EQUIPMENT_CATEGORY_GROUP,
+  EQUIPMENT_CATEGORY_GROUP_LABEL,
+  type ReportType,
+} from "@/lib/maintenance/types";
 import { compressImage } from "@/lib/image-compress";
 import {
   updateClient,
@@ -865,10 +872,15 @@ function EquipmentEditor({ location, clientId }: { location: Location; clientId:
             <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Modelo (TRCB-79)" className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm" />
             <select value={category} onChange={(e) => setCategory(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm">
               <option value="">Categoría…</option>
-              <option value="nevera">Nevera</option>
-              <option value="congelador">Congelador</option>
-              <option value="aire_acondicionado">Aire acondicionado</option>
-              <option value="evaporadora">Evaporadora</option>
+              {(["refrigeracion", "aire", "otros"] as const).map((g) => (
+                <optgroup key={g} label={EQUIPMENT_CATEGORY_GROUP_LABEL[g]}>
+                  {EQUIPMENT_CATEGORIES.filter((c) => EQUIPMENT_CATEGORY_GROUP[c] === g).map((c) => (
+                    <option key={c} value={c}>
+                      {EQUIPMENT_CATEGORY_LABEL[c]}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
             <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Ubicación específica (Cocina norte)" className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm" />
             <input value={voltage} onChange={(e) => setVoltage(e.target.value)} placeholder="Voltaje (110V / 220V)" className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm" />
