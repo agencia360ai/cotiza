@@ -30,6 +30,9 @@ import {
   EQUIPMENT_CATEGORY_GROUP_LABEL,
   type ReportType,
 } from "@/lib/maintenance/types";
+import { PhoneField } from "@/components/phone-field";
+import { WhatsAppLink } from "@/components/whatsapp-link";
+import { displayPhone } from "@/lib/phone";
 import { compressImage } from "@/lib/image-compress";
 import {
   updateClient,
@@ -205,11 +208,15 @@ function ClientHeader({ client }: { client: Client }) {
       <div className="flex-1">
         <h1 className="text-2xl font-semibold tracking-tight">{client.name}</h1>
         {client.contact_email || client.contact_phone ? (
-          <p className="text-sm text-slate-500">
-            {client.contact_email}
-            {client.contact_email && client.contact_phone ? " · " : ""}
-            {client.contact_phone}
-          </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500">
+            {client.contact_email ? <span>{client.contact_email}</span> : null}
+            {client.contact_phone ? (
+              <span className="inline-flex items-center gap-2">
+                <span className="tabular-nums">{displayPhone(client.contact_phone)}</span>
+                <WhatsAppLink phone={client.contact_phone} variant="button" />
+              </span>
+            ) : null}
+          </div>
         ) : null}
         {client.logo_path ? (
           <button
@@ -1004,8 +1011,7 @@ function ClientInfoEditor({ client }: { client: Client }) {
   const [name, setName] = useState(client.name);
   const [category, setCategory] = useState(client.category ?? "");
   const [email, setEmail] = useState(client.contact_email ?? "");
-  const [phone, setPhone] = useState(client.contact_phone ?? "");
-  const [color, setColor] = useState(client.brand_color ?? "#0EA5E9");
+  const [phone, setPhone] = useState<string | null>(client.contact_phone);
   const [notes, setNotes] = useState(client.notes ?? "");
   const [isPending, startTransition] = useTransition();
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -1014,8 +1020,7 @@ function ClientInfoEditor({ client }: { client: Client }) {
     name !== client.name ||
     (category || null) !== client.category ||
     (email || null) !== client.contact_email ||
-    (phone || null) !== client.contact_phone ||
-    color !== client.brand_color ||
+    phone !== client.contact_phone ||
     (notes || null) !== client.notes;
 
   function save() {
@@ -1024,8 +1029,7 @@ function ClientInfoEditor({ client }: { client: Client }) {
         name,
         category: category || null,
         contact_email: email || null,
-        contact_phone: phone || null,
-        brand_color: color,
+        contact_phone: phone,
         notes: notes || null,
       });
       setSavedAt(new Date());
@@ -1068,17 +1072,11 @@ function ClientInfoEditor({ client }: { client: Client }) {
               ))}
             </select>
           </Field>
-          <Field label="Color de marca">
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2">
-              <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="size-6 cursor-pointer rounded border-0 bg-transparent" />
-              <code className="text-xs text-slate-600">{color}</code>
-            </div>
-          </Field>
           <Field label="Email de contacto">
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm" />
           </Field>
-          <Field label="Teléfono">
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm" />
+          <Field label="WhatsApp">
+            <PhoneField value={phone} onChange={setPhone} placeholder="6000-0000" />
           </Field>
         </div>
         <Field label="Notas internas">

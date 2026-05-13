@@ -21,6 +21,7 @@ import {
   Tag,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { PhoneField } from "@/components/phone-field";
 import { parseClientFromInput, bulkCreateBatch } from "./actions";
 import type { ImportedClient, ImportedBatch, ClientCategory } from "@/lib/maintenance/types";
 import {
@@ -440,11 +441,10 @@ function ClientPreviewCard({
                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                 />
               </Field>
-              <Field label="Teléfono">
-                <input
-                  value={data.client.contact_phone ?? ""}
-                  onChange={(e) => patchClient({ contact_phone: e.target.value || null })}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+              <Field label="WhatsApp">
+                <PhoneField
+                  value={data.client.contact_phone}
+                  onChange={(v) => patchClient({ contact_phone: v })}
                 />
               </Field>
             </div>
