@@ -111,27 +111,9 @@ export default async function PublicDashboardPage({
         <div className="relative mx-auto max-w-7xl px-6 lg:px-8">
           {/* Top bar */}
           <div className="flex items-center justify-between py-6">
-            <div className="flex items-center gap-3">
-              {client.logo_path ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={imageUrl(client.logo_path)}
-                  alt={client.name}
-                  className="size-11 rounded-xl object-cover ring-2 ring-white/10"
-                />
-              ) : (
-                <div
-                  className="flex size-11 items-center justify-center rounded-xl text-base font-bold text-white shadow-lg ring-2 ring-white/10"
-                  style={{ backgroundColor: accent }}
-                >
-                  {initials(client.name)}
-                </div>
-              )}
-              <div>
-                <p className="text-sm font-semibold tracking-tight text-white">{client.name}</p>
-                <p className="text-xs text-white/50">Portal de mantenimiento</p>
-              </div>
-            </div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">
+              Portal de mantenimiento
+            </p>
             <div className="hidden items-center gap-2 rounded-full bg-white/5 px-3 py-1.5 text-xs text-white/70 ring-1 ring-white/10 backdrop-blur sm:inline-flex">
               <ShieldCheck className="size-3.5 text-emerald-400" />
               Servicio prestado por <span className="font-semibold text-white">{service_provider?.name ?? "Reportme.ai"}</span>
@@ -139,20 +121,39 @@ export default async function PublicDashboardPage({
           </div>
 
           {/* Main hero content */}
-          <div className="grid gap-10 pb-16 pt-8 lg:grid-cols-12 lg:gap-12 lg:pb-20 lg:pt-10">
+          <div className="grid gap-10 pb-16 pt-2 lg:grid-cols-12 lg:gap-12 lg:pb-20 lg:pt-4">
             {/* Left: title + ring */}
             <div className="lg:col-span-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
-                Estado actual
-              </p>
-              <h1 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl">
-                Estado de tus equipos
-              </h1>
-              <p className="mt-3 max-w-md text-sm text-white/60">
-                {lastReport
-                  ? `Última actualización: ${formatDateLong(lastReport.performed_at_start)}`
-                  : "Sin reportes publicados aún"}
-              </p>
+              <div className="flex items-start gap-4 sm:gap-5">
+                {client.logo_path ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={imageUrl(client.logo_path)}
+                    alt={client.name}
+                    className="size-16 shrink-0 rounded-2xl object-cover ring-2 ring-white/10 sm:size-20"
+                  />
+                ) : (
+                  <div
+                    className="flex size-16 shrink-0 items-center justify-center rounded-2xl text-2xl font-bold text-white shadow-lg ring-2 ring-white/10 sm:size-20 sm:text-3xl"
+                    style={{ backgroundColor: accent }}
+                  >
+                    {initials(client.name)}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/50">
+                    Estado actual
+                  </p>
+                  <h1 className="mt-1 text-3xl font-bold leading-tight tracking-tight text-white sm:text-4xl lg:text-5xl">
+                    {client.name}
+                  </h1>
+                  <p className="mt-2 text-sm text-white/60">
+                    {lastReport
+                      ? `Última actualización: ${formatDateLong(lastReport.performed_at_start)}`
+                      : "Sin reportes publicados aún"}
+                  </p>
+                </div>
+              </div>
 
               <div className="mt-8 flex flex-wrap items-center gap-6">
                 <HealthRing score={score} size={180} />
