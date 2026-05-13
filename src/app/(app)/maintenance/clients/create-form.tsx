@@ -6,7 +6,6 @@ import { createClientRecord } from "./actions";
 
 export function CreateClientForm() {
   const [name, setName] = useState("");
-  const [brandColor, setBrandColor] = useState("#0EA5E9");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -15,7 +14,7 @@ export function CreateClientForm() {
     setError(null);
     startTransition(async () => {
       try {
-        await createClientRecord({ name: name.trim(), brand_color: brandColor });
+        await createClientRecord({ name: name.trim() });
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Error";
         if (!msg.includes("NEXT_REDIRECT")) setError(msg);
@@ -35,7 +34,7 @@ export function CreateClientForm() {
         <Building2 className="size-4 text-slate-700" />
         <h3 className="text-sm font-semibold text-slate-900">Nuevo cliente</h3>
       </div>
-      <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+      <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
         <input
           required
           value={name}
@@ -43,15 +42,6 @@ export function CreateClientForm() {
           placeholder="Nombre del cliente *"
           className="rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
         />
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2">
-          <input
-            type="color"
-            value={brandColor}
-            onChange={(e) => setBrandColor(e.target.value)}
-            className="size-6 cursor-pointer rounded border-0 bg-transparent"
-          />
-          <span className="text-xs text-slate-500">Color marca</span>
-        </div>
         <button
           type="submit"
           disabled={!name.trim() || isPending}

@@ -85,7 +85,12 @@ const singleClientSchema = z.object({
       .nullable()
       .describe("Categoría del negocio. Inferí del contexto cuando sea posible (restaurante, hotel, retail, oficina, industrial, residencial, salud, educación). 'otro' si no encaja."),
     contact_email: z.string().nullable(),
-    contact_phone: z.string().nullable(),
+    contact_phone: z
+      .string()
+      .nullable()
+      .describe(
+        "Teléfono en formato E.164 (ej. +50760000000). Si el número viene sin código de país, asumí +507 (Panamá). Sólo dígitos después del +.",
+      ),
     notes: z
       .string()
       .nullable()

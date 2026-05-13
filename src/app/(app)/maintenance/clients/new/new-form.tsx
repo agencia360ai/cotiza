@@ -3,14 +3,14 @@
 import { useState, useTransition } from "react";
 import { ChevronRight } from "lucide-react";
 import { CATEGORY_LABEL, CLIENT_CATEGORIES, type ClientCategory } from "@/lib/maintenance/types";
+import { PhoneField } from "@/components/phone-field";
 import { createClientRecord } from "../actions";
 
 export function NewClientForm() {
   const [name, setName] = useState("");
   const [category, setCategory] = useState<ClientCategory | "">("");
-  const [brandColor, setBrandColor] = useState("#0EA5E9");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
+  const [phone, setPhone] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -23,9 +23,8 @@ export function NewClientForm() {
         await createClientRecord({
           name: name.trim(),
           category: category || null,
-          brand_color: brandColor,
           contact_email: email.trim() || null,
-          contact_phone: phone.trim() || null,
+          contact_phone: phone,
           notes: notes.trim() || null,
         });
       } catch (e) {
@@ -70,18 +69,6 @@ export function NewClientForm() {
             </select>
           </Field>
 
-          <Field label="Color de marca">
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-2">
-              <input
-                type="color"
-                value={brandColor}
-                onChange={(e) => setBrandColor(e.target.value)}
-                className="size-6 cursor-pointer rounded border-0 bg-transparent"
-              />
-              <code className="text-xs text-slate-600">{brandColor}</code>
-            </div>
-          </Field>
-
           <Field label="Email de contacto">
             <input
               type="email"
@@ -92,13 +79,8 @@ export function NewClientForm() {
             />
           </Field>
 
-          <Field label="Teléfono">
-            <input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="+507 6000-0000"
-              className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-            />
+          <Field label="WhatsApp">
+            <PhoneField value={phone} onChange={setPhone} placeholder="6000-0000" />
           </Field>
         </div>
 
