@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { Building2, ChevronRight, MapPin, Box, Sparkles, Tag } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { CreateClientForm } from "./create-form";
-import { CATEGORY_LABEL, type ClientCategory } from "@/lib/maintenance/types";
+import { CATEGORY_LABEL, imageUrl, type ClientCategory } from "@/lib/maintenance/types";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ type ClientRow = {
   name: string;
   category: ClientCategory | null;
   brand_color: string | null;
+  logo_path: string | null;
   contact_email: string | null;
   contact_phone: string | null;
   created_at: string;
@@ -162,12 +163,21 @@ export default async function ClientsListPage({
                   href={`/maintenance/clients/${c.id}`}
                   className="group flex items-center gap-4 rounded-xl border border-border bg-card p-4 transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm"
                 >
-                  <div
-                    className="flex size-12 shrink-0 items-center justify-center rounded-xl text-base font-bold text-white"
-                    style={{ backgroundColor: c.brand_color ?? "#0EA5E9" }}
-                  >
-                    {initials(c.name)}
-                  </div>
+                  {c.logo_path ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={imageUrl(c.logo_path)}
+                      alt={c.name}
+                      className="size-12 shrink-0 rounded-xl object-cover ring-1 ring-slate-200"
+                    />
+                  ) : (
+                    <div
+                      className="flex size-12 shrink-0 items-center justify-center rounded-xl text-base font-bold text-white"
+                      style={{ backgroundColor: c.brand_color ?? "#0EA5E9" }}
+                    >
+                      {initials(c.name)}
+                    </div>
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-semibold text-slate-900">{c.name}</p>
