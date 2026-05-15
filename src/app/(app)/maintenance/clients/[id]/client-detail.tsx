@@ -20,8 +20,10 @@ import {
   Repeat,
   ImageIcon,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AILocationWizard } from "./ai-location-wizard";
 import {
   imageUrl,
   EQUIPMENT_CATEGORIES,
@@ -694,6 +696,7 @@ function LocationsSection({ clientId, locations }: { clientId: string; locations
   const [newAddress, setNewAddress] = useState("");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [showAI, setShowAI] = useState(false);
 
   function add() {
     if (!newName.trim()) return;
@@ -720,32 +723,62 @@ function LocationsSection({ clientId, locations }: { clientId: string; locations
         </div>
       </header>
 
-      <div className="border-b border-border px-5 py-3">
-        <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Nombre de sucursal *"
-            className="rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-          />
-          <input
-            value={newAddress}
-            onChange={(e) => setNewAddress(e.target.value)}
-            placeholder="Dirección (opcional)"
-            className="rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={add}
-            disabled={!newName.trim() || isPending}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            <Plus className="size-4" />
-            Agregar
-          </button>
+      <button
+        type="button"
+        onClick={() => setShowAI(true)}
+        className="group flex w-full items-center gap-3 border-b border-border bg-gradient-to-r from-violet-50 to-blue-50 px-5 py-4 text-left transition-colors hover:from-violet-100 hover:to-blue-100"
+      >
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600 to-blue-600 text-white">
+          <Sparkles className="size-5" />
         </div>
-        {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : null}
-      </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-slate-900">
+            Agregar sucursal con IA
+          </p>
+          <p className="text-xs text-slate-600">
+            Pegá texto, voz o foto/PDF — la IA arma la sucursal con sus equipos y mantenimientos
+          </p>
+        </div>
+        <Plus className="size-5 text-violet-600 transition-transform group-hover:scale-110" />
+      </button>
+
+      <details className="border-b border-border">
+        <summary className="cursor-pointer select-none px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500 hover:bg-slate-50">
+          o agregar manualmente
+        </summary>
+        <div className="px-5 pb-3">
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Nombre de sucursal *"
+              className="rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+            />
+            <input
+              value={newAddress}
+              onChange={(e) => setNewAddress(e.target.value)}
+              placeholder="Dirección (opcional)"
+              className="rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={add}
+              disabled={!newName.trim() || isPending}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              <Plus className="size-4" />
+              Agregar
+            </button>
+          </div>
+          {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : null}
+        </div>
+      </details>
+
+      <AILocationWizard
+        clientId={clientId}
+        open={showAI}
+        onClose={() => setShowAI(false)}
+      />
 
       <div className="divide-y divide-slate-100">
         {locations.map((loc) => (
