@@ -138,11 +138,18 @@ export default async function ProjectDetailPage({
   const location = one(row.location);
   const captureData = (row.capture_data as ProjectCapture[] | undefined) ?? [];
 
+  const { data: clientLocations } = (await supabase
+    .from("client_locations")
+    .select("id, name")
+    .eq("client_id", client?.id ?? "")
+    .order("name")) as { data: { id: string; name: string }[] | null };
+
   return (
     <ProjectEditor
       project={row as ClientProject}
       client={client ?? { id: "", name: "—" }}
       location={location}
+      clientLocations={clientLocations ?? []}
       milestones={sortedMilestones}
       captures={captureData}
     />

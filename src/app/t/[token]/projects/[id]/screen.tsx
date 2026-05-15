@@ -84,6 +84,7 @@ export function TechnicianProjectScreen({
   const [milestones, setMilestones] = useState<ProjectMilestone[]>(initialMilestones);
   const [status, setStatus] = useState<ProjectStatus>(project.status);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -304,11 +305,33 @@ export function TechnicianProjectScreen({
               <span className="tabular-nums text-xs text-slate-500">
                 {done}/{total} · {pct}%
               </span>
+              {status !== "aceptado" ? (
+                <button
+                  type="button"
+                  onClick={() => setShowEdit((v) => !v)}
+                  className="ml-2 inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Pencil className="size-3" />
+                  Editar
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
 
-        {project.description_es ? (
+        {showEdit ? (
+          <TechProjectDetailsForm
+            token={token}
+            project={project}
+            onCancel={() => setShowEdit(false)}
+            onSaved={() => {
+              setShowEdit(false);
+              router.refresh();
+            }}
+          />
+        ) : null}
+
+        {!showEdit && project.description_es ? (
           <p className="mt-4 rounded-xl border border-border bg-card p-4 text-sm leading-relaxed text-slate-700">
             {project.description_es}
           </p>
@@ -864,6 +887,127 @@ function Lightbox({ media, onClose }: { media: ProjectMedia; onClose: () => void
           onClick={(e) => e.stopPropagation()}
         />
       )}
+    </div>
+  );
+}
+
+function TechProjectDetailsForm({
+  token,
+  project,
+  onCancel,
+  onSaved,
+}: {
+  token: string;
+  project: ClientProject;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(project.name);
+  const [projectType, setProjectType] = useState(project.project_type);
+  const [description, setDescription] = useState(project.description_es ?? "");
+  const [startDate, setStartDate] = useState(project.expected_start_date ?? "");
+  const [completionDate, setCompletionDate] = useState(project.expected_completion_date ?? "");
+  const [pending, startTransition] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+
+  function handleSave() {
+    if (!name.trim()) {
+      setErr("El nombre no puede quedar vacío");
+      return;
+    }
+    setErr(null);
+    startTransition(async () => {
+      const r = await updateTechnicianProject(token, project.id, {
+        name: name.trim(),
+        project_type: projectType,
+        description_es: description.trim() || null,
+        expected_start_date: startDate || null,
+        expected_completion_date: completionDate || null,
+      });
+      if (r && "error" in r) {
+        setErr(r.error);
+        return;
+      }
+      onSaved();
+    });
+  }
+
+  return (
+    <div className="mt-4 rounded-2xl border border-slate-300 bg-white p-4 shadow-sm">
+      <h3 className="mb-3 text-sm font-bold text-slate-900">Editar detalles del proyecto</h3>
+      <div className="space-y-3">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Nombre del proyecto"
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-slate-400 focus:outline-none"
+        />
+        <select
+          value={projectType}
+          onChange={(e) => setProjectType(e.target.value as typeof projectType)}
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+        >
+          {(["instalacion", "obra", "remodelacion", "otro"] as const).map((t) => (
+            <option key={t} value={t}>
+              {PROJECT_TYPE_LABEL[t]}
+            </option>
+          ))}
+        </select>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          placeholder="Descripción del proyecto"
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+        />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block text-xs">
+            <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
+              Inicio estimado
+            </span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+            />
+          </label>
+          <label className="block text-xs">
+            <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
+              Entrega estimada
+            </span>
+            <input
+              type="date"
+              value={completionDate}
+              onChange={(e) => setCompletionDate(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+            />
+          </label>
+        </div>
+      </div>
+      {err ? (
+        <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20">
+          {err}
+        </p>
+      ) : null}
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={pending}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+          Guardar cambios
+        </button>
+      </div>
     </div>
   );
 }

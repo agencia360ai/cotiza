@@ -73,12 +73,14 @@ export function ProjectEditor({
   project,
   client,
   location,
+  clientLocations,
   milestones: initialMilestones,
   captures: initialCaptures,
 }: {
   project: ClientProject;
   client: { id: string; name: string };
   location: { id: string; name: string } | null;
+  clientLocations: { id: string; name: string }[];
   milestones: ProjectMilestone[];
   captures: ProjectCapture[];
 }) {
@@ -87,6 +89,7 @@ export function ProjectEditor({
   const [status, setStatus] = useState<ProjectStatus>(project.status);
   const [showAddForm, setShowAddForm] = useState(false);
   const [shareLink, setShareLink] = useState<string | null>(null);
+  const [showEdit, setShowEdit] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -337,6 +340,14 @@ export function ProjectEditor({
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={() => setShowEdit((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Pencil className="size-3.5" />
+                Editar detalles
+              </button>
+              <button
+                type="button"
                 onClick={handleShare}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
@@ -355,7 +366,19 @@ export function ProjectEditor({
           </div>
         </div>
 
-        {project.description_es ? (
+        {showEdit ? (
+          <ProjectDetailsForm
+            project={project}
+            clientLocations={clientLocations}
+            onCancel={() => setShowEdit(false)}
+            onSaved={() => {
+              setShowEdit(false);
+              router.refresh();
+            }}
+          />
+        ) : null}
+
+        {!showEdit && project.description_es ? (
           <p className="mt-4 rounded-xl border border-border bg-card p-4 text-sm leading-relaxed text-slate-700">
             {project.description_es}
           </p>
@@ -917,6 +940,179 @@ function Lightbox({
           onClick={(e) => e.stopPropagation()}
         />
       )}
+    </div>
+  );
+}
+
+function ProjectDetailsForm({
+  project,
+  clientLocations,
+  onCancel,
+  onSaved,
+}: {
+  project: ClientProject;
+  clientLocations: { id: string; name: string }[];
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(project.name);
+  const [projectType, setProjectType] = useState(project.project_type);
+  const [description, setDescription] = useState(project.description_es ?? "");
+  const [startDate, setStartDate] = useState(project.expected_start_date ?? "");
+  const [completionDate, setCompletionDate] = useState(project.expected_completion_date ?? "");
+  const [locationId, setLocationId] = useState<string | "_new" | "">(
+    project.location_id ?? (project.new_location_label ? "_new" : ""),
+  );
+  const [newLocationLabel, setNewLocationLabel] = useState(project.new_location_label ?? "");
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleSave() {
+    if (!name.trim()) {
+      setError("El nombre no puede quedar vacío");
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const r = await updateProject(project.id, {
+        name: name.trim(),
+        project_type: projectType,
+        description_es: description.trim() || null,
+        expected_start_date: startDate || null,
+        expected_completion_date: completionDate || null,
+        location_id: locationId === "_new" || locationId === "" ? null : locationId,
+        new_location_label:
+          locationId === "_new" ? newLocationLabel.trim() || null : null,
+      });
+      if (r && "error" in r) {
+        setError(r.error);
+        return;
+      }
+      onSaved();
+    });
+  }
+
+  const usingNewLocation = locationId === "_new";
+
+  return (
+    <div className="mt-4 rounded-2xl border border-slate-300 bg-white p-5 shadow-sm">
+      <h3 className="mb-4 text-sm font-bold text-slate-900">Editar detalles del proyecto</h3>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Nombre del proyecto *
+          </span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Tipo
+          </span>
+          <select
+            value={projectType}
+            onChange={(e) => setProjectType(e.target.value as typeof projectType)}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          >
+            {(["instalacion", "obra", "remodelacion", "otro"] as const).map((t) => (
+              <option key={t} value={t}>
+                {PROJECT_TYPE_LABEL[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Sucursal
+          </span>
+          <select
+            value={locationId}
+            onChange={(e) => setLocationId(e.target.value as string | "_new")}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          >
+            {clientLocations.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+            <option value="_new">+ Sucursal nueva (todavía no creada)</option>
+          </select>
+          {usingNewLocation ? (
+            <input
+              value={newLocationLabel}
+              onChange={(e) => setNewLocationLabel(e.target.value)}
+              placeholder="Nombre tentativo de la sucursal nueva"
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+            />
+          ) : null}
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Inicio estimado
+          </span>
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Entrega estimada
+          </span>
+          <input
+            type="date"
+            value={completionDate}
+            onChange={(e) => setCompletionDate(e.target.value)}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          />
+        </label>
+
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Descripción
+          </span>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          />
+        </label>
+      </div>
+
+      {error ? (
+        <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={pending}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+          Guardar cambios
+        </button>
+      </div>
     </div>
   );
 }
