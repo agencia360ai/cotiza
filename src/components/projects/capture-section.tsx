@@ -20,21 +20,24 @@ import {
   type ProjectCapture,
   type ProjectCaptureKind,
 } from "@/lib/projects/types";
+import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 
 type AddTextResult = { error: string } | { ok: true };
-type UploadResult = { error: string } | { ok: true; data: { capture: ProjectCapture } };
+type RegisterResult = { error: string } | { ok: true; data: { capture: ProjectCapture } };
 type StructureResult = { error: string } | { ok: true; data: { added: number } };
 
 export function ProjectCaptureSection({
   captures,
-  onUpload,
+  pathPrefix,
+  onRegisterUpload,
   onAddText,
   onRemove,
   onStructure,
   onAfterChange,
 }: {
   captures: ProjectCapture[];
-  onUpload: (formData: FormData) => Promise<UploadResult>;
+  pathPrefix: string;
+  onRegisterUpload: (kind: "photo" | "video", path: string) => Promise<RegisterResult>;
   onAddText: (kind: "text" | "voice", text: string) => Promise<AddTextResult>;
   onRemove: (captureId: string) => Promise<{ error: string } | { ok: true }>;
   onStructure: () => Promise<StructureResult>;
@@ -64,9 +67,15 @@ export function ProjectCaptureSection({
         const file = kind === "photo"
           ? await compressImage(original, { maxDimension: 1920, quality: 0.85 })
           : original;
-        const fd = new FormData();
-        fd.append("file", file);
-        const r = await onUpload(fd);
+        const ext = (file.name.split(".").pop() ?? (kind === "video" ? "mp4" : "jpg")).toLowerCase();
+        const path = `${pathPrefix.replace(/\/$/, "")}/${crypto.randomUUID()}.${ext}`;
+
+        // Upload directly to bucket (bypasses Vercel server action body limit)
+        const up = await uploadToProjectsBucket(file, path);
+        if ("error" in up) throw new Error(up.error);
+
+        // Register the row via server action (tiny body — just the path)
+        const r = await onRegisterUpload(kind, up.path);
         if ("error" in r) throw new Error(r.error);
         setItems((prev) => [...prev, r.data.capture]);
       }

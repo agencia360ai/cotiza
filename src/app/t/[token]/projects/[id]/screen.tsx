@@ -44,15 +44,16 @@ import {
   addTechnicianMilestone,
   deleteTechnicianMilestone,
   deleteTechnicianProject,
+  registerProjectCaptureMedia,
+  registerTechnicianMilestoneMedia,
+  registerTechnicianProjectCover,
   removeProjectCapture,
   removeTechnicianMilestoneMedia,
-  setTechnicianProjectCover,
   structureTechnicianProjectWithAI,
   updateTechnicianMilestone,
   updateTechnicianProject,
-  uploadProjectCaptureMedia,
-  uploadTechnicianMilestoneMedia,
 } from "../actions";
+import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 import { ProjectCaptureSection } from "@/components/projects/capture-section";
 import { MilestoneEntriesList } from "@/components/projects/milestone-entries";
 
@@ -122,9 +123,11 @@ export function TechnicianProjectScreen({
     setError(null);
     try {
       const compressed = await compressImage(f, { maxDimension: 1920, quality: 0.85 });
-      const fd = new FormData();
-      fd.append("file", compressed);
-      const r = await setTechnicianProjectCover(token, project.id, fd);
+      const ext = (compressed.name.split(".").pop() ?? "jpg").toLowerCase();
+      const path = `tech/${token.slice(0, 8)}/${project.id}/cover-${crypto.randomUUID()}.${ext}`;
+      const up = await uploadToProjectsBucket(compressed, path);
+      if ("error" in up) throw new Error(up.error);
+      const r = await registerTechnicianProjectCover(token, project.id, up.path);
       if ("error" in r) throw new Error(r.error);
       setCoverPath(r.data.path);
     } catch (err) {
@@ -347,7 +350,10 @@ export function TechnicianProjectScreen({
           <div className="mt-5">
             <ProjectCaptureSection
               captures={initialCaptures}
-              onUpload={async (fd) => uploadProjectCaptureMedia(token, project.id, fd)}
+              pathPrefix={`tech/${token.slice(0, 8)}/${project.id}/captures`}
+              onRegisterUpload={async (kind, path) =>
+                registerProjectCaptureMedia(token, project.id, kind, path)
+              }
               onAddText={async (kind, text) => addProjectCapture(token, project.id, { kind, text })}
               onRemove={async (id) => removeProjectCapture(token, project.id, id)}
               onStructure={async () => structureTechnicianProjectWithAI(token, project.id)}
@@ -555,9 +561,11 @@ function MilestoneRow({
           kind === "photo"
             ? await compressImage(f, { maxDimension: 1920, quality: 0.85 })
             : f;
-        const fd = new FormData();
-        fd.append("file", file);
-        const r = await uploadTechnicianMilestoneMedia(token, projectId, milestone.id, fd);
+        const ext = (file.name.split(".").pop() ?? (kind === "video" ? "mp4" : "jpg")).toLowerCase();
+        const path = `tech/${token.slice(0, 8)}/${projectId}/${milestone.id}/${crypto.randomUUID()}.${ext}`;
+        const up = await uploadToProjectsBucket(file, path);
+        if ("error" in up) throw new Error(up.error);
+        const r = await registerTechnicianMilestoneMedia(token, projectId, milestone.id, kind, up.path);
         if ("error" in r) throw new Error(r.error);
         setMedia((prev) => [
           ...prev,
