@@ -197,7 +197,6 @@ export async function generateWithAI(token: string, reportId: string): Promise<R
       const { data: inserted, error: eqErr } = (await supabase
         .from("client_equipment")
         .insert({
-          org_id: report.report.org_id,
           location_id: report.report.location_id,
           custom_name: customName,
           brand: ne.brand,
