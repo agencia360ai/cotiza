@@ -48,14 +48,15 @@ import {
   deleteProject,
   removeAdminProjectCapture,
   removeMilestoneMedia,
-  setCoverPhoto,
+  registerAdminProjectCaptureMedia,
+  registerCoverPhoto,
+  registerMilestoneMedia,
   shareProjectLink,
   structureAdminProjectWithAI,
   updateMilestone,
   updateProject,
-  uploadAdminProjectCaptureMedia,
-  uploadMilestoneMedia,
 } from "../actions";
+import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 import { ProjectCaptureSection } from "@/components/projects/capture-section";
 import { MilestoneEntriesList } from "@/components/projects/milestone-entries";
 
@@ -131,9 +132,11 @@ export function ProjectEditor({
     setError(null);
     try {
       const compressed = await compressImage(f, { maxDimension: 1920, quality: 0.85 });
-      const fd = new FormData();
-      fd.append("file", compressed);
-      const r = await setCoverPhoto(project.id, fd);
+      const ext = (compressed.name.split(".").pop() ?? "jpg").toLowerCase();
+      const path = `${project.org_id}/${project.id}/cover-${crypto.randomUUID()}.${ext}`;
+      const up = await uploadToProjectsBucket(compressed, path);
+      if ("error" in up) throw new Error(up.error);
+      const r = await registerCoverPhoto(project.id, up.path);
       if ("error" in r) throw new Error(r.error);
       setCoverPath(r.data.path);
     } catch (err) {
@@ -404,8 +407,9 @@ export function ProjectEditor({
         <div className="mt-6">
           <ProjectCaptureSection
             captures={initialCaptures}
-            onUpload={async (fd) => {
-              const r = await uploadAdminProjectCaptureMedia(project.id, fd);
+            pathPrefix={`${project.org_id}/${project.id}/captures`}
+            onRegisterUpload={async (kind, path) => {
+              const r = await registerAdminProjectCaptureMedia(project.id, kind, path);
               return r;
             }}
             onAddText={async (kind, text) => {
@@ -461,6 +465,7 @@ export function ProjectEditor({
                 key={m.id}
                 milestone={m}
                 projectId={project.id}
+                orgId={project.org_id}
                 onLocalUpdate={(patch) => updateLocalMilestone(m.id, patch)}
                 onLocalRemove={() => setMilestones((prev) => prev.filter((x) => x.id !== m.id))}
                 onPreview={(media) => setLightbox(media)}
@@ -584,12 +589,14 @@ function AddMilestoneForm({
 function MilestoneRow({
   milestone,
   projectId,
+  orgId,
   onLocalUpdate,
   onLocalRemove,
   onPreview,
 }: {
   milestone: ProjectMilestone;
   projectId: string;
+  orgId: string;
   onLocalUpdate: (patch: Partial<ProjectMilestone>) => void;
   onLocalRemove: () => void;
   onPreview: (m: { kind: "photo" | "video"; path: string }) => void;
@@ -619,9 +626,11 @@ function MilestoneRow({
         const file = kind === "photo"
           ? await compressImage(f, { maxDimension: 1920, quality: 0.85 })
           : f;
-        const fd = new FormData();
-        fd.append("file", file);
-        const r = await uploadMilestoneMedia(projectId, milestone.id, fd);
+        const ext = (file.name.split(".").pop() ?? (kind === "video" ? "mp4" : "jpg")).toLowerCase();
+        const path = `${orgId}/${projectId}/${milestone.id}/${crypto.randomUUID()}.${ext}`;
+        const up = await uploadToProjectsBucket(file, path);
+        if ("error" in up) throw new Error(up.error);
+        const r = await registerMilestoneMedia(projectId, milestone.id, kind, up.path);
         if ("error" in r) throw new Error(r.error);
         setMedia((prev) => [
           ...prev,

@@ -201,30 +201,16 @@ export async function deleteTechnicianMilestone(
   return { ok: true };
 }
 
-export async function uploadTechnicianMilestoneMedia(
+// Browser uploads directly to the bucket and then calls this to register the
+// row. Tiny payload — works for videos beyond the server-action body limit.
+export async function registerTechnicianMilestoneMedia(
   token: string,
   projectId: string,
   milestoneId: string,
-  formData: FormData,
+  kind: "photo" | "video",
+  path: string,
 ): Promise<Result<{ id: string; path: string; kind: "photo" | "video" }>> {
-  const file = formData.get("file") as File | null;
-  if (!file) return { error: "Archivo faltante" };
-
   const supabase = await createClient();
-  const isVideo = file.type.startsWith("video/");
-  const kind: "photo" | "video" = isVideo ? "video" : "photo";
-  const ext = (file.name.split(".").pop() ?? (isVideo ? "mp4" : "jpg")).toLowerCase();
-  const path = `tech/${token.slice(0, 8)}/${projectId}/${milestoneId}/${randomUUID()}.${ext}`;
-
-  const buf = await file.arrayBuffer();
-  const { error: upErr } = await supabase.storage
-    .from("cotiza-projects")
-    .upload(path, buf, {
-      contentType: file.type || (isVideo ? "video/mp4" : "image/jpeg"),
-      upsert: false,
-    });
-  if (upErr) return { error: `Falló subida: ${upErr.message}` };
-
   const { data, error } = await supabase.rpc("add_technician_milestone_media", {
     _token: token,
     _milestone_id: milestoneId,
@@ -258,31 +244,19 @@ export async function removeTechnicianMilestoneMedia(
   return { ok: true };
 }
 
-export async function setTechnicianProjectCover(
+// Browser uploads cover then registers the path here.
+export async function registerTechnicianProjectCover(
   token: string,
   projectId: string,
-  formData: FormData,
+  path: string,
 ): Promise<Result<{ path: string }>> {
-  const file = formData.get("file") as File | null;
-  if (!file) return { error: "Archivo faltante" };
-
   const supabase = await createClient();
-  const ext = (file.name.split(".").pop() ?? "jpg").toLowerCase();
-  const path = `tech/${token.slice(0, 8)}/${projectId}/cover-${randomUUID()}.${ext}`;
-  const buf = await file.arrayBuffer();
-
-  const { error: upErr } = await supabase.storage
-    .from("cotiza-projects")
-    .upload(path, buf, { contentType: file.type || "image/jpeg", upsert: false });
-  if (upErr) return { error: `Falló subida: ${upErr.message}` };
-
   const { error } = await supabase.rpc("update_technician_project", {
     _token: token,
     _project_id: projectId,
     _patch: { cover_photo_path: path },
   });
   if (error) return { error: error.message };
-
   revalidatePath(`/t/${token}/projects/${projectId}`);
   revalidatePath(`/t/${token}`);
   return { ok: true, data: { path } };
@@ -326,29 +300,14 @@ export async function addProjectCapture(
   return { ok: true, data: { capture: newItem } };
 }
 
-export async function uploadProjectCaptureMedia(
+// Browser-side upload registers the path here (no file in the payload — avoids
+// the Vercel 4.5MB server-action body limit so videos work).
+export async function registerProjectCaptureMedia(
   token: string,
   projectId: string,
-  formData: FormData,
+  kind: "photo" | "video",
+  path: string,
 ): Promise<Result<{ capture: ProjectCapture }>> {
-  const file = formData.get("file") as File | null;
-  if (!file) return { error: "Archivo faltante" };
-
-  const supabase = await createClient();
-  const isVideo = file.type.startsWith("video/");
-  const kind: ProjectCaptureKind = isVideo ? "video" : "photo";
-  const ext = (file.name.split(".").pop() ?? (isVideo ? "mp4" : "jpg")).toLowerCase();
-  const path = `tech/${token.slice(0, 8)}/${projectId}/captures/${randomUUID()}.${ext}`;
-
-  const buf = await file.arrayBuffer();
-  const { error: upErr } = await supabase.storage
-    .from("cotiza-projects")
-    .upload(path, buf, {
-      contentType: file.type || (isVideo ? "video/mp4" : "image/jpeg"),
-      upsert: false,
-    });
-  if (upErr) return { error: `Falló subida: ${upErr.message}` };
-
   return await addProjectCapture(token, projectId, { kind, media_path: path });
 }
 

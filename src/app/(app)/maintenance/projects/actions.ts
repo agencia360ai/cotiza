@@ -189,31 +189,17 @@ export async function deleteMilestone(
   return { ok: true };
 }
 
-export async function uploadMilestoneMedia(
+// Browser uploads to the bucket and then calls this to register the row.
+// Tiny payload — works for videos beyond the server-action 4.5MB body limit.
+export async function registerMilestoneMedia(
   projectId: string,
   milestoneId: string,
-  formData: FormData,
+  kind: "photo" | "video",
+  path: string,
 ): Promise<Result<{ id: string; path: string; kind: "photo" | "video" }>> {
-  const file = formData.get("file") as File | null;
-  if (!file) return { error: "Archivo faltante" };
-
   const supabase = await createClient();
   const org_id = await currentOrgId();
   if (!org_id) return { error: "No org" };
-
-  const isVideo = file.type.startsWith("video/");
-  const kind: "photo" | "video" = isVideo ? "video" : "photo";
-  const ext = (file.name.split(".").pop() ?? (isVideo ? "mp4" : "jpg")).toLowerCase();
-  const path = `${org_id}/${projectId}/${milestoneId}/${randomUUID()}.${ext}`;
-
-  const buf = await file.arrayBuffer();
-  const { error: upErr } = await supabase.storage
-    .from("cotiza-projects")
-    .upload(path, buf, {
-      contentType: file.type || (isVideo ? "video/mp4" : "image/jpeg"),
-      upsert: false,
-    });
-  if (upErr) return { error: `Falló subida: ${upErr.message}` };
 
   const { data: maxRow } = (await supabase
     .from("project_milestone_media")
@@ -261,35 +247,17 @@ export async function removeMilestoneMedia(
   return { ok: true };
 }
 
-export async function setCoverPhoto(
+// Browser uploads cover then registers the path here.
+export async function registerCoverPhoto(
   projectId: string,
-  formData: FormData,
+  path: string,
 ): Promise<Result<{ path: string }>> {
-  const file = formData.get("file") as File | null;
-  if (!file) return { error: "Archivo faltante" };
-
   const supabase = await createClient();
-  const org_id = await currentOrgId();
-  if (!org_id) return { error: "No org" };
-
-  const ext = (file.name.split(".").pop() ?? "jpg").toLowerCase();
-  const path = `${org_id}/${projectId}/cover-${randomUUID()}.${ext}`;
-  const buf = await file.arrayBuffer();
-
-  const { error: upErr } = await supabase.storage
-    .from("cotiza-projects")
-    .upload(path, buf, {
-      contentType: file.type || "image/jpeg",
-      upsert: false,
-    });
-  if (upErr) return { error: `Falló subida: ${upErr.message}` };
-
   const { error } = await supabase
     .from("client_projects")
     .update({ cover_photo_path: path })
     .eq("id", projectId);
   if (error) return { error: error.message };
-
   revalidatePath(`/maintenance/projects/${projectId}`);
   revalidatePath("/maintenance/projects");
   return { ok: true, data: { path } };
@@ -407,31 +375,12 @@ export async function addAdminProjectCapture(
   return { ok: true, data: { capture: newItem } };
 }
 
-export async function uploadAdminProjectCaptureMedia(
+// Browser uploads directly to the bucket then calls this with the path.
+export async function registerAdminProjectCaptureMedia(
   projectId: string,
-  formData: FormData,
+  kind: "photo" | "video",
+  path: string,
 ): Promise<Result<{ capture: ProjectCapture }>> {
-  const file = formData.get("file") as File | null;
-  if (!file) return { error: "Archivo faltante" };
-
-  const supabase = await createClient();
-  const ctx = await loadProjectCaptureData(projectId);
-  if (!ctx) return { error: "Proyecto no encontrado" };
-
-  const isVideo = file.type.startsWith("video/");
-  const kind: ProjectCaptureKind = isVideo ? "video" : "photo";
-  const ext = (file.name.split(".").pop() ?? (isVideo ? "mp4" : "jpg")).toLowerCase();
-  const path = `${ctx.org_id}/${projectId}/captures/${randomUUID()}.${ext}`;
-
-  const buf = await file.arrayBuffer();
-  const { error: upErr } = await supabase.storage
-    .from("cotiza-projects")
-    .upload(path, buf, {
-      contentType: file.type || (isVideo ? "video/mp4" : "image/jpeg"),
-      upsert: false,
-    });
-  if (upErr) return { error: `Falló subida: ${upErr.message}` };
-
   return await addAdminProjectCapture(projectId, { kind, media_path: path });
 }
 
