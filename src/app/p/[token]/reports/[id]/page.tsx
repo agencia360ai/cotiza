@@ -9,6 +9,7 @@ import {
   Camera,
   ShieldCheck,
   AlertOctagon,
+  Download,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -100,13 +101,24 @@ export default async function PublicReportPage({
       />
 
       <main className="mx-auto max-w-7xl px-6 py-8 lg:px-8 lg:py-10">
-        <Link
-          href={`/p/${token}`}
-          className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
-        >
-          <ArrowLeft className="size-4" />
-          Volver al portal
-        </Link>
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <Link
+            href={`/p/${token}`}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            <ArrowLeft className="size-4" />
+            Volver al portal
+          </Link>
+          <a
+            href={`/p/${token}/reports/${report.id}/export`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+          >
+            <Download className="size-4" />
+            Descargar PDF
+          </a>
+        </div>
 
         {/* Hero */}
         <div
