@@ -12,6 +12,7 @@ import {
   HelpCircle,
   Camera,
   Sparkles,
+  Download,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -136,13 +137,24 @@ export default async function ReportDetailPage({
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
-      <Link
-        href="/maintenance/reports"
-        className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
-      >
-        <ArrowLeft className="size-4" />
-        Volver a reportes
-      </Link>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <Link
+          href="/maintenance/reports"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
+        >
+          <ArrowLeft className="size-4" />
+          Volver a reportes
+        </Link>
+        <a
+          href={`/maintenance/reports/${report.id}/export`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          <Download className="size-4" />
+          Exportar PDF
+        </a>
+      </div>
 
       {/* Header */}
       <div className="mb-6 rounded-2xl border border-border bg-card p-6">
