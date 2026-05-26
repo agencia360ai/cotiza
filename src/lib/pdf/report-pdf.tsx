@@ -156,29 +156,42 @@ function StatusDonut({ counts, total }: { counts: Record<string, number>; total:
   const cy = size / 2;
   const C = 2 * Math.PI * r;
   const order = ["operativo", "atencion", "critico", "fuera_de_servicio", "sin_inspeccion"];
+  const present = order.filter((st) => (counts[st] ?? 0) > 0);
+
+  // Single status (100%): draw a full ring. A dash gap of 0 crashes @react-pdf.
+  if (present.length <= 1) {
+    return (
+      <Svg width={size} height={size}>
+        <Circle cx={cx} cy={cy} r={r} fill="none" stroke="#1E293B" strokeWidth={thickness} />
+        {present.length === 1 ? (
+          <Circle cx={cx} cy={cy} r={r} fill="none" stroke={STATUS_COLOR[present[0]]} strokeWidth={thickness} />
+        ) : null}
+      </Svg>
+    );
+  }
+
   let accFrac = 0;
-  const segs = order
-    .filter((st) => (counts[st] ?? 0) > 0)
-    .map((st) => {
-      const frac = (counts[st] ?? 0) / total;
-      const dash = frac * C;
-      const startAngle = accFrac * 360 - 90;
-      const el = (
-        <Circle
-          key={st}
-          cx={cx}
-          cy={cy}
-          r={r}
-          fill="none"
-          stroke={STATUS_COLOR[st]}
-          strokeWidth={thickness}
-          strokeDasharray={`${dash} ${C - dash}`}
-          transform={`rotate(${startAngle}, ${cx}, ${cy})`}
-        />
-      );
-      accFrac += frac;
-      return el;
-    });
+  const segs = present.map((st) => {
+    const frac = (counts[st] ?? 0) / total;
+    // Small gap between segments, never let the dash equal the full circumference.
+    const dash = Math.max(frac * C - 1.5, 0.5);
+    const startAngle = accFrac * 360 - 90;
+    const el = (
+      <Circle
+        key={st}
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="none"
+        stroke={STATUS_COLOR[st]}
+        strokeWidth={thickness}
+        strokeDasharray={`${dash} ${C - dash}`}
+        transform={`rotate(${startAngle}, ${cx}, ${cy})`}
+      />
+    );
+    accFrac += frac;
+    return el;
+  });
 
   return (
     <Svg width={size} height={size}>
