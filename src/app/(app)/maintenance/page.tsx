@@ -14,8 +14,10 @@ import {
   Tag,
   Clock,
   ArrowRight,
+  Wrench,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { projectImageUrl } from "@/lib/projects/types";
 import {
   STATUS_COLOR,
   CATEGORY_LABEL,
@@ -141,6 +143,7 @@ export default async function MaintenanceDashboard() {
     schedulesRes,
     reportsRes,
     techsRes,
+    projectsRes,
   ] = await Promise.all([
     supabase.from("clients").select("id, name, category, brand_color, logo_path").order("name"),
     supabase.from("client_locations").select("id, client_id"),
@@ -164,6 +167,14 @@ export default async function MaintenanceDashboard() {
       .order("updated_at", { ascending: false })
       .limit(8),
     supabase.from("technicians").select("id, name").eq("active", true),
+    supabase
+      .from("client_projects")
+      .select(
+        "id, name, project_type, status, cover_photo_path, expected_completion_date, client:clients(name), location:client_locations(name), milestones:project_milestones(status)",
+      )
+      .in("status", ["planificado", "en_progreso", "pausado", "completado"])
+      .order("updated_at", { ascending: false })
+      .limit(6),
   ]);
 
   const allClients = (clientsRes.data ?? []) as ClientRow[];
@@ -173,6 +184,18 @@ export default async function MaintenanceDashboard() {
   const allSchedules = (schedulesRes.data ?? []) as unknown as ScheduleRow[];
   const reports = (reportsRes.data ?? []) as unknown as RecentReport[];
   const allTechs = techsRes.data ?? [];
+  type ProjectRow = {
+    id: string;
+    name: string;
+    project_type: string;
+    status: string;
+    cover_photo_path: string | null;
+    expected_completion_date: string | null;
+    client: Maybe<{ name: string }>;
+    location: Maybe<{ name: string }>;
+    milestones: { status: string }[];
+  };
+  const allProjects = (projectsRes.data ?? []) as unknown as ProjectRow[];
 
   // Compute latest status per equipment
   const latestStatusByEquipment = new Map<string, { status: EquipmentStatus; date: string }>();
@@ -409,6 +432,113 @@ export default async function MaintenanceDashboard() {
           </ul>
         </div>
       </section>
+
+      {/* Active projects */}
+      {allProjects.length > 0 ? (
+        <section className="mb-8">
+          <header className="mb-3 flex items-end justify-between">
+            <div>
+              <h2 className="text-lg font-bold tracking-tight text-slate-900">Proyectos en curso</h2>
+              <p className="text-sm text-muted-foreground">Instalaciones y obras activas</p>
+            </div>
+            <Link href="/maintenance/projects" className="text-xs font-semibold text-blue-600 hover:underline">
+              Ver todos →
+            </Link>
+          </header>
+          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {allProjects.map((p) => {
+              const client = one(p.client);
+              const location = one(p.location);
+              const total = p.milestones.length;
+              const done = p.milestones.filter((m) => m.status === "completado").length;
+              const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+              const statusColor: Record<string, string> = {
+                planificado: "#64748B",
+                en_progreso: "#2563EB",
+                pausado: "#F59E0B",
+                completado: "#F97316",
+                aceptado: "#10B981",
+              };
+              const statusLabel: Record<string, string> = {
+                planificado: "Planificado",
+                en_progreso: "En progreso",
+                pausado: "Pausado",
+                completado: "Completado",
+                aceptado: "Aceptado",
+              };
+              const typeColor: Record<string, string> = {
+                instalacion: "#2563EB",
+                obra: "#F97316",
+                remodelacion: "#7C3AED",
+                otro: "#64748B",
+              };
+              return (
+                <li key={p.id}>
+                  <Link
+                    href={`/maintenance/projects/${p.id}`}
+                    className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+                  >
+                    <div
+                      className="relative aspect-[16/8] w-full bg-slate-100"
+                      style={
+                        p.cover_photo_path
+                          ? {
+                              backgroundImage: `url(${projectImageUrl(p.cover_photo_path)})`,
+                              backgroundSize: "cover",
+                              backgroundPosition: "center",
+                            }
+                          : undefined
+                      }
+                    >
+                      {!p.cover_photo_path ? (
+                        <div className="flex h-full w-full items-center justify-center">
+                          <Wrench className="size-7 text-slate-300" />
+                        </div>
+                      ) : null}
+                      <span
+                        className="absolute left-2.5 top-2.5 inline-flex items-center gap-1 rounded-full bg-white/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset"
+                        style={{ color: statusColor[p.status] ?? "#64748B", borderColor: `${statusColor[p.status] ?? "#64748B"}20` }}
+                      >
+                        <span
+                          className="size-1.5 rounded-full"
+                          style={{ backgroundColor: statusColor[p.status] ?? "#64748B" }}
+                        />
+                        {statusLabel[p.status] ?? p.status}
+                      </span>
+                    </div>
+                    <div className="flex flex-1 flex-col p-3">
+                      <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                        {client?.name ?? "—"}
+                        {location ? ` · ${location.name}` : ""}
+                      </p>
+                      <div className="mt-2">
+                        <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                          <span>
+                            {done}/{total} hitos
+                          </span>
+                          <span style={{ color: typeColor[p.project_type] ?? "#64748B" }}>
+                            {pct}%
+                          </span>
+                        </div>
+                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${pct}%`,
+                              backgroundColor: statusColor[p.status] ?? "#64748B",
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
 
       {/* Clients table */}
       <section className="mb-8">
