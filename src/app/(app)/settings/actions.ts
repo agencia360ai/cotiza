@@ -3,21 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgContext } from "@/lib/org-context";
 
 type Result = { error: string } | { ok: true };
 
 async function userOrg() {
+  const ctx = await getActiveOrgContext();
+  if (!ctx) throw new Error("Sin organización");
   const supabase = await createClient();
-  const { data: u } = await supabase.auth.getUser();
-  if (!u.user) throw new Error("Sesión expirada");
-  const { data: m } = await supabase
-    .from("org_members")
-    .select("org_id, role")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!m) throw new Error("Sin organización");
-  return { supabase, orgId: m.org_id as string, role: m.role as string };
+  return { supabase, orgId: ctx.orgId, role: ctx.role };
 }
 
 export async function updateOrgName(name: string): Promise<Result> {

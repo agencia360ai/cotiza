@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 
 type Result = { error: string } | { ok: true };
 
@@ -19,16 +20,11 @@ export async function createTechnician(input: {
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return { error: "Sesión expirada" };
 
-  const { data: membership } = await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!membership) return { error: "Sin organización" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { error: "Sin organización" };
 
   const { error } = await supabase.from("technicians").insert({
-    org_id: membership.org_id,
+    org_id: orgId,
     name: input.name,
     phone: input.phone,
     email: input.email,

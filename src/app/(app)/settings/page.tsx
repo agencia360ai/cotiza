@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Building2, Boxes, Users, Wrench, Mail } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgContext } from "@/lib/org-context";
 import { OrgSettingsForm } from "./form";
 
 export const dynamic = "force-dynamic";
@@ -10,15 +12,10 @@ export default async function SettingsPage() {
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
 
-  const { data: m } = await supabase
-    .from("org_members")
-    .select("org_id, role")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!m) redirect("/onboarding");
+  const ctx = await getActiveOrgContext();
+  if (!ctx) redirect("/onboarding");
 
-  const orgId = m.org_id as string;
+  const orgId = ctx.orgId;
 
   const [{ data: org }, { count: clientsCount }, { count: equipmentCount }, { count: techsCount }, { count: reportsCount }] =
     await Promise.all([
@@ -49,8 +46,24 @@ export default async function SettingsPage() {
           created_at: org.created_at,
         }}
         userEmail={u.user.email ?? ""}
-        userRole={m.role as string}
+        userRole={ctx.role}
       />
+
+      <Link
+        href="/settings/members"
+        className="mt-4 flex items-center gap-3 rounded-2xl border border-border bg-card p-5 transition-all hover:border-slate-300 hover:shadow-sm"
+      >
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+          <Users className="size-5" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-slate-900">Miembros del equipo</p>
+          <p className="text-xs text-slate-500">
+            Agregar contratistas con email + password, asignar roles
+          </p>
+        </div>
+        <span className="text-slate-300">→</span>
+      </Link>
 
       <section className="mt-8 rounded-2xl border border-border bg-card p-5">
         <h2 className="mb-3 text-sm font-semibold text-slate-700">
@@ -71,7 +84,7 @@ export default async function SettingsPage() {
             <Mail className="size-3.5 text-slate-400" />
             <span className="font-mono text-xs">{u.user.email}</span>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
-              {m.role as string}
+              {ctx.role}
             </span>
           </p>
           <p className="text-xs text-slate-500">

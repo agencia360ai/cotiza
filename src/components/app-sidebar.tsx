@@ -22,9 +22,10 @@ const NAV: NavItem[] = [
 type Props = {
   org: { name: string };
   user: { email: string | null };
+  showOrgSwitcher?: boolean;
 };
 
-export function AppSidebar({ org, user }: Props) {
+export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -41,7 +42,18 @@ export function AppSidebar({ org, user }: Props) {
           <p className="text-sm font-semibold tracking-tight">
             Reportme<span className="text-blue-600">.ai</span>
           </p>
-          <p className="text-xs text-muted-foreground mt-0.5 truncate">{org.name}</p>
+          {showOrgSwitcher ? (
+            <Link
+              href="/select-org"
+              className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              title="Cambiar organización"
+            >
+              <span className="truncate max-w-[140px]">{org.name}</span>
+              <span className="text-muted-foreground/70">↕</span>
+            </Link>
+          ) : (
+            <p className="text-xs text-muted-foreground mt-0.5 truncate">{org.name}</p>
+          )}
         </div>
         <button
           type="button"

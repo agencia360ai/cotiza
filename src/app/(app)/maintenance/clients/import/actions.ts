@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { parseClientFromText, type ImportedClient, type ImportedBatch } from "@/lib/ai/parse-client";
 
 type ParseResult = { error: string } | { ok: true; data: ImportedBatch };
@@ -139,14 +140,9 @@ export async function bulkCreateClient(payload: ImportedClient & { brand_color?:
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return { error: "Sesión expirada" };
-  const { data: m } = await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!m) return { error: "Sin organización" };
-  const r = await insertClient(supabase, m.org_id as string, payload);
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { error: "Sin organización" };
+  const r = await insertClient(supabase, orgId, payload);
   if (r.error || !r.id) return { error: r.error ?? "Error" };
   revalidatePath("/maintenance/clients");
   return { ok: true, clientId: r.id };
@@ -158,14 +154,8 @@ export async function bulkCreateBatch(
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return { error: "Sesión expirada" };
-  const { data: m } = await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!m) return { error: "Sin organización" };
-  const orgId = m.org_id as string;
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { error: "Sin organización" };
 
   const ids: string[] = [];
   const errors: string[] = [];

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import type {
   ClientProject,
   MilestoneStatus,
@@ -17,16 +18,7 @@ import { structureProjectFromCaptures } from "@/lib/ai/structure-project";
 type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
 
 async function currentOrgId(): Promise<string | null> {
-  const supabase = await createClient();
-  const { data: u } = await supabase.auth.getUser();
-  if (!u.user) return null;
-  const { data } = (await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .maybeSingle()) as { data: { org_id: string } | null };
-  return data?.org_id ?? null;
+  return await getActiveOrgId();
 }
 
 export async function createProject(input: {
