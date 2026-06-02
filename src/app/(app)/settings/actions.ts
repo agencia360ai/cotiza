@@ -75,3 +75,21 @@ export async function removeOrgLogo(): Promise<Result> {
   revalidatePath("/", "layout");
   return { ok: true };
 }
+
+export async function updateOrgFocus(focus: "maintenance" | "projects" | "mixed"): Promise<Result> {
+  if (!["maintenance", "projects", "mixed"].includes(focus)) {
+    return { error: "Foco inválido" };
+  }
+  const { supabase, orgId, role } = await userOrg();
+  if (role !== "owner" && role !== "admin") {
+    return { error: "Solo owner/admin pueden cambiar el foco" };
+  }
+  const { error } = await supabase
+    .from("organizations")
+    .update({ focus })
+    .eq("id", orgId);
+  if (error) return { error: error.message };
+  revalidatePath("/maintenance");
+  revalidatePath("/settings");
+  return { ok: true };
+}
