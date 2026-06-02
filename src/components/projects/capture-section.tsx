@@ -117,7 +117,15 @@ export function ProjectCaptureSection({
       setError(r.error);
       return;
     }
-    setSuccess(`Listo · ${r.data.added} captura${r.data.added === 1 ? "" : "s"} estructurada${r.data.added === 1 ? "" : "s"}`);
+    if (r.data.added === 0) {
+      setError(
+        "La IA no logró estructurar las capturas. Probá agregando una nota de texto que describa qué se ve, o agregá el hito manualmente abajo.",
+      );
+      return;
+    }
+    setSuccess(
+      `Listo · ${r.data.added} captura${r.data.added === 1 ? "" : "s"} convertida${r.data.added === 1 ? "" : "s"} en hito${r.data.added === 1 ? "" : "s"}`,
+    );
     onAfterChange?.();
   }
 
@@ -143,7 +151,7 @@ export function ProjectCaptureSection({
             className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
           >
             {structuring ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-            {structuring ? "Estructurando…" : `Estructurar con IA (${unprocessed.length})`}
+            {structuring ? "Procesando…" : `Agregar hito con IA (${unprocessed.length})`}
           </button>
         ) : null}
       </header>
@@ -209,7 +217,7 @@ export function ProjectCaptureSection({
         {unprocessed.length > 0 ? (
           <div className="mt-4">
             <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-violet-700">
-              Pendientes de estructurar · {unprocessed.length}
+              Pendientes · {unprocessed.length}
             </p>
             <div className="space-y-2">
               {unprocessed.map((c) => (
