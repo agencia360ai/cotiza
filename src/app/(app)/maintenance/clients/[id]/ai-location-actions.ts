@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import {
   parseLocationsFromInput,
   type ParsedLocationBatch,
@@ -15,14 +16,9 @@ async function userOrgId() {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) throw new Error("Sesión expirada");
-  const { data: m } = await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!m) throw new Error("Sin organización");
-  return { supabase, orgId: m.org_id as string };
+  const orgId = await getActiveOrgId();
+  if (!orgId) throw new Error("Sin organización");
+  return { supabase, orgId };
 }
 
 export async function parseLocationsForClient(

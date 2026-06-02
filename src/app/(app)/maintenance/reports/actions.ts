@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import type { ReportType, ReportSeverity, EquipmentStatus, Recommendation } from "@/lib/maintenance/types";
 
 type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
@@ -12,14 +13,9 @@ async function userOrgId() {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) throw new Error("Sesión expirada");
-  const { data: m } = await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", u.user.id)
-    .limit(1)
-    .single();
-  if (!m) throw new Error("Sin organización");
-  return { supabase, orgId: m.org_id as string, userId: u.user.id };
+  const orgId = await getActiveOrgId();
+  if (!orgId) throw new Error("Sin organización");
+  return { supabase, orgId, userId: u.user.id };
 }
 
 // PUBLISH / UNPUBLISH / DELETE / SUMMARY (existing)

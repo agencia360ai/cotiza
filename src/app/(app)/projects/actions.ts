@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 
 const newProjectSchema = z.object({
   name: z.string().trim().min(2, "Nombre demasiado corto").max(120),
@@ -27,12 +28,7 @@ export async function createProject(_: { error: string } | null, formData: FormD
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: "Sesión expirada" };
 
-  const { data: memberships } = await supabase
-    .from("org_members")
-    .select("org_id")
-    .eq("user_id", user.id)
-    .limit(1);
-  const orgId = memberships?.[0]?.org_id;
+  const orgId = await getActiveOrgId();
   if (!orgId) return { error: "No tenés organización" };
 
   const { data: project, error } = await supabase
