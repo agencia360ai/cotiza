@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { TechniciansList, NewTechnicianForm } from "./client-ui";
 
 export const dynamic = "force-dynamic";
@@ -19,10 +20,13 @@ export default async function TechniciansPage() {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   const { data } = (await supabase
     .from("technicians")
     .select("*")
+    .eq("org_id", orgId)
     .order("active", { ascending: false })
     .order("created_at", { ascending: false })) as { data: TechRow[] | null };
 

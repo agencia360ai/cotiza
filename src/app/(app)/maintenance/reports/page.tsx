@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ChevronRight, FileText, Calendar, User, Plus, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import {
   REPORT_TYPE_COLOR,
   REPORT_TYPE_LABEL_SHORT,
@@ -56,11 +57,14 @@ export default async function ReportsListPage({
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   // Fetch all and filter in memory by sub-state (so counts are exact)
   const { data: reports } = (await supabase
     .from("maintenance_reports")
     .select("*, client:clients(name), location:client_locations(name)")
+    .eq("org_id", orgId)
     .order("performed_at_start", { ascending: false })) as { data: ReportRow[] | null };
   const allReports = reports ?? [];
 

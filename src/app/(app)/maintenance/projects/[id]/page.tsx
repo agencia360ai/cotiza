@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { ProjectEditor } from "./editor";
 import type {
   ClientProject,
@@ -60,6 +61,8 @@ export default async function ProjectDetailPage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   const { data: row } = (await supabase
     .from("client_projects")
@@ -67,6 +70,7 @@ export default async function ProjectDetailPage({
       "*, client:clients!inner(id, name), location:client_locations(id, name)",
     )
     .eq("id", id)
+    .eq("org_id", orgId)
     .maybeSingle()) as { data: ProjectRow | null };
 
   if (!row) notFound();

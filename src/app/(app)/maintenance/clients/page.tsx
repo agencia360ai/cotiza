@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Building2, ChevronRight, MapPin, Box, Sparkles, Tag } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { CreateClientForm } from "./create-form";
 import { CATEGORY_LABEL, imageUrl, type ClientCategory } from "@/lib/maintenance/types";
 import { cn } from "@/lib/utils";
@@ -39,10 +40,13 @@ export default async function ClientsListPage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   let q = supabase
     .from("clients")
     .select("*, locations:client_locations(id)")
+    .eq("org_id", orgId)
     .order("name", { ascending: true });
   if (sp.category) q = q.eq("category", sp.category);
   const { data: clients } = (await q) as { data: ClientRow[] | null };
@@ -50,7 +54,7 @@ export default async function ClientsListPage({
   const rows = clients ?? [];
 
   // Counts per category for filter chips
-  const { data: catCountsRaw } = (await supabase.from("clients").select("category")) as {
+  const { data: catCountsRaw } = (await supabase.from("clients").select("category").eq("org_id", orgId)) as {
     data: { category: ClientCategory | null }[] | null;
   };
   const categoryCounts = new Map<string, number>();
@@ -64,7 +68,8 @@ export default async function ClientsListPage({
   if (rows.length > 0) {
     const { data: eqAll } = await supabase
       .from("client_equipment")
-      .select("location_id, client_locations!inner(client_id)");
+      .select("location_id, client_locations!inner(client_id, client:clients!inner(org_id))")
+      .eq("client_locations.client.org_id", orgId);
     type EqRow = { location_id: string; client_locations: { client_id: string } | { client_id: string }[] };
     for (const row of (eqAll ?? []) as EqRow[]) {
       const loc = Array.isArray(row.client_locations) ? row.client_locations[0] : row.client_locations;

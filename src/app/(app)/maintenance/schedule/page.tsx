@@ -9,6 +9,7 @@ import {
   Filter,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { REPORT_TYPE_COLOR, REPORT_TYPE_LABEL_SHORT } from "@/lib/maintenance/types";
 import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
 import { cn } from "@/lib/utils";
@@ -63,12 +64,15 @@ export default async function SchedulePage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   let query = supabase
     .from("maintenance_schedules")
     .select(
       "*, client:clients(name, brand_color), location:client_locations(name), technician:technicians(name)",
     )
+    .eq("org_id", orgId)
     .eq("active", true)
     .order("next_due_date", { ascending: true });
 
@@ -80,10 +84,11 @@ export default async function SchedulePage({
   const schedules = (rawData ?? []) as ScheduleRow[];
 
   // Get filter options
-  const { data: clients } = await supabase.from("clients").select("id, name").order("name");
+  const { data: clients } = await supabase.from("clients").select("id, name").eq("org_id", orgId).order("name");
   const { data: technicians } = await supabase
     .from("technicians")
     .select("id, name")
+    .eq("org_id", orgId)
     .eq("active", true)
     .order("name");
 
