@@ -30,12 +30,13 @@ export function PhoneField({
       <select
         value={parsed.code}
         onChange={(e) => handleCode(e.target.value)}
-        className="border-r border-border bg-white px-2 py-2 text-sm focus:outline-none"
+        className="w-[92px] shrink-0 border-r border-border bg-white px-2 py-2 text-sm tabular-nums focus:outline-none"
         aria-label="Código de país"
+        title="Código de país"
       >
         {COUNTRY_CODES.map((c) => (
-          <option key={c.iso} value={c.code}>
-            {c.flag} +{c.code} {c.name}
+          <option key={c.iso} value={c.code} title={c.name}>
+            {c.flag} +{c.code}
           </option>
         ))}
       </select>
