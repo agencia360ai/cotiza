@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { Building2, Upload, Trash2, Loader2, Save, ImageIcon } from "lucide-react";
 import { imageUrl } from "@/lib/maintenance/types";
 import { compressImage } from "@/lib/image-compress";
-import { updateOrgName, uploadOrgLogo, removeOrgLogo } from "./actions";
+import { updateOrgName, updateOrgFocus, uploadOrgLogo, removeOrgLogo } from "./actions";
+
+type Focus = "maintenance" | "projects" | "mixed";
 
 type Org = {
   id: string;
@@ -13,6 +15,7 @@ type Org = {
   slug: string;
   logo_path: string | null;
   created_at: string;
+  focus: Focus;
 };
 
 function initials(name: string): string {
@@ -194,7 +197,76 @@ export function OrgSettingsForm({
             )}
           </button>
         </div>
+
+        <FocusSelector currentFocus={org.focus} />
       </div>
     </section>
+  );
+}
+
+const FOCUS_OPTIONS: { value: Focus; label: string; hint: string }[] = [
+  { value: "maintenance", label: "Mantenimiento", hint: "Reportes recurrentes, equipos y cronograma — dashboard tradicional" },
+  { value: "projects", label: "Proyectos", hint: "Instalaciones y obras puntuales — dashboard enfocado en hitos y entregas" },
+  { value: "mixed", label: "Mixto", hint: "Ambas cosas combinadas en el dashboard (default)" },
+];
+
+function FocusSelector({ currentFocus }: { currentFocus: Focus }) {
+  const router = useRouter();
+  const [focus, setFocus] = useState<Focus>(currentFocus);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
+
+  function handleChange(next: Focus) {
+    if (next === focus) return;
+    const prev = focus;
+    setFocus(next);
+    setError(null);
+    startTransition(async () => {
+      const r = await updateOrgFocus(next);
+      if (r && "error" in r) {
+        setFocus(prev);
+        setError(r.error);
+      } else {
+        setSavedAt(new Date());
+        router.refresh();
+      }
+    });
+  }
+
+  return (
+    <div className="mt-6 border-t border-slate-100 pt-5">
+      <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+        Foco de la organización
+      </label>
+      <p className="mt-1 text-xs text-slate-500">
+        Adapta el dashboard principal según el tipo de trabajo que predomina
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        {FOCUS_OPTIONS.map((opt) => {
+          const active = focus === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => handleChange(opt.value)}
+              disabled={pending}
+              className={
+                active
+                  ? "rounded-xl border-2 border-blue-600 bg-blue-50 p-3 text-left"
+                  : "rounded-xl border-2 border-slate-200 bg-white p-3 text-left hover:border-slate-300"
+              }
+            >
+              <p className={active ? "text-sm font-bold text-blue-900" : "text-sm font-semibold text-slate-900"}>
+                {opt.label}
+              </p>
+              <p className="mt-1 text-xs text-slate-600">{opt.hint}</p>
+            </button>
+          );
+        })}
+      </div>
+      {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
+      {savedAt && !error ? <p className="mt-2 text-xs text-emerald-600">✓ Foco actualizado</p> : null}
+    </div>
   );
 }

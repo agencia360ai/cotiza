@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { listMemberships } from "@/lib/org-context";
 import { imageUrl } from "@/lib/maintenance/types";
 import { setActiveOrg } from "./actions";
+import { CreateOrgCard } from "./create-org-card";
 
 export const dynamic = "force-dynamic";
 
@@ -97,6 +98,8 @@ export default async function SelectOrgPage() {
             );
           })}
         </div>
+
+        <CreateOrgCard />
 
         <p className="mt-8 text-center text-xs text-slate-400">
           <Box className="mr-1 inline size-3" />

@@ -17,6 +17,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgContext } from "@/lib/org-context";
 import { projectImageUrl } from "@/lib/projects/types";
 import {
   STATUS_COLOR,
@@ -135,6 +136,15 @@ export default async function MaintenanceDashboard() {
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
 
+  // Read active org focus to decide layout
+  const ctx = await getActiveOrgContext();
+  const { data: org } = (await supabase
+    .from("organizations")
+    .select("focus")
+    .eq("id", ctx?.orgId ?? "")
+    .maybeSingle()) as { data: { focus: "maintenance" | "projects" | "mixed" } | null };
+  const focus = org?.focus ?? "mixed";
+
   const [
     clientsRes,
     locationsRes,
@@ -170,11 +180,10 @@ export default async function MaintenanceDashboard() {
     supabase
       .from("client_projects")
       .select(
-        "id, name, project_type, status, cover_photo_path, expected_completion_date, client:clients(name), location:client_locations(name), milestones:project_milestones(status)",
+        "id, name, project_type, status, cover_photo_path, expected_completion_date, completed_at, client:clients(name), location:client_locations(name), milestones:project_milestones(status)",
       )
-      .in("status", ["planificado", "en_progreso", "pausado", "completado"])
       .order("updated_at", { ascending: false })
-      .limit(6),
+      .limit(50),
   ]);
 
   const allClients = (clientsRes.data ?? []) as ClientRow[];
@@ -191,11 +200,26 @@ export default async function MaintenanceDashboard() {
     status: string;
     cover_photo_path: string | null;
     expected_completion_date: string | null;
+    completed_at: string | null;
     client: Maybe<{ name: string }>;
     location: Maybe<{ name: string }>;
     milestones: { status: string }[];
   };
   const allProjects = (projectsRes.data ?? []) as unknown as ProjectRow[];
+  const activeProjects = allProjects.filter((p) => p.status !== "aceptado");
+  const inProgressProjects = allProjects.filter((p) => p.status === "en_progreso");
+  const completedRecently = allProjects.filter((p) => {
+    if (p.status !== "completado" && p.status !== "aceptado") return false;
+    if (!p.completed_at) return false;
+    const days = (Date.now() - +new Date(p.completed_at)) / 86400000;
+    return days <= 30;
+  });
+  const upcomingDeliveries = allProjects.filter((p) => {
+    if (p.status === "aceptado" || p.status === "completado") return false;
+    if (!p.expected_completion_date) return false;
+    const days = (+new Date(p.expected_completion_date) - Date.now()) / 86400000;
+    return days >= 0 && days <= 14;
+  });
 
   // Compute latest status per equipment
   const latestStatusByEquipment = new Map<string, { status: EquipmentStatus; date: string }>();
@@ -295,16 +319,38 @@ export default async function MaintenanceDashboard() {
 
   const draftReports = reports.filter((r) => r.status === "draft");
 
+  const isProjectsFocus = focus === "projects";
+
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Resumen del negocio</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Estado global de todos tus clientes y mantenimientos
+          {isProjectsFocus
+            ? "Estado de todos tus proyectos en curso, próximas entregas y clientes"
+            : "Estado global de todos tus clientes y mantenimientos"}
         </p>
       </header>
 
-      {/* KPI Strip */}
+      {/* Projects KPI Strip — focus='projects' */}
+      {isProjectsFocus ? (
+        <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <KpiCard label="Proyectos activos" value={activeProjects.length} icon={Wrench} accent="#0F172A" href="/maintenance/projects" />
+          <KpiCard label="En progreso" value={inProgressProjects.length} icon={Clock} accent="#2563EB" href="/maintenance/projects" />
+          <KpiCard label="Próx. entregas (14d)" value={upcomingDeliveries.length} icon={Calendar} accent="#F97316" />
+          <KpiCard label="Completados (30d)" value={completedRecently.length} icon={CheckCircle2} accent="#10B981" />
+        </section>
+      ) : null}
+
+      {/* Projects in progress — moved up when focus='projects' */}
+      {isProjectsFocus && activeProjects.length > 0 ? (
+        <ProjectsGrid projects={activeProjects.slice(0, 9)} />
+      ) : null}
+
+      {/* Maintenance KPI Strip — focus≠'projects' */}
+      {!isProjectsFocus ? (
+        <>
+          {/* KPI Strip */}
       <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
         <KpiCard
           label="Clientes"
@@ -433,111 +479,11 @@ export default async function MaintenanceDashboard() {
         </div>
       </section>
 
-      {/* Active projects */}
-      {allProjects.length > 0 ? (
-        <section className="mb-8">
-          <header className="mb-3 flex items-end justify-between">
-            <div>
-              <h2 className="text-lg font-bold tracking-tight text-slate-900">Proyectos en curso</h2>
-              <p className="text-sm text-muted-foreground">Instalaciones y obras activas</p>
-            </div>
-            <Link href="/maintenance/projects" className="text-xs font-semibold text-blue-600 hover:underline">
-              Ver todos →
-            </Link>
-          </header>
-          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {allProjects.map((p) => {
-              const client = one(p.client);
-              const location = one(p.location);
-              const total = p.milestones.length;
-              const done = p.milestones.filter((m) => m.status === "completado").length;
-              const pct = total === 0 ? 0 : Math.round((done / total) * 100);
-              const statusColor: Record<string, string> = {
-                planificado: "#64748B",
-                en_progreso: "#2563EB",
-                pausado: "#F59E0B",
-                completado: "#F97316",
-                aceptado: "#10B981",
-              };
-              const statusLabel: Record<string, string> = {
-                planificado: "Planificado",
-                en_progreso: "En progreso",
-                pausado: "Pausado",
-                completado: "Completado",
-                aceptado: "Aceptado",
-              };
-              const typeColor: Record<string, string> = {
-                instalacion: "#2563EB",
-                obra: "#F97316",
-                remodelacion: "#7C3AED",
-                otro: "#64748B",
-              };
-              return (
-                <li key={p.id}>
-                  <Link
-                    href={`/maintenance/projects/${p.id}`}
-                    className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
-                  >
-                    <div
-                      className="relative aspect-[16/8] w-full bg-slate-100"
-                      style={
-                        p.cover_photo_path
-                          ? {
-                              backgroundImage: `url(${projectImageUrl(p.cover_photo_path)})`,
-                              backgroundSize: "cover",
-                              backgroundPosition: "center",
-                            }
-                          : undefined
-                      }
-                    >
-                      {!p.cover_photo_path ? (
-                        <div className="flex h-full w-full items-center justify-center">
-                          <Wrench className="size-7 text-slate-300" />
-                        </div>
-                      ) : null}
-                      <span
-                        className="absolute left-2.5 top-2.5 inline-flex items-center gap-1 rounded-full bg-white/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset"
-                        style={{ color: statusColor[p.status] ?? "#64748B", borderColor: `${statusColor[p.status] ?? "#64748B"}20` }}
-                      >
-                        <span
-                          className="size-1.5 rounded-full"
-                          style={{ backgroundColor: statusColor[p.status] ?? "#64748B" }}
-                        />
-                        {statusLabel[p.status] ?? p.status}
-                      </span>
-                    </div>
-                    <div className="flex flex-1 flex-col p-3">
-                      <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
-                      <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                        {client?.name ?? "—"}
-                        {location ? ` · ${location.name}` : ""}
-                      </p>
-                      <div className="mt-2">
-                        <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                          <span>
-                            {done}/{total} hitos
-                          </span>
-                          <span style={{ color: typeColor[p.project_type] ?? "#64748B" }}>
-                            {pct}%
-                          </span>
-                        </div>
-                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${pct}%`,
-                              backgroundColor: statusColor[p.status] ?? "#64748B",
-                            }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
+      {/* Active projects — focus≠'projects' shows a small recap */}
+      {activeProjects.length > 0 ? (
+        <ProjectsGrid projects={activeProjects.slice(0, 6)} subtitle="Instalaciones y obras activas" />
+      ) : null}
+        </>
       ) : null}
 
       {/* Clients table */}
@@ -907,3 +853,121 @@ function ActionRow({
     </li>
   );
 }
+
+type ProjectGridItem = {
+  id: string;
+  name: string;
+  project_type: string;
+  status: string;
+  cover_photo_path: string | null;
+  expected_completion_date: string | null;
+  client: { name: string } | { name: string }[] | null | undefined;
+  location: { name: string } | { name: string }[] | null | undefined;
+  milestones: { status: string }[];
+};
+
+const PROJECT_STATUS_COLOR: Record<string, string> = {
+  planificado: "#64748B",
+  en_progreso: "#2563EB",
+  pausado: "#F59E0B",
+  completado: "#F97316",
+  aceptado: "#10B981",
+};
+const PROJECT_STATUS_LABEL: Record<string, string> = {
+  planificado: "Planificado",
+  en_progreso: "En progreso",
+  pausado: "Pausado",
+  completado: "Completado",
+  aceptado: "Aceptado",
+};
+
+function ProjectsGrid({
+  projects,
+  title = "Proyectos en curso",
+  subtitle,
+}: {
+  projects: ProjectGridItem[];
+  title?: string;
+  subtitle?: string;
+}) {
+  if (projects.length === 0) return null;
+  return (
+    <section className="mb-8">
+      <header className="mb-3 flex items-end justify-between">
+        <div>
+          <h2 className="text-lg font-bold tracking-tight text-slate-900">{title}</h2>
+          {subtitle ? <p className="text-sm text-muted-foreground">{subtitle}</p> : null}
+        </div>
+        <Link href="/maintenance/projects" className="text-xs font-semibold text-blue-600 hover:underline">
+          Ver todos →
+        </Link>
+      </header>
+      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {projects.map((p) => {
+          const client = one(p.client);
+          const location = one(p.location);
+          const total = p.milestones.length;
+          const done = p.milestones.filter((m) => m.status === "completado").length;
+          const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+          const sc = PROJECT_STATUS_COLOR[p.status] ?? "#64748B";
+          return (
+            <li key={p.id}>
+              <Link
+                href={`/maintenance/projects/${p.id}`}
+                className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+              >
+                <div
+                  className="relative aspect-[16/8] w-full bg-slate-100"
+                  style={
+                    p.cover_photo_path
+                      ? {
+                          backgroundImage: `url(${projectImageUrl(p.cover_photo_path)})`,
+                          backgroundSize: "cover",
+                          backgroundPosition: "center",
+                        }
+                      : undefined
+                  }
+                >
+                  {!p.cover_photo_path ? (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <Wrench className="size-7 text-slate-300" />
+                    </div>
+                  ) : null}
+                  <span
+                    className="absolute left-2.5 top-2.5 inline-flex items-center gap-1 rounded-full bg-white/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset"
+                    style={{ color: sc, borderColor: `${sc}20` }}
+                  >
+                    <span className="size-1.5 rounded-full" style={{ backgroundColor: sc }} />
+                    {PROJECT_STATUS_LABEL[p.status] ?? p.status}
+                  </span>
+                </div>
+                <div className="flex flex-1 flex-col p-3">
+                  <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
+                  <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                    {client?.name ?? "—"}
+                    {location ? ` · ${location.name}` : ""}
+                  </p>
+                  <div className="mt-2">
+                    <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      <span>
+                        {done}/{total} hitos
+                      </span>
+                      <span style={{ color: sc }}>{pct}%</span>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${pct}%`, backgroundColor: sc }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
