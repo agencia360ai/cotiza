@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ChevronRight, MapPin, Building2, Plus, Hammer, Calendar as CalendarIcon } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import {
   PROJECT_STATUS_COLOR,
   PROJECT_STATUS_LABEL,
@@ -45,19 +46,22 @@ export default async function ProjectsListPage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   let q = supabase
     .from("client_projects")
     .select(
       "id, name, project_type, status, cover_photo_path, expected_completion_date, started_at, completed_at, client:clients!inner(id, name), location:client_locations(id, name), milestones:project_milestones(status)",
     )
+    .eq("org_id", orgId)
     .order("created_at", { ascending: false });
   if (sp.status) q = q.eq("status", sp.status);
   const { data } = (await q) as { data: ProjectRow[] | null };
   const rows = data ?? [];
 
   // counts per status (overall)
-  const { data: allRows } = (await supabase.from("client_projects").select("status")) as {
+  const { data: allRows } = (await supabase.from("client_projects").select("status").eq("org_id", orgId)) as {
     data: { status: ProjectStatus }[] | null;
   };
   const statusCounts = new Map<ProjectStatus, number>();

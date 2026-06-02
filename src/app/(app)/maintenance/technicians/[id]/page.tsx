@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { EditPersonalForm } from "./edit-form";
 
 export const dynamic = "force-dynamic";
@@ -33,11 +34,14 @@ export default async function EditPersonalPage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   const { data: tech } = (await supabase
     .from("technicians")
     .select("id, name, phone, email, active, access_token, org_id")
     .eq("id", id)
+    .eq("org_id", orgId)
     .maybeSingle()) as { data: TechRow | null };
 
   if (!tech) notFound();
@@ -46,6 +50,7 @@ export default async function EditPersonalPage({
     supabase
       .from("clients")
       .select("id, name, client_locations(id, name)")
+      .eq("org_id", orgId)
       .order("name") as unknown as Promise<{ data: ClientWithLocations[] | null }>,
     supabase
       .from("technician_assignments")

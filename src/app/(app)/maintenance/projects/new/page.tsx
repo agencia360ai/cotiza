@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft, Hammer } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { NewProjectForm } from "./new-form";
 
 export const dynamic = "force-dynamic";
@@ -21,10 +22,13 @@ export default async function NewProjectPage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   const { data } = (await supabase
     .from("clients")
     .select("id, name, client_locations(id, name)")
+    .eq("org_id", orgId)
     .order("name")) as { data: ClientRow[] | null };
 
   return (

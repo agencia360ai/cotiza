@@ -20,10 +20,13 @@ export default async function SettingsPage() {
   const [{ data: org }, { count: clientsCount }, { count: equipmentCount }, { count: techsCount }, { count: reportsCount }] =
     await Promise.all([
       supabase.from("organizations").select("id, name, slug, logo_path, created_at, focus").eq("id", orgId).single(),
-      supabase.from("clients").select("*", { count: "exact", head: true }),
-      supabase.from("client_equipment").select("*", { count: "exact", head: true }),
-      supabase.from("technicians").select("*", { count: "exact", head: true }).eq("active", true),
-      supabase.from("maintenance_reports").select("*", { count: "exact", head: true }),
+      supabase.from("clients").select("*", { count: "exact", head: true }).eq("org_id", orgId),
+      supabase
+        .from("client_equipment")
+        .select("*, location:client_locations!inner(client:clients!inner(org_id))", { count: "exact", head: true })
+        .eq("location.client.org_id", orgId),
+      supabase.from("technicians").select("*", { count: "exact", head: true }).eq("org_id", orgId).eq("active", true),
+      supabase.from("maintenance_reports").select("*", { count: "exact", head: true }).eq("org_id", orgId),
     ]);
 
   if (!org) redirect("/onboarding");

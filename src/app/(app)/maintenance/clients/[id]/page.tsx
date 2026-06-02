@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { ClientDetailEditor } from "./client-detail";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +16,15 @@ export default async function ClientDetailPage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
-  const { data: client } = await supabase.from("clients").select("*").eq("id", id).single();
+  const { data: client } = await supabase
+    .from("clients")
+    .select("*")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
   if (!client) notFound();
 
   const { data: locationsRaw } = await supabase
@@ -41,6 +49,7 @@ export default async function ClientDetailPage({
   const { data: technicians } = await supabase
     .from("technicians")
     .select("id, name, active")
+    .eq("org_id", orgId)
     .eq("active", true)
     .order("name", { ascending: true });
 

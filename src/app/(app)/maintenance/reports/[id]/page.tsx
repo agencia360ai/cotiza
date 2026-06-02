@@ -15,6 +15,7 @@ import {
   Download,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import {
   REPORT_TYPE_COLOR,
   REPORT_TYPE_LABEL,
@@ -93,6 +94,8 @@ export default async function ReportDetailPage({
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   const { data: report } = (await supabase
     .from("maintenance_reports")
@@ -100,7 +103,8 @@ export default async function ReportDetailPage({
       "*, client:clients(name, brand_color), location:client_locations(name, address), technician:technicians(name, phone)",
     )
     .eq("id", id)
-    .single()) as { data: ReportRow | null };
+    .eq("org_id", orgId)
+    .maybeSingle()) as { data: ReportRow | null };
 
   if (!report) notFound();
 
@@ -132,6 +136,7 @@ export default async function ReportDetailPage({
   const { data: technicians } = await supabase
     .from("technicians")
     .select("id, name")
+    .eq("org_id", orgId)
     .eq("active", true)
     .order("name", { ascending: true });
 

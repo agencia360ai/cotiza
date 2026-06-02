@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
 import { NewReportWizard } from "./wizard";
 
 export const dynamic = "force-dynamic";
@@ -19,15 +20,19 @@ export default async function NewReportPage() {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
 
   const { data: clients } = (await supabase
     .from("clients")
     .select("id, name, brand_color, locations:client_locations(id, name)")
+    .eq("org_id", orgId)
     .order("name", { ascending: true })) as { data: ClientWithLocations[] | null };
 
   const { data: technicians } = (await supabase
     .from("technicians")
     .select("id, name")
+    .eq("org_id", orgId)
     .eq("active", true)
     .order("name", { ascending: true })) as { data: Tech[] | null };
 

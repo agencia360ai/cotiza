@@ -145,6 +145,8 @@ export default async function MaintenanceDashboard() {
     .maybeSingle()) as { data: { focus: "maintenance" | "projects" | "mixed" } | null };
   const focus = org?.focus ?? "mixed";
 
+  const orgId = ctx?.orgId ?? "";
+
   const [
     clientsRes,
     locationsRes,
@@ -155,18 +157,26 @@ export default async function MaintenanceDashboard() {
     techsRes,
     projectsRes,
   ] = await Promise.all([
-    supabase.from("clients").select("id, name, category, brand_color, logo_path").order("name"),
-    supabase.from("client_locations").select("id, client_id"),
-    supabase.from("client_equipment").select("id, location_id"),
+    supabase.from("clients").select("id, name, category, brand_color, logo_path").eq("org_id", orgId).order("name"),
+    supabase
+      .from("client_locations")
+      .select("id, client_id, client:clients!inner(org_id)")
+      .eq("client.org_id", orgId),
+    supabase
+      .from("client_equipment")
+      .select("id, location_id, location:client_locations!inner(client:clients!inner(org_id))")
+      .eq("location.client.org_id", orgId),
     supabase
       .from("report_items")
-      .select("equipment_id, equipment_status, report:maintenance_reports!inner(client_id, performed_at_start, status)")
-      .in("report.status", ["published", "accepted"]),
+      .select("equipment_id, equipment_status, report:maintenance_reports!inner(client_id, performed_at_start, status, org_id)")
+      .in("report.status", ["published", "accepted"])
+      .eq("report.org_id", orgId),
     supabase
       .from("maintenance_schedules")
       .select(
         "*, client:clients(name), location:client_locations(name), technician:technicians(name)",
       )
+      .eq("org_id", orgId)
       .eq("active", true)
       .order("next_due_date", { ascending: true }),
     supabase
@@ -174,14 +184,16 @@ export default async function MaintenanceDashboard() {
       .select(
         "id, report_number, report_type, status, performed_at_start, performed_by_name, client:clients(name, brand_color), location:client_locations(name)",
       )
+      .eq("org_id", orgId)
       .order("updated_at", { ascending: false })
       .limit(8),
-    supabase.from("technicians").select("id, name").eq("active", true),
+    supabase.from("technicians").select("id, name").eq("org_id", orgId).eq("active", true),
     supabase
       .from("client_projects")
       .select(
         "id, name, project_type, status, cover_photo_path, expected_completion_date, completed_at, client:clients(name), location:client_locations(name), milestones:project_milestones(status)",
       )
+      .eq("org_id", orgId)
       .order("updated_at", { ascending: false })
       .limit(50),
   ]);
