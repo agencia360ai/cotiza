@@ -437,7 +437,7 @@ function CaptureRow({
   );
 }
 
-function VoiceCaptureModal({
+export function VoiceCaptureModal({
   onClose,
   onSave,
 }: {
@@ -541,7 +541,7 @@ function VoiceCaptureModal({
   );
 }
 
-function TextCaptureModal({
+export function TextCaptureModal({
   onClose,
   onSave,
 }: {

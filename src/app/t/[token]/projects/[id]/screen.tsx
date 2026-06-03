@@ -14,11 +14,13 @@ import {
   Image as ImageIcon,
   Loader2,
   MapPin,
+  Mic,
   Pencil,
+  PencilLine,
   Play,
   Plus,
   Trash2,
-  Video,
+  Video as VideoIcon,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -64,7 +66,7 @@ import {
   moveTechnicianMilestone,
 } from "../actions";
 import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
-import { ProjectCaptureSection } from "@/components/projects/capture-section";
+import { VoiceCaptureModal, TextCaptureModal } from "@/components/projects/capture-section";
 import { MilestoneEntriesList } from "@/components/projects/milestone-entries";
 
 const PROJECT_STATUS_FLOW: ProjectStatus[] = [
@@ -159,6 +161,7 @@ export function TechnicianProjectScreen({
     occurred_on: string;
     status: MilestoneStatus;
     section_id: string | null;
+    media: { path: string; kind: "photo" | "video" }[];
   }) {
     setError(null);
     const r = await addTechnicianMilestone(token, {
@@ -175,6 +178,21 @@ export function TechnicianProjectScreen({
     if (input.section_id) {
       await moveTechnicianMilestone(token, r.data.id, project.id, input.section_id);
     }
+    const attachedMedia: ProjectMedia[] = [];
+    for (const m of input.media) {
+      const reg = await registerTechnicianMilestoneMedia(token, project.id, r.data.id, m.kind, m.path);
+      if ("error" in reg) {
+        setError(reg.error);
+        continue;
+      }
+      attachedMedia.push({
+        id: reg.data.id,
+        kind: reg.data.kind,
+        path: reg.data.path,
+        caption_es: null,
+        position: attachedMedia.length,
+      });
+    }
     setMilestones((prev) => [
       ...prev,
       {
@@ -187,7 +205,7 @@ export function TechnicianProjectScreen({
         occurred_on: input.occurred_on || null,
         completed_at: input.status === "completado" ? new Date().toISOString() : null,
         created_at: new Date().toISOString(),
-        media: [],
+        media: attachedMedia,
         entries: [],
       },
     ]);
@@ -366,40 +384,6 @@ export function TechnicianProjectScreen({
           </p>
         ) : null}
 
-        {status !== "aceptado" ? (
-          <div className="mt-5">
-            <ProjectCaptureSection
-              captures={initialCaptures}
-              pathPrefix={`tech/${token.slice(0, 8)}/${project.id}/captures`}
-              onAddManualMilestone={() => {
-                setShowAddForm(true);
-                if (typeof window !== "undefined") {
-                  window.setTimeout(() => {
-                    document
-                      .getElementById("add-milestone-form")
-                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                  }, 50);
-                }
-              }}
-              onRegisterUpload={async (kind, path) =>
-                registerProjectCaptureMedia(token, project.id, kind, path)
-              }
-              onAddText={async (kind, text) => addProjectCapture(token, project.id, { kind, text })}
-              onRemove={async (id) => removeProjectCapture(token, project.id, id)}
-              onPropose={async () => proposeTechnicianProjectStructure(token, project.id)}
-              onApply={async (proposal) =>
-                applyTechnicianProjectProposal(
-                  token,
-                  project.id,
-                  proposal,
-                  activeSection === "all" ? null : activeSection,
-                )
-              }
-              onAfterChange={() => router.refresh()}
-            />
-          </div>
-        ) : null}
-
         <section className="mt-7">
           {(() => {
             const counts: Record<string, { total: number; done: number }> = {
@@ -484,16 +468,28 @@ export function TechnicianProjectScreen({
             );
           })()}
 
-          {showAddForm ? (
-            <div id="add-milestone-form">
-              <AddMilestoneForm
-                onCancel={() => setShowAddForm(false)}
-                onSave={handleAddMilestone}
-                pending={pending}
-                sections={sections}
-                defaultSectionId={activeSection === "all" ? null : activeSection}
-              />
-            </div>
+          {status !== "aceptado" ? (
+            showAddForm ? (
+              <div id="add-milestone-form">
+                <AddMilestoneForm
+                  onCancel={() => setShowAddForm(false)}
+                  onSave={handleAddMilestone}
+                  pending={pending}
+                  sections={sections}
+                  defaultSectionId={activeSection === "all" ? null : activeSection}
+                  pathPrefix={`tech/${token.slice(0, 8)}/${project.id}/captures`}
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowAddForm(true)}
+                className="mb-5 flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-5 text-sm font-semibold text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50"
+              >
+                <Plus className="size-5" />
+                Agregar Hito
+              </button>
+            )
           ) : null}
 
           {(() => {
@@ -589,12 +585,15 @@ export function TechnicianProjectScreen({
   );
 }
 
+type PendingMedia = { localId: string; path: string; kind: "photo" | "video"; previewUrl: string };
+
 function AddMilestoneForm({
   onCancel,
   onSave,
   pending,
   sections,
   defaultSectionId,
+  pathPrefix,
 }: {
   onCancel: () => void;
   onSave: (input: {
@@ -603,10 +602,12 @@ function AddMilestoneForm({
     occurred_on: string;
     status: MilestoneStatus;
     section_id: string | null;
+    media: { path: string; kind: "photo" | "video" }[];
   }) => Promise<void>;
   pending: boolean;
   sections: ProjectSection[];
   defaultSectionId: string | null;
+  pathPrefix: string;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -614,6 +615,48 @@ function AddMilestoneForm({
   const [status, setStatus] = useState<MilestoneStatus>("en_progreso");
   const [sectionId, setSectionId] = useState<string | null>(defaultSectionId);
   const [submitting, setSubmitting] = useState(false);
+  const [media, setMedia] = useState<PendingMedia[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [showVoice, setShowVoice] = useState(false);
+  const [showNote, setShowNote] = useState(false);
+  const photoRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLInputElement>(null);
+
+  async function uploadFiles(files: File[], kind: "photo" | "video") {
+    if (files.length === 0) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      for (const original of files) {
+        const file = kind === "photo"
+          ? await compressImage(original, { maxDimension: 1920, quality: 0.85 })
+          : original;
+        const ext = (file.name.split(".").pop() ?? (kind === "video" ? "mp4" : "jpg")).toLowerCase();
+        const path = `${pathPrefix.replace(/\/$/, "")}/${crypto.randomUUID()}.${ext}`;
+        const up = await uploadToProjectsBucket(file, path);
+        if ("error" in up) throw new Error(up.error);
+        setMedia((prev) => [
+          ...prev,
+          {
+            localId: crypto.randomUUID(),
+            path: up.path,
+            kind,
+            previewUrl: URL.createObjectURL(file),
+          },
+        ]);
+      }
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "Falló subida");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function appendToDescription(text: string) {
+    if (!text.trim()) return;
+    setDescription((prev) => (prev ? `${prev.trimEnd()}\n\n${text.trim()}` : text.trim()));
+  }
 
   async function handle() {
     if (!title.trim()) return;
@@ -624,20 +667,34 @@ function AddMilestoneForm({
       occurred_on: occurredOn,
       status,
       section_id: sectionId,
+      media: media.map((m) => ({ path: m.path, kind: m.kind })),
     });
     setSubmitting(false);
   }
   const busy = submitting || pending;
 
   return (
-    <div className="mb-5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4">
-      <div className="space-y-3">
+    <div className="mb-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex items-center gap-2 border-b border-slate-100 px-4 py-3 sm:px-5">
+        <div className="flex size-8 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+          <Plus className="size-4" />
+        </div>
+        <div>
+          <h3 className="text-sm font-bold text-slate-900">Nuevo hito</h3>
+          <p className="text-xs text-slate-500">
+            Escribí o adjuntá fotos, videos o voz. Lo que necesites.
+          </p>
+        </div>
+      </header>
+
+      <div className="space-y-3 p-4 sm:p-5">
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Título del hito (ej. Apertura de muros)"
-          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-slate-400 focus:outline-none"
+          placeholder="Título del hito (ej. Apertura de muros / Recepción de materiales)"
+          className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm font-semibold focus:border-slate-400 focus:outline-none"
         />
+
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -645,6 +702,114 @@ function AddMilestoneForm({
           rows={3}
           className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
         />
+
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Adjuntar
+          </span>
+          <button
+            type="button"
+            onClick={() => photoRef.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Camera className="size-3.5 text-blue-600" />
+            Foto
+          </button>
+          <button
+            type="button"
+            onClick={() => videoRef.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <VideoIcon className="size-3.5 text-violet-600" />
+            Video
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowVoice(true)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Mic className="size-3.5 text-red-600" />
+            Voz
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowNote(true)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <PencilLine className="size-3.5 text-emerald-600" />
+            Nota
+          </button>
+          {uploading ? (
+            <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+              <Loader2 className="size-3 animate-spin" />
+              Subiendo…
+            </span>
+          ) : null}
+        </div>
+
+        <input
+          ref={photoRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          multiple
+          hidden
+          onChange={(e) =>
+            uploadFiles(Array.from(e.target.files ?? []), "photo").finally(() => {
+              if (photoRef.current) photoRef.current.value = "";
+            })
+          }
+        />
+        <input
+          ref={videoRef}
+          type="file"
+          accept="video/*"
+          capture="environment"
+          hidden
+          onChange={(e) =>
+            uploadFiles(Array.from(e.target.files ?? []), "video").finally(() => {
+              if (videoRef.current) videoRef.current.value = "";
+            })
+          }
+        />
+
+        {uploadError ? (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-inset ring-red-600/20">
+            {uploadError}
+          </p>
+        ) : null}
+
+        {media.length > 0 ? (
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {media.map((m) => (
+              <div
+                key={m.localId}
+                className="relative aspect-square overflow-hidden rounded-lg ring-1 ring-slate-200"
+              >
+                {m.kind === "photo" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.previewUrl} alt="" className="size-full object-cover" />
+                ) : (
+                  <div className="flex size-full items-center justify-center bg-slate-900">
+                    <video src={m.previewUrl} className="size-full object-cover" muted playsInline />
+                    <Play className="absolute size-7 fill-white text-white drop-shadow-md" />
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setMedia((prev) => prev.filter((x) => x.localId !== m.localId))}
+                  className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/75"
+                  aria-label="Quitar"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         <div
           className={cn(
             "grid grid-cols-1 gap-3",
@@ -698,12 +863,13 @@ function AddMilestoneForm({
             </label>
           ) : null}
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
           <button
             type="button"
             onClick={handle}
-            disabled={!title.trim() || busy}
-            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            disabled={!title.trim() || busy || uploading}
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
           >
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
             Guardar hito
@@ -715,11 +881,27 @@ function AddMilestoneForm({
           >
             Cancelar
           </button>
-          <p className="ml-auto text-xs text-slate-400">
-            Las fotos y videos los agregás después de crear el hito.
-          </p>
         </div>
       </div>
+
+      {showVoice ? (
+        <VoiceCaptureModal
+          onClose={() => setShowVoice(false)}
+          onSave={async (text) => {
+            appendToDescription(text);
+            setShowVoice(false);
+          }}
+        />
+      ) : null}
+      {showNote ? (
+        <TextCaptureModal
+          onClose={() => setShowNote(false)}
+          onSave={async (text) => {
+            appendToDescription(text);
+            setShowNote(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1037,7 +1219,7 @@ function MilestoneRow({
                   disabled={uploading}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
-                  {uploading ? <Loader2 className="size-3.5 animate-spin" /> : <Video className="size-3.5" />}
+                  {uploading ? <Loader2 className="size-3.5 animate-spin" /> : <VideoIcon className="size-3.5" />}
                   Video{videoCount > 0 ? ` · ${videoCount}` : ""}
                 </button>
                 {milestone.status !== "completado" ? (
