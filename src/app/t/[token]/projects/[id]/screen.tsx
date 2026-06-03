@@ -38,6 +38,8 @@ import {
   type ProjectMilestone,
   type ProjectStatus,
   type ProjectSection,
+  SECTION_COLOR_HEX,
+  SECTION_COLOR_SOFT,
 } from "@/lib/projects/types";
 import { SectionTabs } from "@/components/projects/section-tabs";
 import { compressImage } from "@/lib/image-compress";
@@ -369,7 +371,14 @@ export function TechnicianProjectScreen({
               onAddText={async (kind, text) => addProjectCapture(token, project.id, { kind, text })}
               onRemove={async (id) => removeProjectCapture(token, project.id, id)}
               onPropose={async () => proposeTechnicianProjectStructure(token, project.id)}
-              onApply={async (proposal) => applyTechnicianProjectProposal(token, project.id, proposal)}
+              onApply={async (proposal) =>
+                applyTechnicianProjectProposal(
+                  token,
+                  project.id,
+                  proposal,
+                  activeSection === "all" ? null : activeSection,
+                )
+              }
               onAfterChange={() => router.refresh()}
             />
           </div>
@@ -437,23 +446,7 @@ export function TechnicianProjectScreen({
           ) : null}
 
           {(() => {
-            const filtered = activeSection === "all"
-              ? milestones
-              : milestones.filter((m) => m.section_id === activeSection);
-            if (filtered.length === 0 && !showAddForm) {
-              return (
-                <div className="rounded-2xl border border-dashed border-border bg-card py-12 text-center">
-                  <Hammer className="mx-auto mb-3 size-7 text-slate-300" />
-                  <p className="text-sm font-semibold text-slate-900">Sin hitos en esta pestaña</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Cargá el primer hito (ej. &ldquo;Llegada de materiales&rdquo;) con foto del momento.
-                  </p>
-                </div>
-              );
-            }
-            return (
-              <ol className="relative mt-5 space-y-5 border-l-2 border-slate-200 pl-6">
-                {filtered.map((m) => (
+            const renderMilestone = (m: ProjectMilestone) => (
               <MilestoneRow
                 key={m.id}
                 token={token}
@@ -466,8 +459,74 @@ export function TechnicianProjectScreen({
                 onLocalRemove={() => setMilestones((prev) => prev.filter((x) => x.id !== m.id))}
                 onPreview={(media) => setLightbox(media)}
               />
-            ))}
-              </ol>
+            );
+
+            const showGrouped = activeSection === "all" && sections.length > 0;
+            const filtered = activeSection === "all"
+              ? milestones
+              : milestones.filter((m) => m.section_id === activeSection);
+
+            if (filtered.length === 0 && !showAddForm) {
+              return (
+                <div className="rounded-2xl border border-dashed border-border bg-card py-12 text-center">
+                  <Hammer className="mx-auto mb-3 size-7 text-slate-300" />
+                  <p className="text-sm font-semibold text-slate-900">Sin hitos en esta pestaña</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Cargá el primer hito (ej. &ldquo;Llegada de materiales&rdquo;) con foto del momento.
+                  </p>
+                </div>
+              );
+            }
+
+            if (!showGrouped) {
+              return (
+                <ol className="relative mt-5 space-y-5 border-l-2 border-slate-200 pl-6">
+                  {filtered.map(renderMilestone)}
+                </ol>
+              );
+            }
+
+            const groups = sections
+              .map((s) => ({ section: s as ProjectSection | null, items: milestones.filter((m) => m.section_id === s.id) }))
+              .filter((g) => g.items.length > 0);
+            const orphans = milestones.filter(
+              (m) => !m.section_id || !sections.find((s) => s.id === m.section_id),
+            );
+            if (orphans.length > 0) groups.push({ section: null, items: orphans });
+
+            return (
+              <div className="mt-5 space-y-7">
+                {groups.map((g) => {
+                  const accent = g.section ? SECTION_COLOR_HEX[g.section.color] : "#94A3B8";
+                  const soft = g.section ? SECTION_COLOR_SOFT[g.section.color] : "#F1F5F9";
+                  const name = g.section?.name ?? "Sin categoría";
+                  return (
+                    <div key={g.section?.id ?? "__orphans__"}>
+                      <div
+                        className="mb-3 flex items-center gap-2.5 rounded-lg px-3 py-2"
+                        style={{ backgroundColor: soft }}
+                      >
+                        <span className="size-2.5 rounded-full" style={{ backgroundColor: accent }} />
+                        <span
+                          className="text-xs font-bold uppercase tracking-wider"
+                          style={{ color: accent }}
+                        >
+                          {name}
+                        </span>
+                        <span className="text-xs font-semibold text-slate-500">
+                          {g.items.length}
+                        </span>
+                      </div>
+                      <ol
+                        className="relative space-y-5 border-l-2 pl-6"
+                        style={{ borderLeftColor: `${accent}40` }}
+                      >
+                        {g.items.map(renderMilestone)}
+                      </ol>
+                    </div>
+                  );
+                })}
+              </div>
             );
           })()}
         </section>

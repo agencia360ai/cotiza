@@ -532,11 +532,13 @@ export async function proposeAdminProjectStructure(
 export async function applyAdminProjectProposal(
   projectId: string,
   proposal: ProposedStructure,
+  sectionId: string | null = null,
 ): Promise<Result<{ added: number }>> {
   const supabase = await createClient();
   const { error } = await supabase.rpc("apply_admin_project_structuring", {
     _project_id: projectId,
     _structured: proposal,
+    _section_id: sectionId,
   });
   if (error) return { error: error.message };
   revalidatePath(`/maintenance/projects/${projectId}`);

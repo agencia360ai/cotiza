@@ -430,12 +430,14 @@ export async function applyTechnicianProjectProposal(
   token: string,
   projectId: string,
   proposal: ProposedTechStructure,
+  sectionId: string | null = null,
 ): Promise<Result<{ added: number }>> {
   const supabase = await createClient();
   const { error } = await supabase.rpc("apply_technician_project_structuring", {
     _token: token,
     _project_id: projectId,
     _structured: proposal,
+    _section_id: sectionId,
   });
   if (error) return { error: error.message };
   revalidatePath(`/t/${token}/projects/${projectId}`);
