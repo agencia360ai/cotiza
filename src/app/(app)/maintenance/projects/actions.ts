@@ -91,6 +91,46 @@ export async function updateProject(
 
 export async function deleteProject(projectId: string): Promise<Result> {
   const supabase = await createClient();
+
+  const pathsToRemove = new Set<string>();
+  type ProjectAssets = {
+    cover_photo_path: string | null;
+    capture_data: { media_path?: string | null }[] | null;
+  };
+  const { data: prj } = (await supabase
+    .from("client_projects")
+    .select("cover_photo_path, capture_data")
+    .eq("id", projectId)
+    .maybeSingle()) as { data: ProjectAssets | null };
+  if (prj?.cover_photo_path) pathsToRemove.add(prj.cover_photo_path);
+  for (const c of prj?.capture_data ?? []) {
+    if (c?.media_path) pathsToRemove.add(c.media_path);
+  }
+
+  const { data: milestoneIds } = (await supabase
+    .from("project_milestones")
+    .select("id")
+    .eq("project_id", projectId)) as { data: { id: string }[] | null };
+  if (milestoneIds && milestoneIds.length > 0) {
+    const { data: media } = (await supabase
+      .from("project_milestone_media")
+      .select("path")
+      .in(
+        "milestone_id",
+        milestoneIds.map((m) => m.id),
+      )) as { data: { path: string }[] | null };
+    for (const m of media ?? []) {
+      if (m.path) pathsToRemove.add(m.path);
+    }
+  }
+
+  if (pathsToRemove.size > 0) {
+    await supabase.storage
+      .from("cotiza-projects")
+      .remove(Array.from(pathsToRemove))
+      .catch(() => {});
+  }
+
   const { error } = await supabase
     .from("client_projects")
     .delete()
