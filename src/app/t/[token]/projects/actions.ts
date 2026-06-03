@@ -12,6 +12,7 @@ import type {
   ProjectType,
 } from "@/lib/projects/types";
 import { structureProjectFromCaptures } from "@/lib/ai/structure-project";
+import { structureSingleMilestone } from "@/lib/ai/structure-single-milestone";
 
 type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
 
@@ -530,4 +531,55 @@ export async function moveTechnicianMilestone(
   if (error) return { error: error.message };
   revalidatePath(`/t/${token}/projects/${projectId}`);
   return { ok: true };
+}
+
+// ============================================================================
+// Propuesta de un único hito desde uploads inline (form unificado) — técnico
+// ============================================================================
+
+export async function proposeSingleTechnicianMilestone(
+  token: string,
+  projectId: string,
+  input: { mediaPaths: string[]; text: string },
+): Promise<Result<{ title: string; description: string; status: MilestoneStatus }>> {
+  const supabase = await createClient();
+  const ctx = await loadProjectForToken(token, projectId);
+  if (!ctx) return { error: "Proyecto no encontrado" };
+
+  const photos: { path: string; data: Buffer; mimeType: string }[] = [];
+  for (const path of input.mediaPaths) {
+    if (/\.(mp4|mov|webm|m4v|m4a|mp3|wav)$/i.test(path)) continue;
+    const { data } = await supabase.storage.from("cotiza-projects").download(path);
+    if (data) {
+      photos.push({
+        path,
+        data: Buffer.from(await data.arrayBuffer()),
+        mimeType: data.type || "image/jpeg",
+      });
+    }
+  }
+
+  try {
+    const result = await structureSingleMilestone({
+      project: {
+        name: ctx.project.name,
+        project_type: ctx.project.project_type,
+        description_es: ctx.project.description_es,
+      },
+      client_name: ctx.client.name,
+      location_name: ctx.location?.name ?? null,
+      text: input.text || null,
+      photos,
+    });
+    return {
+      ok: true,
+      data: {
+        title: result.title,
+        description: result.description,
+        status: result.status as MilestoneStatus,
+      },
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Falló la IA" };
+  }
 }

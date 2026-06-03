@@ -19,6 +19,7 @@ import {
   PencilLine,
   Play,
   Plus,
+  Sparkles,
   Trash2,
   Video as VideoIcon,
   X,
@@ -64,6 +65,7 @@ import {
   deleteTechnicianProjectSection,
   reorderTechnicianProjectSections,
   moveTechnicianMilestone,
+  proposeSingleTechnicianMilestone,
 } from "../actions";
 import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 import { VoiceCaptureModal, TextCaptureModal } from "@/components/projects/capture-section";
@@ -474,6 +476,9 @@ export function TechnicianProjectScreen({
                 <AddMilestoneForm
                   onCancel={() => setShowAddForm(false)}
                   onSave={handleAddMilestone}
+                  onProposeIA={async (input) =>
+                    proposeSingleTechnicianMilestone(token, project.id, input)
+                  }
                   pending={pending}
                   sections={sections}
                   defaultSectionId={activeSection === "all" ? null : activeSection}
@@ -587,9 +592,25 @@ export function TechnicianProjectScreen({
 
 type PendingMedia = { localId: string; path: string; kind: "photo" | "video"; previewUrl: string };
 
+function deriveTitleFromText(text: string, fallbackDate: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    try {
+      const d = new Date(fallbackDate);
+      return `Avance del ${d.toLocaleDateString("es-PA", { day: "2-digit", month: "long" })}`;
+    } catch {
+      return "Nuevo hito";
+    }
+  }
+  const firstLine = trimmed.split(/\n/)[0]?.trim() ?? trimmed;
+  if (firstLine.length <= 80) return firstLine;
+  return firstLine.slice(0, 77).trimEnd() + "…";
+}
+
 function AddMilestoneForm({
   onCancel,
   onSave,
+  onProposeIA,
   pending,
   sections,
   defaultSectionId,
@@ -604,29 +625,34 @@ function AddMilestoneForm({
     section_id: string | null;
     media: { path: string; kind: "photo" | "video" }[];
   }) => Promise<void>;
+  onProposeIA: (input: {
+    mediaPaths: string[];
+    text: string;
+  }) => Promise<{ error: string } | { ok: true; data: { title: string; description: string; status: MilestoneStatus } }>;
   pending: boolean;
   sections: ProjectSection[];
   defaultSectionId: string | null;
   pathPrefix: string;
 }) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const [text, setText] = useState("");
+  const [aiTitle, setAiTitle] = useState<string | null>(null);
   const [occurredOn, setOccurredOn] = useState(new Date().toISOString().slice(0, 10));
   const [status, setStatus] = useState<MilestoneStatus>("en_progreso");
   const [sectionId, setSectionId] = useState<string | null>(defaultSectionId);
   const [submitting, setSubmitting] = useState(false);
   const [media, setMedia] = useState<PendingMedia[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [showVoice, setShowVoice] = useState(false);
   const [showNote, setShowNote] = useState(false);
+  const [running, setRunning] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
 
   async function uploadFiles(files: File[], kind: "photo" | "video") {
     if (files.length === 0) return;
     setUploading(true);
-    setUploadError(null);
+    setError(null);
     try {
       for (const original of files) {
         const file = kind === "photo"
@@ -647,23 +673,28 @@ function AddMilestoneForm({
         ]);
       }
     } catch (e) {
-      setUploadError(e instanceof Error ? e.message : "Falló subida");
+      setError(e instanceof Error ? e.message : "Falló subida");
     } finally {
       setUploading(false);
     }
   }
 
-  function appendToDescription(text: string) {
-    if (!text.trim()) return;
-    setDescription((prev) => (prev ? `${prev.trimEnd()}\n\n${text.trim()}` : text.trim()));
+  function appendText(extra: string) {
+    if (!extra.trim()) return;
+    setText((prev) => (prev ? `${prev.trimEnd()}\n\n${extra.trim()}` : extra.trim()));
   }
 
-  async function handle() {
-    if (!title.trim()) return;
+  const canSave = (text.trim().length > 0 || media.length > 0) && !uploading;
+  const canIA = (text.trim().length > 0 || media.some((m) => m.kind === "photo")) && !running && !uploading;
+
+  async function handleSave() {
+    if (!canSave) return;
     setSubmitting(true);
+    setError(null);
+    const title = aiTitle?.trim() || deriveTitleFromText(text, occurredOn);
     await onSave({
-      title: title.trim(),
-      description,
+      title,
+      description: text,
       occurred_on: occurredOn,
       status,
       section_id: sectionId,
@@ -671,6 +702,25 @@ function AddMilestoneForm({
     });
     setSubmitting(false);
   }
+
+  async function handleIA() {
+    if (!canIA) return;
+    setRunning(true);
+    setError(null);
+    const r = await onProposeIA({
+      mediaPaths: media.map((m) => m.path),
+      text,
+    });
+    setRunning(false);
+    if ("error" in r) {
+      setError(r.error);
+      return;
+    }
+    setAiTitle(r.data.title);
+    setText(r.data.description);
+    setStatus(r.data.status);
+  }
+
   const busy = submitting || pending;
 
   return (
@@ -680,73 +730,74 @@ function AddMilestoneForm({
           <Plus className="size-4" />
         </div>
         <div>
-          <h3 className="text-sm font-bold text-slate-900">Nuevo hito</h3>
+          <h3 className="text-sm font-bold text-slate-900">Agregar Hito</h3>
           <p className="text-xs text-slate-500">
-            Escribí o adjuntá fotos, videos o voz. Lo que necesites.
+            Escribí lo que pasó y/o adjuntá fotos, videos, voz. Todo opcional.
           </p>
         </div>
       </header>
 
-      <div className="space-y-3 p-4 sm:p-5">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Título del hito (ej. Apertura de muros / Recepción de materiales)"
-          className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm font-semibold focus:border-slate-400 focus:outline-none"
-        />
+      <div className="space-y-4 p-4 sm:p-5">
+        {aiTitle ? (
+          <div className="flex items-start gap-2 rounded-lg bg-violet-50 px-3 py-2 ring-1 ring-inset ring-violet-200">
+            <Sparkles className="mt-0.5 size-4 shrink-0 text-violet-600" />
+            <div className="flex-1">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-violet-700">
+                Título sugerido por IA
+              </p>
+              <input
+                value={aiTitle}
+                onChange={(e) => setAiTitle(e.target.value)}
+                className="w-full bg-transparent text-sm font-semibold text-slate-900 focus:outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setAiTitle(null)}
+              className="text-violet-400 hover:text-violet-700"
+              aria-label="Descartar título"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        ) : null}
 
         <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Descripción (qué se hizo, qué viene). Opcional."
-          rows={3}
-          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Qué pasó (ej. 'Llegaron los paneles y arrancamos el armado'). Podés dejarlo vacío si subís fotos o voz."
+          rows={4}
+          autoFocus
+          className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm leading-relaxed focus:border-slate-400 focus:outline-none"
         />
 
-        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Adjuntar
-          </span>
-          <button
-            type="button"
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <CaptureTile
+            icon={Camera}
+            color="#3B82F6"
+            label="Foto"
             onClick={() => photoRef.current?.click()}
-            disabled={uploading}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            <Camera className="size-3.5 text-blue-600" />
-            Foto
-          </button>
-          <button
-            type="button"
+            loading={uploading}
+          />
+          <CaptureTile
+            icon={VideoIcon}
+            color="#8B5CF6"
+            label="Video"
             onClick={() => videoRef.current?.click()}
-            disabled={uploading}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            <VideoIcon className="size-3.5 text-violet-600" />
-            Video
-          </button>
-          <button
-            type="button"
+            loading={uploading}
+          />
+          <CaptureTile
+            icon={Mic}
+            color="#EF4444"
+            label="Voz"
             onClick={() => setShowVoice(true)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            <Mic className="size-3.5 text-red-600" />
-            Voz
-          </button>
-          <button
-            type="button"
+          />
+          <CaptureTile
+            icon={PencilLine}
+            color="#10B981"
+            label="Nota"
             onClick={() => setShowNote(true)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            <PencilLine className="size-3.5 text-emerald-600" />
-            Nota
-          </button>
-          {uploading ? (
-            <span className="inline-flex items-center gap-1 text-xs text-slate-500">
-              <Loader2 className="size-3 animate-spin" />
-              Subiendo…
-            </span>
-          ) : null}
+          />
         </div>
 
         <input
@@ -775,12 +826,6 @@ function AddMilestoneForm({
           }
         />
 
-        {uploadError ? (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-inset ring-red-600/20">
-            {uploadError}
-          </p>
-        ) : null}
-
         {media.length > 0 ? (
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {media.map((m) => (
@@ -808,6 +853,12 @@ function AddMilestoneForm({
               </div>
             ))}
           </div>
+        ) : null}
+
+        {error ? (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-inset ring-red-600/20">
+            {error}
+          </p>
         ) : null}
 
         <div
@@ -864,15 +915,25 @@ function AddMilestoneForm({
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
           <button
             type="button"
-            onClick={handle}
-            disabled={!title.trim() || busy || uploading}
+            onClick={handleSave}
+            disabled={!canSave || busy}
             className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
           >
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
             Guardar hito
+          </button>
+          <button
+            type="button"
+            onClick={handleIA}
+            disabled={!canIA}
+            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-violet-600 to-blue-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
+            title="Que la IA proponga título y descripción desde tu texto y fotos"
+          >
+            {running ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+            Estructurar con IA
           </button>
           <button
             type="button"
@@ -887,8 +948,8 @@ function AddMilestoneForm({
       {showVoice ? (
         <VoiceCaptureModal
           onClose={() => setShowVoice(false)}
-          onSave={async (text) => {
-            appendToDescription(text);
+          onSave={async (t) => {
+            appendText(t);
             setShowVoice(false);
           }}
         />
@@ -896,13 +957,44 @@ function AddMilestoneForm({
       {showNote ? (
         <TextCaptureModal
           onClose={() => setShowNote(false)}
-          onSave={async (text) => {
-            appendToDescription(text);
+          onSave={async (t) => {
+            appendText(t);
             setShowNote(false);
           }}
         />
       ) : null}
     </div>
+  );
+}
+
+function CaptureTile({
+  icon: Icon,
+  color,
+  label,
+  onClick,
+  loading,
+}: {
+  icon: typeof Camera;
+  color: string;
+  label: string;
+  onClick: () => void;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-3 py-4 text-sm font-semibold text-slate-700 transition-all hover:border-slate-300 hover:bg-white disabled:opacity-50"
+    >
+      <span
+        className="flex size-10 items-center justify-center rounded-full"
+        style={{ backgroundColor: `${color}1f`, color }}
+      >
+        {loading ? <Loader2 className="size-5 animate-spin" /> : <Icon className="size-5" />}
+      </span>
+      {label}
+    </button>
   );
 }
 
