@@ -340,10 +340,21 @@ export async function removeProjectCapture(
   return { ok: true };
 }
 
-export async function structureTechnicianProjectWithAI(
+export type ProposedTechStructure = {
+  milestones: Array<{
+    milestone_id: string | null;
+    title: string;
+    description_es: string | null;
+    status: "pendiente" | "en_progreso" | "completado";
+    entries: Array<{ occurred_on: string | null; text_es: string; media_paths: string[] }>;
+  }>;
+  processed_capture_ids: string[];
+};
+
+export async function proposeTechnicianProjectStructure(
   token: string,
   projectId: string,
-): Promise<Result<{ added: number }>> {
+): Promise<Result<{ proposal: ProposedTechStructure }>> {
   const supabase = await createClient();
   const ctx = await loadProjectForToken(token, projectId);
   if (!ctx) return { error: "Proyecto no encontrado" };
@@ -351,7 +362,6 @@ export async function structureTechnicianProjectWithAI(
   const unprocessed = (ctx.project.capture_data ?? []).filter((c) => !c.processed_at);
   if (unprocessed.length === 0) return { error: "No hay capturas nuevas para procesar" };
 
-  // Download photos referenced in unprocessed captures
   const photoBuffers: { id: string; path: string; data: Buffer; mimeType: string }[] = [];
   for (const c of unprocessed) {
     if (c.kind === "photo" && c.media_path) {
@@ -378,16 +388,56 @@ export async function structureTechnicianProjectWithAI(
       photos: photoBuffers,
     });
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Falló estructurar con IA" };
+    return { error: e instanceof Error ? e.message : "Falló procesar con IA" };
   }
 
+  // Resolve AI's capture_ids → media_paths so the RPC can attach photos to entries.
+  const pathByCaptureId = new Map(
+    (ctx.project.capture_data ?? [])
+      .filter((c) => c.media_path)
+      .map((c) => [c.id, c.media_path as string]),
+  );
+  type AIEntry = { occurred_on: string | null; text_es: string; capture_ids?: string[] };
+  type AIMilestone = {
+    milestone_id: string | null;
+    title: string;
+    description_es: string | null;
+    status: "pendiente" | "en_progreso" | "completado";
+    entries: AIEntry[];
+  };
+  const aiResult = result as unknown as { milestones: AIMilestone[]; processed_capture_ids: string[] };
+  const proposal: ProposedTechStructure = {
+    milestones: aiResult.milestones.map((m) => ({
+      milestone_id: m.milestone_id,
+      title: m.title,
+      description_es: m.description_es,
+      status: m.status,
+      entries: m.entries.map((e) => ({
+        occurred_on: e.occurred_on,
+        text_es: e.text_es,
+        media_paths: (e.capture_ids ?? [])
+          .map((id) => pathByCaptureId.get(id))
+          .filter((p): p is string => !!p),
+      })),
+    })),
+    processed_capture_ids: aiResult.processed_capture_ids,
+  };
+
+  return { ok: true, data: { proposal } };
+}
+
+export async function applyTechnicianProjectProposal(
+  token: string,
+  projectId: string,
+  proposal: ProposedTechStructure,
+): Promise<Result<{ added: number }>> {
+  const supabase = await createClient();
   const { error } = await supabase.rpc("apply_technician_project_structuring", {
     _token: token,
     _project_id: projectId,
-    _structured: result,
+    _structured: proposal,
   });
   if (error) return { error: error.message };
-
   revalidatePath(`/t/${token}/projects/${projectId}`);
-  return { ok: true, data: { added: result.processed_capture_ids.length } };
+  return { ok: true, data: { added: proposal.processed_capture_ids.length } };
 }
