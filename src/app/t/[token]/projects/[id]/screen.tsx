@@ -61,6 +61,7 @@ import {
   updateTechnicianProjectSection,
   deleteTechnicianProjectSection,
   reorderTechnicianProjectSections,
+  moveTechnicianMilestone,
 } from "../actions";
 import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 import { ProjectCaptureSection } from "@/components/projects/capture-section";
@@ -157,6 +158,7 @@ export function TechnicianProjectScreen({
     description: string;
     occurred_on: string;
     status: MilestoneStatus;
+    section_id: string | null;
   }) {
     setError(null);
     const r = await addTechnicianMilestone(token, {
@@ -170,10 +172,14 @@ export function TechnicianProjectScreen({
       setError(r.error);
       return;
     }
+    if (input.section_id) {
+      await moveTechnicianMilestone(token, r.data.id, project.id, input.section_id);
+    }
     setMilestones((prev) => [
       ...prev,
       {
         id: r.data.id,
+        section_id: input.section_id,
         title: input.title,
         description_es: input.description.trim() || null,
         status: input.status,
@@ -385,63 +391,108 @@ export function TechnicianProjectScreen({
         ) : null}
 
         <section className="mt-7">
-          {status !== "aceptado" ? (
-            <SectionTabs
-              sections={sections}
-              activeId={activeSection}
-              onSelect={setActiveSection}
-              onCreate={async ({ name, color }) => {
-                const r = await createTechnicianProjectSection(token, project.id, { name, color });
-                if (r && "ok" in r) router.refresh();
-                return r;
-              }}
-              onRename={async (id, name) => {
-                const r = await updateTechnicianProjectSection(token, project.id, id, { name });
-                if (r && "ok" in r) router.refresh();
-                return r;
-              }}
-              onRecolor={async (id, color) => {
-                const r = await updateTechnicianProjectSection(token, project.id, id, { color });
-                if (r && "ok" in r) router.refresh();
-                return r;
-              }}
-              onDelete={async (id) => {
-                const r = await deleteTechnicianProjectSection(token, project.id, id);
-                if (r && "ok" in r) {
-                  if (activeSection === id) setActiveSection("all");
-                  router.refresh();
-                }
-                return r;
-              }}
-              onReorder={async (ids) => {
-                const r = await reorderTechnicianProjectSections(token, project.id, ids);
-                if (r && "ok" in r) router.refresh();
-                return r;
-              }}
-            />
-          ) : sections.length > 0 ? (
-            <SectionTabs sections={sections} activeId={activeSection} onSelect={setActiveSection} />
-          ) : null}
-
-          <header className="mb-4 mt-4 flex items-center justify-between">
-            <h2 className="text-base font-bold text-slate-900">Hitos</h2>
-            {status !== "aceptado" ? (
+          {(() => {
+            const counts: Record<string, { total: number; done: number }> = {
+              all: {
+                total: milestones.length,
+                done: milestones.filter((m) => m.status === "completado").length,
+              },
+            };
+            for (const s of sections) {
+              const items = milestones.filter((m) => m.section_id === s.id);
+              counts[s.id] = {
+                total: items.length,
+                done: items.filter((m) => m.status === "completado").length,
+              };
+            }
+            const rightAction = status !== "aceptado" ? (
               <button
                 type="button"
                 onClick={() => setShowAddForm((v) => !v)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-slate-800"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
               >
                 <Plus className="size-4" />
-                Agregar hito
+                <span className="hidden sm:inline">Agregar hito</span>
               </button>
-            ) : null}
-          </header>
+            ) : null;
+
+            if (status === "aceptado" && sections.length === 0) return null;
+
+            return (
+              <div className="sticky top-0 z-20 -mx-2 bg-slate-50/95 px-2 pt-2 backdrop-blur-sm sm:-mx-4 sm:px-4">
+                {status !== "aceptado" ? (
+                  <SectionTabs
+                    sections={sections}
+                    activeId={activeSection}
+                    onSelect={setActiveSection}
+                    counts={counts}
+                    rightAction={rightAction}
+                    onCreate={async ({ name, color }) => {
+                      const r = await createTechnicianProjectSection(token, project.id, { name, color });
+                      if (r && "ok" in r) router.refresh();
+                      return r;
+                    }}
+                    onRename={async (id, name) => {
+                      const r = await updateTechnicianProjectSection(token, project.id, id, { name });
+                      if (r && "ok" in r) router.refresh();
+                      return r;
+                    }}
+                    onRecolor={async (id, color) => {
+                      const r = await updateTechnicianProjectSection(token, project.id, id, { color });
+                      if (r && "ok" in r) router.refresh();
+                      return r;
+                    }}
+                    onDelete={async (id) => {
+                      const r = await deleteTechnicianProjectSection(token, project.id, id);
+                      if (r && "ok" in r) {
+                        if (activeSection === id) setActiveSection("all");
+                        router.refresh();
+                      }
+                      return r;
+                    }}
+                    onReorder={async (ids) => {
+                      const r = await reorderTechnicianProjectSections(token, project.id, ids);
+                      if (r && "ok" in r) router.refresh();
+                      return r;
+                    }}
+                  />
+                ) : (
+                  <SectionTabs
+                    sections={sections}
+                    activeId={activeSection}
+                    onSelect={setActiveSection}
+                    counts={counts}
+                  />
+                )}
+              </div>
+            );
+          })()}
+
+          {(() => {
+            const activeName = activeSection === "all"
+              ? `Historial de ${project.name}`
+              : sections.find((s) => s.id === activeSection)?.name ?? project.name;
+            const accent =
+              activeSection === "all"
+                ? "#64748B"
+                : SECTION_COLOR_HEX[
+                    sections.find((s) => s.id === activeSection)?.color ?? "slate"
+                  ];
+            return (
+              <header className="mb-3 mt-5 flex items-center gap-2.5">
+                <span className="size-2.5 rounded-full" style={{ backgroundColor: accent }} />
+                <h2 className="text-lg font-bold text-slate-900">{activeName}</h2>
+              </header>
+            );
+          })()}
 
           {showAddForm ? (
             <AddMilestoneForm
               onCancel={() => setShowAddForm(false)}
               onSave={handleAddMilestone}
               pending={pending}
+              sections={sections}
+              defaultSectionId={activeSection === "all" ? null : activeSection}
             />
           ) : null}
 
@@ -453,6 +504,7 @@ export function TechnicianProjectScreen({
                 projectId={project.id}
                 milestone={m}
                 readOnly={status === "aceptado"}
+                sections={sections}
                 onLocalUpdate={(patch) =>
                   setMilestones((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...patch } : x)))
                 }
@@ -541,6 +593,8 @@ function AddMilestoneForm({
   onCancel,
   onSave,
   pending,
+  sections,
+  defaultSectionId,
 }: {
   onCancel: () => void;
   onSave: (input: {
@@ -548,19 +602,29 @@ function AddMilestoneForm({
     description: string;
     occurred_on: string;
     status: MilestoneStatus;
+    section_id: string | null;
   }) => Promise<void>;
   pending: boolean;
+  sections: ProjectSection[];
+  defaultSectionId: string | null;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [occurredOn, setOccurredOn] = useState(new Date().toISOString().slice(0, 10));
   const [status, setStatus] = useState<MilestoneStatus>("en_progreso");
+  const [sectionId, setSectionId] = useState<string | null>(defaultSectionId);
   const [submitting, setSubmitting] = useState(false);
 
   async function handle() {
     if (!title.trim()) return;
     setSubmitting(true);
-    await onSave({ title: title.trim(), description, occurred_on: occurredOn, status });
+    await onSave({
+      title: title.trim(),
+      description,
+      occurred_on: occurredOn,
+      status,
+      section_id: sectionId,
+    });
     setSubmitting(false);
   }
   const busy = submitting || pending;
@@ -581,7 +645,12 @@ function AddMilestoneForm({
           rows={3}
           className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
         />
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div
+          className={cn(
+            "grid grid-cols-1 gap-3",
+            sections.length > 0 ? "sm:grid-cols-3" : "sm:grid-cols-2",
+          )}
+        >
           <label className="block text-xs">
             <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
               Fecha
@@ -609,6 +678,25 @@ function AddMilestoneForm({
               ))}
             </select>
           </label>
+          {sections.length > 0 ? (
+            <label className="block text-xs">
+              <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
+                Pestaña
+              </span>
+              <select
+                value={sectionId ?? ""}
+                onChange={(e) => setSectionId(e.target.value || null)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+              >
+                <option value="">Sin categoría</option>
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -641,6 +729,7 @@ function MilestoneRow({
   projectId,
   milestone,
   readOnly,
+  sections,
   onLocalUpdate,
   onLocalRemove,
   onPreview,
@@ -649,6 +738,7 @@ function MilestoneRow({
   projectId: string;
   milestone: ProjectMilestone;
   readOnly: boolean;
+  sections: ProjectSection[];
   onLocalUpdate: (patch: Partial<ProjectMilestone>) => void;
   onLocalRemove: () => void;
   onPreview: (m: ProjectMedia) => void;
@@ -658,6 +748,7 @@ function MilestoneRow({
   const [description, setDescription] = useState(milestone.description_es ?? "");
   const [status, setStatus] = useState<MilestoneStatus>(milestone.status);
   const [occurredOn, setOccurredOn] = useState(milestone.occurred_on ?? "");
+  const [sectionId, setSectionId] = useState<string | null>(milestone.section_id ?? null);
   const [uploading, setUploading] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
@@ -709,11 +800,19 @@ function MilestoneRow({
       setError(r.error);
       return;
     }
+    if (sectionId !== (milestone.section_id ?? null)) {
+      const mv = await moveTechnicianMilestone(token, milestone.id, projectId, sectionId);
+      if (mv && "error" in mv) {
+        setError(mv.error);
+        return;
+      }
+    }
     onLocalUpdate({
       title: title.trim() || milestone.title,
       description_es: description.trim() || null,
       status,
       occurred_on: occurredOn || null,
+      section_id: sectionId,
     });
     setEditing(false);
     router.refresh();
@@ -758,7 +857,12 @@ function MilestoneRow({
               rows={3}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
             />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div
+              className={cn(
+                "grid grid-cols-1 gap-3",
+                sections.length > 0 ? "sm:grid-cols-3" : "sm:grid-cols-2",
+              )}
+            >
               <input
                 type="date"
                 value={occurredOn}
@@ -776,6 +880,21 @@ function MilestoneRow({
                   </option>
                 ))}
               </select>
+              {sections.length > 0 ? (
+                <select
+                  value={sectionId ?? ""}
+                  onChange={(e) => setSectionId(e.target.value || null)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+                  title="Pestaña"
+                >
+                  <option value="">Sin categoría</option>
+                  {sections.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
             </div>
             <div className="flex items-center gap-2">
               <button

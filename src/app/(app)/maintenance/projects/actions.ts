@@ -153,6 +153,7 @@ export async function updateMilestone(
     description_es: string | null;
     status: MilestoneStatus;
     occurred_on: string | null;
+    section_id: string | null;
   }>,
 ): Promise<Result> {
   const supabase = await createClient();

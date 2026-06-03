@@ -189,22 +189,55 @@ export function PublicProjectScreen({
         ) : null}
 
         <section>
-          <header className="mb-6 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Línea de tiempo
-            </h2>
-            <ShareButton />
-          </header>
-
           {sections.length > 0 ? (
             <div className="mb-6">
-              <SectionTabs
-                sections={sections}
-                activeId={activeSection}
-                onSelect={setActiveSection}
-              />
+              {(() => {
+                const counts: Record<string, { total: number; done: number }> = {
+                  all: {
+                    total: data.milestones.length,
+                    done: data.milestones.filter((m) => m.status === "completado").length,
+                  },
+                };
+                for (const s of sections) {
+                  const items = data.milestones.filter((m) => m.section_id === s.id);
+                  counts[s.id] = {
+                    total: items.length,
+                    done: items.filter((m) => m.status === "completado").length,
+                  };
+                }
+                return (
+                  <SectionTabs
+                    sections={sections}
+                    activeId={activeSection}
+                    onSelect={setActiveSection}
+                    counts={counts}
+                    rightAction={<ShareButton />}
+                  />
+                );
+              })()}
             </div>
           ) : null}
+
+          {(() => {
+            const activeName = activeSection === "all"
+              ? `Historial de ${project.name}`
+              : sections.find((s) => s.id === activeSection)?.name ?? project.name;
+            const accent =
+              activeSection === "all"
+                ? "#64748B"
+                : SECTION_COLOR_HEX[
+                    sections.find((s) => s.id === activeSection)?.color ?? "slate"
+                  ];
+            return (
+              <header className="mb-6 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="size-2.5 rounded-full" style={{ backgroundColor: accent }} />
+                  <h2 className="text-lg font-bold text-slate-900 sm:text-xl">{activeName}</h2>
+                </div>
+                {sections.length === 0 ? <ShareButton /> : null}
+              </header>
+            );
+          })()}
 
           {(() => {
             if (visibleMilestones.length === 0) {

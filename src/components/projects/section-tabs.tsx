@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { Check, ChevronDown, Loader2, MoreHorizontal, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, Loader2, MoreHorizontal, Pencil, Plus, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   SECTION_COLORS,
@@ -11,10 +11,16 @@ import {
   type SectionColor,
 } from "@/lib/projects/types";
 
+export type SectionCount = { total: number; done: number };
+
 type SectionTabsProps = {
   sections: ProjectSection[];
   activeId: string | "all";
   onSelect: (id: string | "all") => void;
+  /** Count/progress per section id, plus "all" key for the combined total. */
+  counts?: Record<string, SectionCount>;
+  /** Right-side slot (e.g. primary action button). */
+  rightAction?: React.ReactNode;
   /** Editable controls. Omit for the read-only public view. */
   onCreate?: (input: { name: string; color: SectionColor }) => Promise<{ error: string } | { ok: true }>;
   onRename?: (sectionId: string, name: string) => Promise<{ error: string } | { ok: true }>;
@@ -27,6 +33,8 @@ export function SectionTabs({
   sections,
   activeId,
   onSelect,
+  counts,
+  rightAction,
   onCreate,
   onRename,
   onRecolor,
@@ -70,13 +78,14 @@ export function SectionTabs({
 
   return (
     <div className="border-b border-slate-200 bg-white">
-      <div className="flex items-end gap-1 overflow-x-auto px-2 pt-2 sm:px-4">
+      <div className="flex items-end gap-1.5 overflow-x-auto px-2 pt-2 sm:px-4">
         {showAllTab ? (
           <TabButton
             label="Todos"
             color="slate"
             active={activeId === "all"}
             onClick={() => onSelect("all")}
+            count={counts?.all}
           />
         ) : null}
 
@@ -107,6 +116,7 @@ export function SectionTabs({
                   color={s.color}
                   active={active}
                   onClick={() => onSelect(s.id)}
+                  count={counts?.[s.id]}
                   trailing={
                     isEditable ? (
                       <button
@@ -115,10 +125,13 @@ export function SectionTabs({
                           e.stopPropagation();
                           setOpenMenuFor(openMenuFor === s.id ? null : s.id);
                         }}
-                        className="ml-1 flex size-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        className={cn(
+                          "ml-1 flex size-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700",
+                          active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                        )}
                         aria-label="Acciones"
                       >
-                        <ChevronDown className="size-3" />
+                        <MoreHorizontal className="size-3.5" />
                       </button>
                     ) : null
                   }
@@ -167,16 +180,20 @@ export function SectionTabs({
             <button
               type="button"
               onClick={() => setShowNew(true)}
-              className="ml-1 mb-[1px] inline-flex items-center gap-1 rounded-t-lg border border-b-0 border-dashed border-slate-300 bg-slate-50/50 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+              className="ml-1 mb-[1px] inline-flex items-center gap-1.5 rounded-t-lg border border-b-0 border-dashed border-slate-300 bg-slate-50/50 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
               title="Agregar pestaña"
             >
-              <Plus className="size-3.5" />
+              <Plus className="size-4" />
               <span className="hidden sm:inline">Nueva pestaña</span>
             </button>
           )
         ) : null}
 
         {pending ? <Loader2 className="ml-2 mb-2 size-3.5 animate-spin text-slate-400" /> : null}
+
+        {rightAction ? (
+          <div className="ml-auto flex items-center pb-1.5 pl-2">{rightAction}</div>
+        ) : null}
       </div>
     </div>
   );
@@ -188,21 +205,24 @@ function TabButton({
   active,
   onClick,
   trailing,
+  count,
 }: {
   label: string;
   color: SectionColor;
   active: boolean;
   onClick: () => void;
   trailing?: React.ReactNode;
+  count?: SectionCount;
 }) {
   const accent = SECTION_COLOR_HEX[color];
   const softBg = SECTION_COLOR_SOFT[color];
+  const pct = count && count.total > 0 ? Math.round((count.done / count.total) * 100) : 0;
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        "group relative inline-flex items-center gap-1.5 rounded-t-lg border-b-0 px-3 py-1.5 text-xs font-semibold transition-colors",
+        "group relative inline-flex items-center gap-2 rounded-t-lg border-b-0 px-3.5 py-2 text-sm font-semibold transition-colors",
         active
           ? "border border-slate-200 bg-white text-slate-900 -mb-px"
           : "border border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900",
@@ -214,11 +234,34 @@ function TabButton({
       }
     >
       <span
-        className="size-2 rounded-full"
+        className="size-2.5 rounded-full"
         style={{ backgroundColor: active ? accent : softBg }}
       />
-      <span className="max-w-[160px] truncate">{label}</span>
+      <span className="max-w-[180px] truncate">{label}</span>
+      {count && count.total > 0 ? (
+        <span
+          className={cn(
+            "rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+            active ? "bg-slate-100 text-slate-600" : "bg-slate-100/80 text-slate-500",
+          )}
+        >
+          {count.done === count.total
+            ? count.total
+            : `${count.done}/${count.total}`}
+        </span>
+      ) : null}
       {trailing}
+      {count && count.total > 0 ? (
+        <span
+          className="absolute bottom-0 left-2 right-2 h-[2px] overflow-hidden rounded-full bg-slate-100"
+          aria-hidden
+        >
+          <span
+            className="block h-full rounded-full transition-[width] duration-300"
+            style={{ width: `${pct}%`, backgroundColor: accent }}
+          />
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -299,7 +342,7 @@ function RenameInline({
         e.preventDefault();
         if (name.trim()) onSave(name.trim());
       }}
-      className="-mb-px flex items-center gap-1 rounded-t-lg border border-slate-300 bg-white px-2 py-1"
+      className="-mb-px flex items-center gap-1.5 rounded-t-lg border border-slate-300 bg-white px-2.5 py-1.5"
     >
       <input
         value={name}
@@ -309,7 +352,7 @@ function RenameInline({
           if (e.relatedTarget) return;
           onCancel();
         }}
-        className="w-32 bg-transparent text-xs font-semibold text-slate-900 focus:outline-none"
+        className="w-36 bg-transparent text-sm font-semibold text-slate-900 focus:outline-none"
       />
       <button type="submit" className="text-emerald-600 hover:text-emerald-800" aria-label="Guardar">
         <Check className="size-3.5" />
@@ -336,7 +379,7 @@ function NewTabInline({
         e.preventDefault();
         if (name.trim()) onSave(name.trim(), color);
       }}
-      className="-mb-px flex items-center gap-1 rounded-t-lg border border-slate-300 bg-white px-2 py-1"
+      className="-mb-px flex items-center gap-1.5 rounded-t-lg border border-slate-300 bg-white px-2.5 py-1.5"
     >
       <span
         className="inline-block size-2.5 rounded-full"
@@ -347,7 +390,7 @@ function NewTabInline({
         autoFocus
         onChange={(e) => setName(e.target.value)}
         placeholder="Nombre"
-        className="w-32 bg-transparent text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:outline-none"
+        className="w-36 bg-transparent text-sm font-semibold text-slate-900 placeholder:text-slate-400 focus:outline-none"
       />
       <ColorPicker color={color} onChange={setColor} />
       <button type="submit" className="text-emerald-600 hover:text-emerald-800" aria-label="Crear">
