@@ -37,7 +37,9 @@ import {
   type ProjectMedia,
   type ProjectMilestone,
   type ProjectStatus,
+  type ProjectSection,
 } from "@/lib/projects/types";
+import { SectionTabs } from "@/components/projects/section-tabs";
 import { compressImage } from "@/lib/image-compress";
 import {
   addProjectCapture,
@@ -53,6 +55,10 @@ import {
   applyTechnicianProjectProposal,
   updateTechnicianMilestone,
   updateTechnicianProject,
+  createTechnicianProjectSection,
+  updateTechnicianProjectSection,
+  deleteTechnicianProjectSection,
+  reorderTechnicianProjectSections,
 } from "../actions";
 import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 import { ProjectCaptureSection } from "@/components/projects/capture-section";
@@ -73,6 +79,7 @@ export function TechnicianProjectScreen({
   client,
   location,
   milestones: initialMilestones,
+  sections,
   captures: initialCaptures,
 }: {
   token: string;
@@ -80,6 +87,7 @@ export function TechnicianProjectScreen({
   client: { id: string; name: string };
   location: { id: string; name: string } | null;
   milestones: ProjectMilestone[];
+  sections: ProjectSection[];
   captures: ProjectCapture[];
 }) {
   const router = useRouter();
@@ -87,6 +95,9 @@ export function TechnicianProjectScreen({
   const [status, setStatus] = useState<ProjectStatus>(project.status);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [activeSection, setActiveSection] = useState<string | "all">(
+    sections.length > 0 ? sections[0].id : "all",
+  );
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -365,7 +376,45 @@ export function TechnicianProjectScreen({
         ) : null}
 
         <section className="mt-7">
-          <header className="mb-4 flex items-center justify-between">
+          {status !== "aceptado" ? (
+            <SectionTabs
+              sections={sections}
+              activeId={activeSection}
+              onSelect={setActiveSection}
+              onCreate={async ({ name, color }) => {
+                const r = await createTechnicianProjectSection(token, project.id, { name, color });
+                if (r && "ok" in r) router.refresh();
+                return r;
+              }}
+              onRename={async (id, name) => {
+                const r = await updateTechnicianProjectSection(token, project.id, id, { name });
+                if (r && "ok" in r) router.refresh();
+                return r;
+              }}
+              onRecolor={async (id, color) => {
+                const r = await updateTechnicianProjectSection(token, project.id, id, { color });
+                if (r && "ok" in r) router.refresh();
+                return r;
+              }}
+              onDelete={async (id) => {
+                const r = await deleteTechnicianProjectSection(token, project.id, id);
+                if (r && "ok" in r) {
+                  if (activeSection === id) setActiveSection("all");
+                  router.refresh();
+                }
+                return r;
+              }}
+              onReorder={async (ids) => {
+                const r = await reorderTechnicianProjectSections(token, project.id, ids);
+                if (r && "ok" in r) router.refresh();
+                return r;
+              }}
+            />
+          ) : sections.length > 0 ? (
+            <SectionTabs sections={sections} activeId={activeSection} onSelect={setActiveSection} />
+          ) : null}
+
+          <header className="mb-4 mt-4 flex items-center justify-between">
             <h2 className="text-base font-bold text-slate-900">Hitos</h2>
             {status !== "aceptado" ? (
               <button
@@ -387,18 +436,24 @@ export function TechnicianProjectScreen({
             />
           ) : null}
 
-          {milestones.length === 0 && !showAddForm ? (
-            <div className="rounded-2xl border border-dashed border-border bg-card py-12 text-center">
-              <Hammer className="mx-auto mb-3 size-7 text-slate-300" />
-              <p className="text-sm font-semibold text-slate-900">Sin hitos todavía</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Cargá el primer hito (ej. &ldquo;Llegada de materiales&rdquo;) con foto del momento.
-              </p>
-            </div>
-          ) : null}
-
-          <ol className="relative mt-5 space-y-5 border-l-2 border-slate-200 pl-6">
-            {milestones.map((m) => (
+          {(() => {
+            const filtered = activeSection === "all"
+              ? milestones
+              : milestones.filter((m) => m.section_id === activeSection);
+            if (filtered.length === 0 && !showAddForm) {
+              return (
+                <div className="rounded-2xl border border-dashed border-border bg-card py-12 text-center">
+                  <Hammer className="mx-auto mb-3 size-7 text-slate-300" />
+                  <p className="text-sm font-semibold text-slate-900">Sin hitos en esta pestaña</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Cargá el primer hito (ej. &ldquo;Llegada de materiales&rdquo;) con foto del momento.
+                  </p>
+                </div>
+              );
+            }
+            return (
+              <ol className="relative mt-5 space-y-5 border-l-2 border-slate-200 pl-6">
+                {filtered.map((m) => (
               <MilestoneRow
                 key={m.id}
                 token={token}
@@ -412,7 +467,9 @@ export function TechnicianProjectScreen({
                 onPreview={(media) => setLightbox(media)}
               />
             ))}
-          </ol>
+              </ol>
+            );
+          })()}
         </section>
       </main>
 

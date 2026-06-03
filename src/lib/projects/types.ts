@@ -59,6 +59,48 @@ export const MILESTONE_STATUS_COLOR: Record<MilestoneStatus, string> = {
   completado: "#10B981",
 };
 
+export type SectionColor = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet" | "cyan" | "orange";
+
+export const SECTION_COLORS: SectionColor[] = [
+  "slate",
+  "blue",
+  "emerald",
+  "amber",
+  "rose",
+  "violet",
+  "cyan",
+  "orange",
+];
+
+export const SECTION_COLOR_HEX: Record<SectionColor, string> = {
+  slate: "#64748B",
+  blue: "#2563EB",
+  emerald: "#10B981",
+  amber: "#F59E0B",
+  rose: "#EF4444",
+  violet: "#8B5CF6",
+  cyan: "#06B6D4",
+  orange: "#F97316",
+};
+
+export const SECTION_COLOR_SOFT: Record<SectionColor, string> = {
+  slate: "#F1F5F9",
+  blue: "#DBEAFE",
+  emerald: "#D1FAE5",
+  amber: "#FEF3C7",
+  rose: "#FEE2E2",
+  violet: "#EDE9FE",
+  cyan: "#CFFAFE",
+  orange: "#FFEDD5",
+};
+
+export type ProjectSection = {
+  id: string;
+  name: string;
+  color: SectionColor;
+  position: number;
+};
+
 export type ProjectMedia = {
   id: string;
   kind: "photo" | "video";
@@ -92,6 +134,7 @@ export type ProjectCapture = {
 export type ProjectMilestone = {
   id: string;
   project_id?: string;
+  section_id?: string | null;
   title: string;
   description_es: string | null;
   status: MilestoneStatus;
@@ -154,6 +197,7 @@ export type PublicProjectData = {
   client: { id: string; name: string; brand_color: string | null; logo_path: string | null };
   location: { id: string; name: string; address: string | null } | null;
   service_provider: { name: string; logo_path: string | null };
+  sections: ProjectSection[];
   milestones: ProjectMilestone[];
   acceptance: ProjectAcceptance | null;
 };

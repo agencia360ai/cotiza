@@ -27,6 +27,7 @@ import {
   type ProjectMilestone,
   type PublicProjectData,
 } from "@/lib/projects/types";
+import { SectionTabs } from "@/components/projects/section-tabs";
 import { acceptProject } from "./actions";
 
 export function PublicProjectScreen({
@@ -40,6 +41,14 @@ export function PublicProjectScreen({
   const [showAcceptForm, setShowAcceptForm] = useState(false);
   const [lightbox, setLightbox] = useState<ProjectMedia | null>(null);
   const project = data.project;
+  const sections = data.sections ?? [];
+  const [activeSection, setActiveSection] = useState<string | "all">(
+    sections.length > 0 ? sections[0].id : "all",
+  );
+  const visibleMilestones =
+    sections.length === 0 || activeSection === "all"
+      ? data.milestones
+      : data.milestones.filter((m) => m.section_id === activeSection);
   const total = data.milestones.length;
   const done = data.milestones.filter((m) => m.status === "completado").length;
   const pct = total === 0 ? 0 : Math.round((done / total) * 100);
@@ -184,17 +193,33 @@ export function PublicProjectScreen({
             <ShareButton />
           </header>
 
-          {data.milestones.length === 0 ? (
+          {sections.length > 0 ? (
+            <div className="mb-6">
+              <SectionTabs
+                sections={sections}
+                activeId={activeSection}
+                onSelect={setActiveSection}
+              />
+            </div>
+          ) : null}
+
+          {visibleMilestones.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white py-14 text-center">
               <Hammer className="mx-auto mb-3 size-8 text-slate-300" />
-              <p className="text-sm font-semibold text-slate-900">Aún sin hitos cargados</p>
+              <p className="text-sm font-semibold text-slate-900">
+                {data.milestones.length === 0
+                  ? "Aún sin hitos cargados"
+                  : "Sin hitos en esta sección"}
+              </p>
               <p className="mt-1 text-sm text-slate-500">
-                Cuando arranque la obra vas a ver acá el progreso paso a paso.
+                {data.milestones.length === 0
+                  ? "Cuando arranque la obra vas a ver acá el progreso paso a paso."
+                  : "Probá con otra pestaña para ver el avance."}
               </p>
             </div>
           ) : (
             <ol className="relative space-y-7 border-l-2 border-slate-200 pl-7 sm:pl-10">
-              {data.milestones.map((m, i) => (
+              {visibleMilestones.map((m, i) => (
                 <PublicMilestone
                   key={m.id}
                   milestone={m}

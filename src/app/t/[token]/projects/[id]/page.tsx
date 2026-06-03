@@ -5,6 +5,8 @@ import type {
   MilestoneStatus,
   ProjectCapture,
   ProjectMilestone,
+  ProjectSection,
+  SectionColor,
 } from "@/lib/projects/types";
 import { TechnicianProjectScreen } from "./screen";
 
@@ -31,8 +33,10 @@ type RpcResult = {
   project: ClientProject & { capture_data?: ProjectCapture[] };
   client: { id: string; name: string };
   location: { id: string; name: string } | null;
+  sections?: { id: string; name: string; color: string; position: number }[];
   milestones: {
     id: string;
+    section_id: string | null;
     title: string;
     description_es: string | null;
     status: MilestoneStatus;
@@ -61,6 +65,7 @@ export default async function TechnicianProjectPage({
   const result = data as RpcResult;
   const milestones: ProjectMilestone[] = (result.milestones ?? []).map((m) => ({
     id: m.id,
+    section_id: m.section_id,
     title: m.title,
     description_es: m.description_es,
     status: m.status,
@@ -88,6 +93,13 @@ export default async function TechnicianProjectPage({
       })),
   }));
 
+  const sections: ProjectSection[] = (result.sections ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    color: s.color as SectionColor,
+    position: s.position,
+  }));
+
   return (
     <TechnicianProjectScreen
       token={token}
@@ -95,6 +107,7 @@ export default async function TechnicianProjectPage({
       client={result.client}
       location={result.location}
       milestones={milestones}
+      sections={sections}
       captures={result.project.capture_data ?? []}
     />
   );

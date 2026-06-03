@@ -39,7 +39,10 @@ import {
   type ProjectMedia,
   type ProjectMilestone,
   type ProjectStatus,
+  type ProjectSection,
+  type SectionColor,
 } from "@/lib/projects/types";
+import { SectionTabs } from "@/components/projects/section-tabs";
 import { compressImage } from "@/lib/image-compress";
 import {
   addAdminProjectCapture,
@@ -56,6 +59,10 @@ import {
   applyAdminProjectProposal,
   updateMilestone,
   updateProject,
+  createProjectSection,
+  updateProjectSection,
+  deleteProjectSection,
+  reorderProjectSections,
 } from "../actions";
 import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 import { ProjectCaptureSection } from "@/components/projects/capture-section";
@@ -77,6 +84,7 @@ export function ProjectEditor({
   location,
   clientLocations,
   milestones: initialMilestones,
+  sections,
   captures: initialCaptures,
 }: {
   project: ClientProject;
@@ -84,6 +92,7 @@ export function ProjectEditor({
   location: { id: string; name: string } | null;
   clientLocations: { id: string; name: string }[];
   milestones: ProjectMilestone[];
+  sections: ProjectSection[];
   captures: ProjectCapture[];
 }) {
   const router = useRouter();
@@ -93,6 +102,9 @@ export function ProjectEditor({
   const [shareLink, setShareLink] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
   const [pending, startTransition] = useTransition();
+  const [activeSection, setActiveSection] = useState<string | "all">(
+    sections.length > 0 ? sections[0].id : "all",
+  );
   const [error, setError] = useState<string | null>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
   const [coverPath, setCoverPath] = useState<string | null>(project.cover_photo_path);
@@ -161,6 +173,7 @@ export function ProjectEditor({
       description_es: input.description.trim() || null,
       occurred_on: input.occurred_on || null,
       status: input.status,
+      section_id: activeSection === "all" ? null : activeSection,
     });
     if ("error" in r) {
       setError(r.error);
@@ -170,6 +183,7 @@ export function ProjectEditor({
       ...prev,
       {
         id: r.data.id,
+        section_id: activeSection === "all" ? null : activeSection,
         title: input.title,
         description_es: input.description.trim() || null,
         status: input.status,
@@ -435,7 +449,41 @@ export function ProjectEditor({
 
         {/* Timeline */}
         <section className="mt-8">
-          <header className="mb-4 flex items-center justify-between">
+          <SectionTabs
+            sections={sections}
+            activeId={activeSection}
+            onSelect={setActiveSection}
+            onCreate={async ({ name, color }) => {
+              const r = await createProjectSection(project.id, { name, color });
+              if (r && "ok" in r) router.refresh();
+              return r;
+            }}
+            onRename={async (id, name) => {
+              const r = await updateProjectSection(id, project.id, { name });
+              if (r && "ok" in r) router.refresh();
+              return r;
+            }}
+            onRecolor={async (id, color) => {
+              const r = await updateProjectSection(id, project.id, { color });
+              if (r && "ok" in r) router.refresh();
+              return r;
+            }}
+            onDelete={async (id) => {
+              const r = await deleteProjectSection(id, project.id);
+              if (r && "ok" in r) {
+                if (activeSection === id) setActiveSection("all");
+                router.refresh();
+              }
+              return r;
+            }}
+            onReorder={async (ids) => {
+              const r = await reorderProjectSections(project.id, ids);
+              if (r && "ok" in r) router.refresh();
+              return r;
+            }}
+          />
+
+          <header className="mb-4 mt-4 flex items-center justify-between">
             <h2 className="text-base font-bold text-slate-900">Timeline</h2>
             <button
               type="button"
@@ -455,17 +503,25 @@ export function ProjectEditor({
             />
           ) : null}
 
-          {milestones.length === 0 && !showAddForm ? (
-            <div className="rounded-2xl border border-dashed border-border bg-card py-14 text-center">
-              <p className="text-sm font-semibold text-slate-900">Sin hitos todavía</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Cargá el primer hito (ej. &ldquo;Recepción de materiales&rdquo;) con foto del momento.
-              </p>
-            </div>
-          ) : null}
+          {(() => {
+            const filtered = activeSection === "all"
+              ? milestones
+              : milestones.filter((m) => m.section_id === activeSection);
 
-          <ol className="relative mt-6 space-y-6 border-l-2 border-slate-200 pl-6">
-            {milestones.map((m) => (
+            if (filtered.length === 0 && !showAddForm) {
+              return (
+                <div className="rounded-2xl border border-dashed border-border bg-card py-14 text-center">
+                  <p className="text-sm font-semibold text-slate-900">Sin hitos en esta pestaña</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Cargá el primer hito (ej. &ldquo;Recepción de materiales&rdquo;).
+                  </p>
+                </div>
+              );
+            }
+
+            return (
+              <ol className="relative mt-6 space-y-6 border-l-2 border-slate-200 pl-6">
+                {filtered.map((m) => (
               <MilestoneRow
                 key={m.id}
                 milestone={m}
@@ -476,7 +532,9 @@ export function ProjectEditor({
                 onPreview={(media) => setLightbox(media)}
               />
             ))}
-          </ol>
+              </ol>
+            );
+          })()}
         </section>
       </div>
 

@@ -7,6 +7,8 @@ import type {
   MilestoneStatus,
   ProjectCapture,
   ProjectMilestone,
+  ProjectSection,
+  SectionColor,
 } from "@/lib/projects/types";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +38,7 @@ type EntryRow = {
 
 type MilestoneRow = {
   id: string;
+  section_id: string | null;
   title: string;
   description_es: string | null;
   status: MilestoneStatus;
@@ -45,6 +48,13 @@ type MilestoneRow = {
   created_at: string;
   media: MediaRow[] | null;
   entries: EntryRow[] | null;
+};
+
+type SectionRow = {
+  id: string;
+  name: string;
+  color: string;
+  position: number;
 };
 
 function one<T>(v: T | T[] | null | undefined): T | null {
@@ -78,10 +88,23 @@ export default async function ProjectDetailPage({
   const { data: milestones } = (await supabase
     .from("project_milestones")
     .select(
-      "id, title, description_es, status, position, occurred_on, completed_at, created_at, media:project_milestone_media(id, kind, path, caption_es, position, entry_id), entries:project_milestone_entries(id, occurred_on, text_es, position, ai_generated, created_at)",
+      "id, section_id, title, description_es, status, position, occurred_on, completed_at, created_at, media:project_milestone_media(id, kind, path, caption_es, position, entry_id), entries:project_milestone_entries(id, occurred_on, text_es, position, ai_generated, created_at)",
     )
     .eq("project_id", id)
     .order("position", { ascending: true })) as { data: MilestoneRow[] | null };
+
+  const { data: sectionsRaw } = (await supabase
+    .from("project_sections")
+    .select("id, name, color, position")
+    .eq("project_id", id)
+    .eq("archived", false)
+    .order("position", { ascending: true })) as { data: SectionRow[] | null };
+  const sections: ProjectSection[] = (sectionsRaw ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    color: s.color as SectionColor,
+    position: s.position,
+  }));
 
   const sortedMilestones: ProjectMilestone[] = (milestones ?? []).map((m) => {
     const allMedia = (m.media ?? []).slice().sort((a, b) => a.position - b.position);
@@ -120,6 +143,7 @@ export default async function ProjectDetailPage({
 
     return {
       id: m.id,
+      section_id: m.section_id,
       title: m.title,
       description_es: m.description_es,
       status: m.status,
@@ -155,6 +179,7 @@ export default async function ProjectDetailPage({
       location={location}
       clientLocations={clientLocations ?? []}
       milestones={sortedMilestones}
+      sections={sections}
       captures={captureData}
     />
   );
