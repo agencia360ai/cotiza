@@ -8,6 +8,7 @@ import {
   Loader2,
   Mic,
   PencilLine,
+  Plus,
   Sparkles,
   Trash2,
   Video,
@@ -48,11 +49,13 @@ export function ProjectCaptureSection({
   onPropose,
   onApply,
   onAfterChange,
+  onAddManualMilestone,
 }: {
   captures: ProjectCapture[];
   pathPrefix: string;
   onRegisterUpload: (kind: "photo" | "video", path: string) => Promise<RegisterResult>;
   onAddText: (kind: "text" | "voice", text: string) => Promise<AddTextResult>;
+  onAddManualMilestone?: () => void;
   onRemove: (captureId: string) => Promise<{ error: string } | { ok: true }>;
   onPropose: () => Promise<ProposeResult>;
   onApply: (proposal: ProposedStructurePayload) => Promise<ApplyResult>;
@@ -178,17 +181,30 @@ export function ProjectCaptureSection({
             </p>
           </div>
         </div>
-        {unprocessed.length > 0 ? (
-          <button
-            type="button"
-            onClick={handleStructure}
-            disabled={structuring}
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
-          >
-            {structuring ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-            {structuring ? "Procesando…" : `Agregar hito con IA (${unprocessed.length})`}
-          </button>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {unprocessed.length > 0 ? (
+            <button
+              type="button"
+              onClick={handleStructure}
+              disabled={structuring}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
+            >
+              {structuring ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+              {structuring ? "Procesando…" : `Agregar hito con IA (${unprocessed.length})`}
+            </button>
+          ) : null}
+          {onAddManualMilestone ? (
+            <button
+              type="button"
+              onClick={onAddManualMilestone}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              title="Crear un hito manualmente, sin la IA"
+            >
+              <Plus className="size-4" />
+              Hito manual
+            </button>
+          ) : null}
+        </div>
       </header>
 
       <div className="p-4 sm:p-5">
