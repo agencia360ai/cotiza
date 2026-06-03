@@ -129,6 +129,16 @@ export async function updateTechnicianProject(
 
 export async function deleteTechnicianProject(token: string, projectId: string): Promise<Result> {
   const supabase = await createClient();
+
+  const { data: paths } = (await supabase.rpc("get_technician_project_storage_paths", {
+    _token: token,
+    _project_id: projectId,
+  })) as { data: string[] | null };
+  const toRemove = (paths ?? []).filter((p): p is string => typeof p === "string" && p.length > 0);
+  if (toRemove.length > 0) {
+    await supabase.storage.from("cotiza-projects").remove(toRemove).catch(() => {});
+  }
+
   const { error } = await supabase.rpc("delete_technician_project", {
     _token: token,
     _project_id: projectId,
