@@ -24,7 +24,20 @@ import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
 
 type AddTextResult = { error: string } | { ok: true };
 type RegisterResult = { error: string } | { ok: true; data: { capture: ProjectCapture } };
-type StructureResult = { error: string } | { ok: true; data: { added: number } };
+
+export type ProposedMilestone = {
+  milestone_id: string | null;
+  title: string;
+  description_es: string | null;
+  status: "pendiente" | "en_progreso" | "completado";
+  entries: Array<{ occurred_on: string | null; text_es: string; media_paths: string[] }>;
+};
+export type ProposedStructurePayload = {
+  milestones: ProposedMilestone[];
+  processed_capture_ids: string[];
+};
+type ProposeResult = { error: string } | { ok: true; data: { proposal: ProposedStructurePayload } };
+type ApplyResult = { error: string } | { ok: true; data: { added: number } };
 
 export function ProjectCaptureSection({
   captures,
@@ -32,7 +45,8 @@ export function ProjectCaptureSection({
   onRegisterUpload,
   onAddText,
   onRemove,
-  onStructure,
+  onPropose,
+  onApply,
   onAfterChange,
 }: {
   captures: ProjectCapture[];
@@ -40,7 +54,8 @@ export function ProjectCaptureSection({
   onRegisterUpload: (kind: "photo" | "video", path: string) => Promise<RegisterResult>;
   onAddText: (kind: "text" | "voice", text: string) => Promise<AddTextResult>;
   onRemove: (captureId: string) => Promise<{ error: string } | { ok: true }>;
-  onStructure: () => Promise<StructureResult>;
+  onPropose: () => Promise<ProposeResult>;
+  onApply: (proposal: ProposedStructurePayload) => Promise<ApplyResult>;
   onAfterChange?: () => void;
 }) {
   const [items, setItems] = useState<ProjectCapture[]>(captures);
@@ -48,6 +63,8 @@ export function ProjectCaptureSection({
 
   const [uploading, setUploading] = useState(false);
   const [structuring, setStructuring] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [proposal, setProposal] = useState<ProposedStructurePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const photoRef = useRef<HTMLInputElement>(null);
@@ -111,22 +128,40 @@ export function ProjectCaptureSection({
     setStructuring(true);
     setError(null);
     setSuccess(null);
-    const r = await onStructure();
+    const r = await onPropose();
     setStructuring(false);
     if ("error" in r) {
       setError(r.error);
       return;
     }
-    if (r.data.added === 0) {
+    if (r.data.proposal.milestones.length === 0) {
       setError(
-        "La IA no logró estructurar las capturas. Probá agregando una nota de texto que describa qué se ve, o agregá el hito manualmente abajo.",
+        "La IA no logró armar un hito. Probá agregando una nota de texto que describa qué se ve, o agregá el hito manualmente abajo.",
       );
       return;
     }
+    setProposal(r.data.proposal);
+  }
+
+  async function handleConfirmProposal(edited: ProposedStructurePayload) {
+    setApplying(true);
+    setError(null);
+    const r = await onApply(edited);
+    setApplying(false);
+    if ("error" in r) {
+      setError(r.error);
+      return;
+    }
+    setProposal(null);
     setSuccess(
       `Listo · ${r.data.added} captura${r.data.added === 1 ? "" : "s"} convertida${r.data.added === 1 ? "" : "s"} en hito${r.data.added === 1 ? "" : "s"}`,
     );
     onAfterChange?.();
+  }
+
+  function handleDiscardProposal() {
+    setProposal(null);
+    setError(null);
   }
 
   return (
@@ -206,6 +241,15 @@ export function ProjectCaptureSection({
           <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-inset ring-red-600/20">
             {error}
           </p>
+        ) : null}
+        {proposal ? (
+          <ProposalReview
+            proposal={proposal}
+            applying={applying}
+            onChange={setProposal}
+            onConfirm={() => handleConfirmProposal(proposal)}
+            onDiscard={handleDiscardProposal}
+          />
         ) : null}
         {success ? (
           <p className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
@@ -541,3 +585,186 @@ function Modal({
 }
 
 export type { ProjectCaptureKind };
+
+function ProposalReview({
+  proposal,
+  applying,
+  onChange,
+  onConfirm,
+  onDiscard,
+}: {
+  proposal: ProposedStructurePayload;
+  applying: boolean;
+  onChange: (next: ProposedStructurePayload) => void;
+  onConfirm: () => void;
+  onDiscard: () => void;
+}) {
+  function updateMilestone(idx: number, patch: Partial<ProposedMilestone>) {
+    onChange({
+      ...proposal,
+      milestones: proposal.milestones.map((m, i) => (i === idx ? { ...m, ...patch } : m)),
+    });
+  }
+  function updateEntry(mi: number, ei: number, patch: Partial<ProposedMilestone["entries"][number]>) {
+    onChange({
+      ...proposal,
+      milestones: proposal.milestones.map((m, i) =>
+        i === mi
+          ? { ...m, entries: m.entries.map((e, j) => (j === ei ? { ...e, ...patch } : e)) }
+          : m,
+      ),
+    });
+  }
+  function removeMilestone(idx: number) {
+    onChange({ ...proposal, milestones: proposal.milestones.filter((_, i) => i !== idx) });
+  }
+
+  return (
+    <div className="mt-4 rounded-2xl border-2 border-violet-300 bg-gradient-to-br from-violet-50/60 to-white p-4">
+      <header className="mb-3 flex items-center gap-2">
+        <div className="flex size-8 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+          <Sparkles className="size-4" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-bold text-slate-900">
+            Propuesta de la IA · revisá antes de guardar
+          </p>
+          <p className="text-xs text-slate-600">
+            Editá título, estado, fecha o texto. Si querés agregar más fotos/notas, descartá y volvé a procesar.
+          </p>
+        </div>
+      </header>
+
+      <div className="space-y-3">
+        {proposal.milestones.map((m, mi) => (
+          <article key={mi} className="overflow-hidden rounded-xl border border-violet-200 bg-white">
+            <div className="flex items-start gap-2 border-b border-violet-100 bg-violet-50/40 px-3 py-2">
+              {m.milestone_id ? (
+                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-blue-700">
+                  Agrega a hito existente
+                </span>
+              ) : (
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-700">
+                  Hito nuevo
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => removeMilestone(mi)}
+                className="ml-auto flex size-6 items-center justify-center rounded text-slate-400 hover:bg-red-50 hover:text-red-600"
+                aria-label="Quitar de la propuesta"
+                title="Quitar este hito de la propuesta"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 p-3">
+              <div>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                  Título del hito
+                </label>
+                <input
+                  value={m.title}
+                  onChange={(e) => updateMilestone(mi, { title: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm font-semibold focus:border-slate-400 focus:outline-none"
+                  disabled={!!m.milestone_id}
+                />
+                {m.milestone_id ? (
+                  <p className="mt-1 text-[10px] text-slate-400">No editable — usa el hito existente</p>
+                ) : null}
+              </div>
+
+              {!m.milestone_id ? (
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    Descripción
+                  </label>
+                  <input
+                    value={m.description_es ?? ""}
+                    onChange={(e) => updateMilestone(mi, { description_es: e.target.value || null })}
+                    placeholder="Resumen corto del hito"
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-slate-400 focus:outline-none"
+                  />
+                </div>
+              ) : null}
+
+              {!m.milestone_id ? (
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    Estado
+                  </label>
+                  <select
+                    value={m.status}
+                    onChange={(e) =>
+                      updateMilestone(mi, { status: e.target.value as ProposedMilestone["status"] })
+                    }
+                    className="mt-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-slate-400 focus:outline-none"
+                  >
+                    <option value="pendiente">Pendiente</option>
+                    <option value="en_progreso">En progreso</option>
+                    <option value="completado">Completado</option>
+                  </select>
+                </div>
+              ) : null}
+
+              {m.entries.map((entry, ei) => (
+                <div key={ei} className="rounded-lg border border-slate-100 bg-slate-50/50 p-2.5">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[140px_1fr]">
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                        Fecha
+                      </label>
+                      <input
+                        type="date"
+                        value={entry.occurred_on ?? ""}
+                        onChange={(e) => updateEntry(mi, ei, { occurred_on: e.target.value || null })}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm focus:border-slate-400 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                        Texto del avance
+                      </label>
+                      <textarea
+                        value={entry.text_es}
+                        onChange={(e) => updateEntry(mi, ei, { text_es: e.target.value })}
+                        rows={2}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-slate-400 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  {entry.media_paths.length > 0 ? (
+                    <p className="mt-2 text-[10px] text-slate-500">
+                      📎 {entry.media_paths.length} archivo{entry.media_paths.length === 1 ? "" : "s"} adjunto{entry.media_paths.length === 1 ? "" : "s"}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onDiscard}
+          disabled={applying}
+          className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+        >
+          Descartar
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={applying || proposal.milestones.length === 0}
+          className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          {applying ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+          Confirmar y guardar
+        </button>
+      </div>
+    </div>
+  );
+}

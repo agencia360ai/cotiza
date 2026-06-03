@@ -52,7 +52,8 @@ import {
   registerCoverPhoto,
   registerMilestoneMedia,
   shareProjectLink,
-  structureAdminProjectWithAI,
+  proposeAdminProjectStructure,
+  applyAdminProjectProposal,
   updateMilestone,
   updateProject,
 } from "../actions";
@@ -420,8 +421,12 @@ export function ProjectEditor({
               const r = await removeAdminProjectCapture(project.id, id);
               return r;
             }}
-            onStructure={async () => {
-              const r = await structureAdminProjectWithAI(project.id);
+            onPropose={async () => {
+              const r = await proposeAdminProjectStructure(project.id);
+              return r;
+            }}
+            onApply={async (proposal) => {
+              const r = await applyAdminProjectProposal(project.id, proposal);
               return r;
             }}
             onAfterChange={() => router.refresh()}

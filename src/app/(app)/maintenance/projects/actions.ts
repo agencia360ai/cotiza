@@ -400,9 +400,20 @@ export async function removeAdminProjectCapture(
   return { ok: true };
 }
 
-export async function structureAdminProjectWithAI(
+export type ProposedStructure = {
+  milestones: Array<{
+    milestone_id: string | null;
+    title: string;
+    description_es: string | null;
+    status: "pendiente" | "en_progreso" | "completado";
+    entries: Array<{ occurred_on: string | null; text_es: string; media_paths: string[] }>;
+  }>;
+  processed_capture_ids: string[];
+};
+
+export async function proposeAdminProjectStructure(
   projectId: string,
-): Promise<Result<{ added: number }>> {
+): Promise<Result<{ proposal: ProposedStructure }>> {
   const supabase = await createClient();
   const ctx = await loadProjectCaptureData(projectId);
   if (!ctx) return { error: "Proyecto no encontrado" };
@@ -410,7 +421,6 @@ export async function structureAdminProjectWithAI(
   const unprocessed = ctx.capture_data.filter((c) => !c.processed_at);
   if (unprocessed.length === 0) return { error: "No hay capturas nuevas para procesar" };
 
-  // Project + client + location + milestone metadata
   type ProjectInfo = {
     id: string;
     name: string;
@@ -481,15 +491,52 @@ export async function structureAdminProjectWithAI(
       photos: photoBuffers,
     });
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "Falló estructurar con IA" };
+    return { error: e instanceof Error ? e.message : "Falló procesar con IA" };
   }
 
+  // Resolve AI's capture_ids → media_paths so the RPC can attach photos to entries.
+  const pathByCaptureId = new Map(
+    ctx.capture_data.filter((c) => c.media_path).map((c) => [c.id, c.media_path as string]),
+  );
+  type AIEntry = { occurred_on: string | null; text_es: string; capture_ids?: string[] };
+  type AIMilestone = {
+    milestone_id: string | null;
+    title: string;
+    description_es: string | null;
+    status: "pendiente" | "en_progreso" | "completado";
+    entries: AIEntry[];
+  };
+  const aiResult = result as unknown as { milestones: AIMilestone[]; processed_capture_ids: string[] };
+  const proposal: ProposedStructure = {
+    milestones: aiResult.milestones.map((m) => ({
+      milestone_id: m.milestone_id,
+      title: m.title,
+      description_es: m.description_es,
+      status: m.status,
+      entries: m.entries.map((e) => ({
+        occurred_on: e.occurred_on,
+        text_es: e.text_es,
+        media_paths: (e.capture_ids ?? [])
+          .map((id) => pathByCaptureId.get(id))
+          .filter((p): p is string => !!p),
+      })),
+    })),
+    processed_capture_ids: aiResult.processed_capture_ids,
+  };
+
+  return { ok: true, data: { proposal } };
+}
+
+export async function applyAdminProjectProposal(
+  projectId: string,
+  proposal: ProposedStructure,
+): Promise<Result<{ added: number }>> {
+  const supabase = await createClient();
   const { error } = await supabase.rpc("apply_admin_project_structuring", {
     _project_id: projectId,
-    _structured: result,
+    _structured: proposal,
   });
   if (error) return { error: error.message };
-
   revalidatePath(`/maintenance/projects/${projectId}`);
-  return { ok: true, data: { added: result.processed_capture_ids.length } };
+  return { ok: true, data: { added: proposal.processed_capture_ids.length } };
 }

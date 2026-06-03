@@ -49,7 +49,8 @@ import {
   registerTechnicianProjectCover,
   removeProjectCapture,
   removeTechnicianMilestoneMedia,
-  structureTechnicianProjectWithAI,
+  proposeTechnicianProjectStructure,
+  applyTechnicianProjectProposal,
   updateTechnicianMilestone,
   updateTechnicianProject,
 } from "../actions";
@@ -356,7 +357,8 @@ export function TechnicianProjectScreen({
               }
               onAddText={async (kind, text) => addProjectCapture(token, project.id, { kind, text })}
               onRemove={async (id) => removeProjectCapture(token, project.id, id)}
-              onStructure={async () => structureTechnicianProjectWithAI(token, project.id)}
+              onPropose={async () => proposeTechnicianProjectStructure(token, project.id)}
+              onApply={async (proposal) => applyTechnicianProjectProposal(token, project.id, proposal)}
               onAfterChange={() => router.refresh()}
             />
           </div>
