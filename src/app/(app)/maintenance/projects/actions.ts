@@ -105,6 +105,7 @@ export async function addMilestone(input: {
   description_es: string | null;
   occurred_on: string | null;
   status: MilestoneStatus;
+  section_id?: string | null;
 }): Promise<Result<{ id: string }>> {
   const supabase = await createClient();
   const org_id = await currentOrgId();
@@ -126,6 +127,7 @@ export async function addMilestone(input: {
     .insert({
       org_id,
       project_id: input.project_id,
+      section_id: input.section_id ?? null,
       title: input.title,
       description_es: input.description_es,
       occurred_on: input.occurred_on,
@@ -151,6 +153,7 @@ export async function updateMilestone(
     description_es: string | null;
     status: MilestoneStatus;
     occurred_on: string | null;
+    section_id: string | null;
   }>,
 ): Promise<Result> {
   const supabase = await createClient();
@@ -530,13 +533,115 @@ export async function proposeAdminProjectStructure(
 export async function applyAdminProjectProposal(
   projectId: string,
   proposal: ProposedStructure,
+  sectionId: string | null = null,
 ): Promise<Result<{ added: number }>> {
   const supabase = await createClient();
   const { error } = await supabase.rpc("apply_admin_project_structuring", {
     _project_id: projectId,
     _structured: proposal,
+    _section_id: sectionId,
   });
   if (error) return { error: error.message };
   revalidatePath(`/maintenance/projects/${projectId}`);
   return { ok: true, data: { added: proposal.processed_capture_ids.length } };
+}
+
+// ============================================================================
+// Project Sections (tabs/categorías dentro de un proyecto) — admin
+// ============================================================================
+
+export async function createProjectSection(
+  projectId: string,
+  input: { name: string; color?: string },
+): Promise<Result<{ id: string }>> {
+  const supabase = await createClient();
+  const org_id = await currentOrgId();
+  if (!org_id) return { error: "No org" };
+  if (!input.name.trim()) return { error: "Nombre requerido" };
+
+  const { data: maxRow } = (await supabase
+    .from("project_sections")
+    .select("position")
+    .eq("project_id", projectId)
+    .order("position", { ascending: false })
+    .limit(1)
+    .maybeSingle()) as { data: { position: number } | null };
+  const nextPos = (maxRow?.position ?? -1) + 1;
+
+  const { data, error } = (await supabase
+    .from("project_sections")
+    .insert({
+      org_id,
+      project_id: projectId,
+      name: input.name.trim(),
+      color: input.color ?? "slate",
+      position: nextPos,
+    })
+    .select("id")
+    .single()) as { data: { id: string } | null; error: { message: string } | null };
+  if (error || !data) return { error: error?.message ?? "Falló crear sección" };
+
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true, data: { id: data.id } };
+}
+
+export async function updateProjectSection(
+  sectionId: string,
+  projectId: string,
+  patch: Partial<{ name: string; color: string }>,
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("project_sections")
+    .update(patch)
+    .eq("id", sectionId);
+  if (error) return { error: error.message };
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function deleteProjectSection(
+  sectionId: string,
+  projectId: string,
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("project_sections")
+    .delete()
+    .eq("id", sectionId);
+  if (error) return { error: error.message };
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function reorderProjectSections(
+  projectId: string,
+  orderedIds: string[],
+): Promise<Result> {
+  const supabase = await createClient();
+  // Update positions one-by-one (simple, no triggers; small N)
+  for (let i = 0; i < orderedIds.length; i++) {
+    await supabase
+      .from("project_sections")
+      .update({ position: i })
+      .eq("id", orderedIds[i])
+      .eq("project_id", projectId);
+  }
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function moveMilestoneToSection(
+  milestoneId: string,
+  projectId: string,
+  sectionId: string | null,
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("project_milestones")
+    .update({ section_id: sectionId })
+    .eq("id", milestoneId);
+  if (error) return { error: error.message };
+  revalidatePath(`/maintenance/projects/${projectId}`);
+  return { ok: true };
 }

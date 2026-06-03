@@ -430,14 +430,104 @@ export async function applyTechnicianProjectProposal(
   token: string,
   projectId: string,
   proposal: ProposedTechStructure,
+  sectionId: string | null = null,
 ): Promise<Result<{ added: number }>> {
   const supabase = await createClient();
   const { error } = await supabase.rpc("apply_technician_project_structuring", {
     _token: token,
     _project_id: projectId,
     _structured: proposal,
+    _section_id: sectionId,
   });
   if (error) return { error: error.message };
   revalidatePath(`/t/${token}/projects/${projectId}`);
   return { ok: true, data: { added: proposal.processed_capture_ids.length } };
+}
+
+// ============================================================================
+// Project Sections — técnico
+// ============================================================================
+
+export async function createTechnicianProjectSection(
+  token: string,
+  projectId: string,
+  input: { name: string; color?: string },
+): Promise<Result<{ id: string }>> {
+  const supabase = await createClient();
+  if (!input.name.trim()) return { error: "Nombre requerido" };
+  const { data, error } = await supabase.rpc("create_technician_project_section", {
+    _token: token,
+    _project_id: projectId,
+    _name: input.name.trim(),
+    _color: input.color ?? "slate",
+  });
+  if (error || !data) return { error: error?.message ?? "Falló crear sección" };
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true, data: { id: data as string } };
+}
+
+export async function updateTechnicianProjectSection(
+  token: string,
+  projectId: string,
+  sectionId: string,
+  patch: { name?: string; color?: string },
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("update_technician_project_section", {
+    _token: token,
+    _section_id: sectionId,
+    _name: patch.name ?? null,
+    _color: patch.color ?? null,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function deleteTechnicianProjectSection(
+  token: string,
+  projectId: string,
+  sectionId: string,
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("delete_technician_project_section", {
+    _token: token,
+    _section_id: sectionId,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function reorderTechnicianProjectSections(
+  token: string,
+  projectId: string,
+  orderedIds: string[],
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("reorder_technician_project_sections", {
+    _token: token,
+    _project_id: projectId,
+    _ordered_ids: orderedIds,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true };
+}
+
+export async function moveTechnicianMilestone(
+  token: string,
+  projectId: string,
+  milestoneId: string,
+  sectionId: string | null,
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("move_technician_milestone", {
+    _token: token,
+    _milestone_id: milestoneId,
+    _section_id: sectionId,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/t/${token}/projects/${projectId}`);
+  return { ok: true };
 }

@@ -25,8 +25,12 @@ import {
   projectImageUrl,
   type ProjectMedia,
   type ProjectMilestone,
+  type ProjectSection,
   type PublicProjectData,
+  SECTION_COLOR_HEX,
+  SECTION_COLOR_SOFT,
 } from "@/lib/projects/types";
+import { SectionTabs } from "@/components/projects/section-tabs";
 import { acceptProject } from "./actions";
 
 export function PublicProjectScreen({
@@ -40,6 +44,14 @@ export function PublicProjectScreen({
   const [showAcceptForm, setShowAcceptForm] = useState(false);
   const [lightbox, setLightbox] = useState<ProjectMedia | null>(null);
   const project = data.project;
+  const sections = data.sections ?? [];
+  const [activeSection, setActiveSection] = useState<string | "all">(
+    sections.length > 0 ? sections[0].id : "all",
+  );
+  const visibleMilestones =
+    sections.length === 0 || activeSection === "all"
+      ? data.milestones
+      : data.milestones.filter((m) => m.section_id === activeSection);
   const total = data.milestones.length;
   const done = data.milestones.filter((m) => m.status === "completado").length;
   const pct = total === 0 ? 0 : Math.round((done / total) * 100);
@@ -177,33 +189,148 @@ export function PublicProjectScreen({
         ) : null}
 
         <section>
-          <header className="mb-6 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Línea de tiempo
-            </h2>
-            <ShareButton />
-          </header>
-
-          {data.milestones.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white py-14 text-center">
-              <Hammer className="mx-auto mb-3 size-8 text-slate-300" />
-              <p className="text-sm font-semibold text-slate-900">Aún sin hitos cargados</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Cuando arranque la obra vas a ver acá el progreso paso a paso.
-              </p>
+          {sections.length > 0 ? (
+            <div className="mb-6">
+              {(() => {
+                const counts: Record<string, { total: number; done: number }> = {
+                  all: {
+                    total: data.milestones.length,
+                    done: data.milestones.filter((m) => m.status === "completado").length,
+                  },
+                };
+                for (const s of sections) {
+                  const items = data.milestones.filter((m) => m.section_id === s.id);
+                  counts[s.id] = {
+                    total: items.length,
+                    done: items.filter((m) => m.status === "completado").length,
+                  };
+                }
+                return (
+                  <SectionTabs
+                    sections={sections}
+                    activeId={activeSection}
+                    onSelect={setActiveSection}
+                    counts={counts}
+                    rightAction={<ShareButton />}
+                  />
+                );
+              })()}
             </div>
-          ) : (
-            <ol className="relative space-y-7 border-l-2 border-slate-200 pl-7 sm:pl-10">
-              {data.milestones.map((m, i) => (
-                <PublicMilestone
-                  key={m.id}
-                  milestone={m}
-                  index={i + 1}
-                  onPreview={(media) => setLightbox(media)}
-                />
-              ))}
-            </ol>
-          )}
+          ) : null}
+
+          {(() => {
+            const activeName = activeSection === "all"
+              ? `Historial de ${project.name}`
+              : sections.find((s) => s.id === activeSection)?.name ?? project.name;
+            const accent =
+              activeSection === "all"
+                ? "#64748B"
+                : SECTION_COLOR_HEX[
+                    sections.find((s) => s.id === activeSection)?.color ?? "slate"
+                  ];
+            return (
+              <header className="mb-6 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="size-2.5 rounded-full" style={{ backgroundColor: accent }} />
+                  <h2 className="text-lg font-bold text-slate-900 sm:text-xl">{activeName}</h2>
+                </div>
+                {sections.length === 0 ? <ShareButton /> : null}
+              </header>
+            );
+          })()}
+
+          {(() => {
+            if (visibleMilestones.length === 0) {
+              return (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white py-14 text-center">
+                  <Hammer className="mx-auto mb-3 size-8 text-slate-300" />
+                  <p className="text-sm font-semibold text-slate-900">
+                    {data.milestones.length === 0
+                      ? "Aún sin hitos cargados"
+                      : "Sin hitos en esta sección"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {data.milestones.length === 0
+                      ? "Cuando arranque la obra vas a ver acá el progreso paso a paso."
+                      : "Probá con otra pestaña para ver el avance."}
+                  </p>
+                </div>
+              );
+            }
+
+            const showGrouped = activeSection === "all" && sections.length > 0;
+            if (!showGrouped) {
+              return (
+                <ol className="relative space-y-7 border-l-2 border-slate-200 pl-7 sm:pl-10">
+                  {visibleMilestones.map((m, i) => (
+                    <PublicMilestone
+                      key={m.id}
+                      milestone={m}
+                      index={i + 1}
+                      onPreview={(media) => setLightbox(media)}
+                    />
+                  ))}
+                </ol>
+              );
+            }
+
+            const groups = sections
+              .map((s) => ({
+                section: s as ProjectSection | null,
+                items: data.milestones.filter((m) => m.section_id === s.id),
+              }))
+              .filter((g) => g.items.length > 0);
+            const orphans = data.milestones.filter(
+              (m) => !m.section_id || !sections.find((s) => s.id === m.section_id),
+            );
+            if (orphans.length > 0) groups.push({ section: null, items: orphans });
+
+            let runningIndex = 0;
+            return (
+              <div className="space-y-10">
+                {groups.map((g) => {
+                  const accent = g.section ? SECTION_COLOR_HEX[g.section.color] : "#94A3B8";
+                  const soft = g.section ? SECTION_COLOR_SOFT[g.section.color] : "#F1F5F9";
+                  const name = g.section?.name ?? "Sin categoría";
+                  return (
+                    <div key={g.section?.id ?? "__orphans__"}>
+                      <div
+                        className="mb-4 flex items-center gap-2.5 rounded-xl px-3.5 py-2.5"
+                        style={{ backgroundColor: soft }}
+                      >
+                        <span className="size-2.5 rounded-full" style={{ backgroundColor: accent }} />
+                        <span
+                          className="text-xs font-bold uppercase tracking-wider"
+                          style={{ color: accent }}
+                        >
+                          {name}
+                        </span>
+                        <span className="text-xs font-semibold text-slate-500">
+                          {g.items.length}
+                        </span>
+                      </div>
+                      <ol
+                        className="relative space-y-7 border-l-2 pl-7 sm:pl-10"
+                        style={{ borderLeftColor: `${accent}40` }}
+                      >
+                        {g.items.map((m) => {
+                          runningIndex += 1;
+                          return (
+                            <PublicMilestone
+                              key={m.id}
+                              milestone={m}
+                              index={runningIndex}
+                              onPreview={(media) => setLightbox(media)}
+                            />
+                          );
+                        })}
+                      </ol>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </section>
 
         {canAccept ? (
