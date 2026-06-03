@@ -426,6 +426,16 @@ export function ProjectEditor({
           <ProjectCaptureSection
             captures={initialCaptures}
             pathPrefix={`${project.org_id}/${project.id}/captures`}
+            onAddManualMilestone={() => {
+              setShowAddForm(true);
+              if (typeof window !== "undefined") {
+                window.setTimeout(() => {
+                  document
+                    .getElementById("add-milestone-form")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }, 50);
+              }
+            }}
             onRegisterUpload={async (kind, path) => {
               const r = await registerAdminProjectCaptureMedia(project.id, kind, path);
               return r;
@@ -477,16 +487,6 @@ export function ProjectEditor({
                   activeId={activeSection}
                   onSelect={setActiveSection}
                   counts={counts}
-                  rightAction={
-                    <button
-                      type="button"
-                      onClick={() => setShowAddForm((v) => !v)}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
-                    >
-                      <Plus className="size-4" />
-                      <span className="hidden sm:inline">Agregar hito</span>
-                    </button>
-                  }
                   onCreate={async ({ name, color }) => {
                     const r = await createProjectSection(project.id, { name, color });
                     if (r && "ok" in r) router.refresh();
@@ -541,13 +541,15 @@ export function ProjectEditor({
           })()}
 
           {showAddForm ? (
-            <AddMilestoneForm
-              onCancel={() => setShowAddForm(false)}
-              onSave={handleAddMilestone}
-              pending={pending}
-              sections={sections}
-              defaultSectionId={activeSection === "all" ? null : activeSection}
-            />
+            <div id="add-milestone-form">
+              <AddMilestoneForm
+                onCancel={() => setShowAddForm(false)}
+                onSave={handleAddMilestone}
+                pending={pending}
+                sections={sections}
+                defaultSectionId={activeSection === "all" ? null : activeSection}
+              />
+            </div>
           ) : null}
 
           {(() => {

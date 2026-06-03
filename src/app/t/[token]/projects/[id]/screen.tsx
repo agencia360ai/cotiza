@@ -371,6 +371,16 @@ export function TechnicianProjectScreen({
             <ProjectCaptureSection
               captures={initialCaptures}
               pathPrefix={`tech/${token.slice(0, 8)}/${project.id}/captures`}
+              onAddManualMilestone={() => {
+                setShowAddForm(true);
+                if (typeof window !== "undefined") {
+                  window.setTimeout(() => {
+                    document
+                      .getElementById("add-milestone-form")
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }, 50);
+                }
+              }}
               onRegisterUpload={async (kind, path) =>
                 registerProjectCaptureMedia(token, project.id, kind, path)
               }
@@ -405,17 +415,6 @@ export function TechnicianProjectScreen({
                 done: items.filter((m) => m.status === "completado").length,
               };
             }
-            const rightAction = status !== "aceptado" ? (
-              <button
-                type="button"
-                onClick={() => setShowAddForm((v) => !v)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
-              >
-                <Plus className="size-4" />
-                <span className="hidden sm:inline">Agregar hito</span>
-              </button>
-            ) : null;
-
             if (status === "aceptado" && sections.length === 0) return null;
 
             return (
@@ -426,7 +425,6 @@ export function TechnicianProjectScreen({
                     activeId={activeSection}
                     onSelect={setActiveSection}
                     counts={counts}
-                    rightAction={rightAction}
                     onCreate={async ({ name, color }) => {
                       const r = await createTechnicianProjectSection(token, project.id, { name, color });
                       if (r && "ok" in r) router.refresh();
@@ -487,13 +485,15 @@ export function TechnicianProjectScreen({
           })()}
 
           {showAddForm ? (
-            <AddMilestoneForm
-              onCancel={() => setShowAddForm(false)}
-              onSave={handleAddMilestone}
-              pending={pending}
-              sections={sections}
-              defaultSectionId={activeSection === "all" ? null : activeSection}
-            />
+            <div id="add-milestone-form">
+              <AddMilestoneForm
+                onCancel={() => setShowAddForm(false)}
+                onSave={handleAddMilestone}
+                pending={pending}
+                sections={sections}
+                defaultSectionId={activeSection === "all" ? null : activeSection}
+              />
+            </div>
           ) : null}
 
           {(() => {
