@@ -14,6 +14,7 @@ import type {
   ProjectType,
 } from "@/lib/projects/types";
 import { structureProjectFromCaptures } from "@/lib/ai/structure-project";
+import { structureSingleMilestone } from "@/lib/ai/structure-single-milestone";
 
 type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
 
@@ -644,4 +645,70 @@ export async function moveMilestoneToSection(
   if (error) return { error: error.message };
   revalidatePath(`/maintenance/projects/${projectId}`);
   return { ok: true };
+}
+
+// ============================================================================
+// Propuesta de un único hito desde uploads inline (form unificado)
+// ============================================================================
+
+export async function proposeSingleMilestone(
+  projectId: string,
+  input: { mediaPaths: string[]; text: string },
+): Promise<Result<{ title: string; description: string; status: MilestoneStatus }>> {
+  const supabase = await createClient();
+
+  type ProjectInfo = {
+    name: string;
+    project_type: string;
+    description_es: string | null;
+    client: { name: string } | { name: string }[];
+    location: { name: string } | { name: string }[] | null;
+  };
+  const { data: prj } = (await supabase
+    .from("client_projects")
+    .select(
+      "name, project_type, description_es, client:clients!inner(name), location:client_locations(name)",
+    )
+    .eq("id", projectId)
+    .single()) as { data: ProjectInfo | null };
+  if (!prj) return { error: "Proyecto no encontrado" };
+  const client = Array.isArray(prj.client) ? prj.client[0] : prj.client;
+  const location = Array.isArray(prj.location) ? prj.location[0] : prj.location;
+
+  const photos: { path: string; data: Buffer; mimeType: string }[] = [];
+  for (const path of input.mediaPaths) {
+    if (/\.(mp4|mov|webm|m4v|m4a|mp3|wav)$/i.test(path)) continue;
+    const { data } = await supabase.storage.from("cotiza-projects").download(path);
+    if (data) {
+      photos.push({
+        path,
+        data: Buffer.from(await data.arrayBuffer()),
+        mimeType: data.type || "image/jpeg",
+      });
+    }
+  }
+
+  try {
+    const result = await structureSingleMilestone({
+      project: {
+        name: prj.name,
+        project_type: prj.project_type,
+        description_es: prj.description_es,
+      },
+      client_name: client?.name ?? "—",
+      location_name: location?.name ?? null,
+      text: input.text || null,
+      photos,
+    });
+    return {
+      ok: true,
+      data: {
+        title: result.title,
+        description: result.description,
+        status: result.status as MilestoneStatus,
+      },
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Falló la IA" };
+  }
 }
