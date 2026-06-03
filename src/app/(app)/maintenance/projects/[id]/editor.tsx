@@ -17,6 +17,8 @@ import {
   Play,
   Plus,
   Share2,
+  Mic,
+  PencilLine,
   Trash2,
   Upload,
   Video,
@@ -67,7 +69,7 @@ import {
   reorderProjectSections,
 } from "../actions";
 import { uploadToProjectsBucket } from "@/lib/projects/upload-media";
-import { ProjectCaptureSection } from "@/components/projects/capture-section";
+import { VoiceCaptureModal, TextCaptureModal } from "@/components/projects/capture-section";
 import { MilestoneEntriesList } from "@/components/projects/milestone-entries";
 
 const PROJECT_STATUS_FLOW: ProjectStatus[] = [
@@ -168,6 +170,7 @@ export function ProjectEditor({
     occurred_on: string;
     status: MilestoneStatus;
     section_id: string | null;
+    media: { path: string; kind: "photo" | "video" }[];
   }) {
     setError(null);
     const r = await addMilestone({
@@ -182,10 +185,26 @@ export function ProjectEditor({
       setError(r.error);
       return;
     }
+    const milestoneId = r.data.id;
+    const attachedMedia: ProjectMedia[] = [];
+    for (const m of input.media) {
+      const reg = await registerMilestoneMedia(project.id, milestoneId, m.kind, m.path);
+      if ("error" in reg) {
+        setError(reg.error);
+        continue;
+      }
+      attachedMedia.push({
+        id: reg.data.id,
+        kind: reg.data.kind,
+        path: reg.data.path,
+        caption_es: null,
+        position: attachedMedia.length,
+      });
+    }
     setMilestones((prev) => [
       ...prev,
       {
-        id: r.data.id,
+        id: milestoneId,
         section_id: input.section_id,
         title: input.title,
         description_es: input.description.trim() || null,
@@ -194,7 +213,7 @@ export function ProjectEditor({
         occurred_on: input.occurred_on || null,
         completed_at: input.status === "completado" ? new Date().toISOString() : null,
         created_at: new Date().toISOString(),
-        media: [],
+        media: attachedMedia,
         entries: [],
       },
     ]);
@@ -421,49 +440,6 @@ export function ProjectEditor({
           </p>
         ) : null}
 
-        {/* Capture & AI structuring */}
-        <div className="mt-6">
-          <ProjectCaptureSection
-            captures={initialCaptures}
-            pathPrefix={`${project.org_id}/${project.id}/captures`}
-            onAddManualMilestone={() => {
-              setShowAddForm(true);
-              if (typeof window !== "undefined") {
-                window.setTimeout(() => {
-                  document
-                    .getElementById("add-milestone-form")
-                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                }, 50);
-              }
-            }}
-            onRegisterUpload={async (kind, path) => {
-              const r = await registerAdminProjectCaptureMedia(project.id, kind, path);
-              return r;
-            }}
-            onAddText={async (kind, text) => {
-              const r = await addAdminProjectCapture(project.id, { kind, text });
-              return r;
-            }}
-            onRemove={async (id) => {
-              const r = await removeAdminProjectCapture(project.id, id);
-              return r;
-            }}
-            onPropose={async () => {
-              const r = await proposeAdminProjectStructure(project.id);
-              return r;
-            }}
-            onApply={async (proposal) => {
-              const r = await applyAdminProjectProposal(
-                project.id,
-                proposal,
-                activeSection === "all" ? null : activeSection,
-              );
-              return r;
-            }}
-            onAfterChange={() => router.refresh()}
-          />
-        </div>
-
         {/* Timeline */}
         <section className="mt-8">
           {(() => {
@@ -548,9 +524,19 @@ export function ProjectEditor({
                 pending={pending}
                 sections={sections}
                 defaultSectionId={activeSection === "all" ? null : activeSection}
+                pathPrefix={`${project.org_id}/${project.id}/captures`}
               />
             </div>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowAddForm(true)}
+              className="mb-6 flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-5 text-sm font-semibold text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50"
+            >
+              <Plus className="size-5" />
+              Agregar Hito
+            </button>
+          )}
 
           {(() => {
             const renderMilestone = (m: ProjectMilestone) => (
@@ -641,12 +627,15 @@ export function ProjectEditor({
   );
 }
 
+type PendingMedia = { localId: string; path: string; kind: "photo" | "video"; previewUrl: string };
+
 function AddMilestoneForm({
   onCancel,
   onSave,
   pending,
   sections,
   defaultSectionId,
+  pathPrefix,
 }: {
   onCancel: () => void;
   onSave: (input: {
@@ -655,10 +644,12 @@ function AddMilestoneForm({
     occurred_on: string;
     status: MilestoneStatus;
     section_id: string | null;
+    media: { path: string; kind: "photo" | "video" }[];
   }) => Promise<void>;
   pending: boolean;
   sections: ProjectSection[];
   defaultSectionId: string | null;
+  pathPrefix: string;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -666,6 +657,50 @@ function AddMilestoneForm({
   const [status, setStatus] = useState<MilestoneStatus>("en_progreso");
   const [sectionId, setSectionId] = useState<string | null>(defaultSectionId);
   const [submitting, setSubmitting] = useState(false);
+  const [media, setMedia] = useState<PendingMedia[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [showVoice, setShowVoice] = useState(false);
+  const [showNote, setShowNote] = useState(false);
+  const photoRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLInputElement>(null);
+
+  async function uploadFiles(files: File[], kind: "photo" | "video") {
+    if (files.length === 0) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      for (const original of files) {
+        const file = kind === "photo"
+          ? await compressImage(original, { maxDimension: 1920, quality: 0.85 })
+          : original;
+        const ext = (file.name.split(".").pop() ?? (kind === "video" ? "mp4" : "jpg")).toLowerCase();
+        const path = `${pathPrefix.replace(/\/$/, "")}/${crypto.randomUUID()}.${ext}`;
+        const up = await uploadToProjectsBucket(file, path);
+        if ("error" in up) throw new Error(up.error);
+        setMedia((prev) => [
+          ...prev,
+          {
+            localId: crypto.randomUUID(),
+            path: up.path,
+            kind,
+            previewUrl: URL.createObjectURL(file),
+          },
+        ]);
+      }
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "Falló subida");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function appendToDescription(prefix: string, text: string) {
+    if (!text.trim()) return;
+    setDescription((prev) =>
+      prev ? `${prev.trimEnd()}\n\n${prefix}${text.trim()}` : `${prefix}${text.trim()}`,
+    );
+  }
 
   async function handle() {
     if (!title.trim()) return;
@@ -676,6 +711,7 @@ function AddMilestoneForm({
       occurred_on: occurredOn,
       status,
       section_id: sectionId,
+      media: media.map((m) => ({ path: m.path, kind: m.kind })),
     });
     setSubmitting(false);
   }
@@ -683,102 +719,235 @@ function AddMilestoneForm({
   const busy = submitting || pending;
 
   return (
-    <div className="mb-6 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4">
-      <div className="flex items-start gap-3">
-        <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
+    <div className="mb-6 rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex items-center gap-2 border-b border-slate-100 px-4 py-3 sm:px-5">
+        <div className="flex size-8 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
           <Plus className="size-4" />
         </div>
-        <div className="flex-1 space-y-3">
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Título del hito (ej. Apertura de muro / Recepción de materiales)"
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold focus:border-slate-400 focus:outline-none"
-          />
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Descripción (qué se hizo, observaciones, qué viene). Opcional."
-            rows={3}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-          />
-          <div
-            className={cn(
-              "grid grid-cols-1 gap-3",
-              sections.length > 0 ? "sm:grid-cols-3" : "sm:grid-cols-2",
-            )}
+        <div>
+          <h3 className="text-sm font-bold text-slate-900">Nuevo hito</h3>
+          <p className="text-xs text-slate-500">
+            Escribí o adjuntá fotos, videos o voz. Lo que necesites.
+          </p>
+        </div>
+      </header>
+
+      <div className="space-y-3 p-4 sm:p-5">
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Título del hito (ej. Apertura de muro / Recepción de materiales)"
+          className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm font-semibold focus:border-slate-400 focus:outline-none"
+        />
+
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Descripción (qué se hizo, observaciones, qué viene). Opcional."
+          rows={3}
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+        />
+
+        {/* Inline media buttons */}
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Adjuntar
+          </span>
+          <button
+            type="button"
+            onClick={() => photoRef.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
+            <Camera className="size-3.5 text-blue-600" />
+            Foto
+          </button>
+          <button
+            type="button"
+            onClick={() => videoRef.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Video className="size-3.5 text-violet-600" />
+            Video
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowVoice(true)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Mic className="size-3.5 text-red-600" />
+            Voz
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowNote(true)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <PencilLine className="size-3.5 text-emerald-600" />
+            Nota
+          </button>
+          {uploading ? (
+            <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+              <Loader2 className="size-3 animate-spin" />
+              Subiendo…
+            </span>
+          ) : null}
+        </div>
+
+        <input
+          ref={photoRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          multiple
+          hidden
+          onChange={(e) =>
+            uploadFiles(Array.from(e.target.files ?? []), "photo").finally(() => {
+              if (photoRef.current) photoRef.current.value = "";
+            })
+          }
+        />
+        <input
+          ref={videoRef}
+          type="file"
+          accept="video/*"
+          capture="environment"
+          hidden
+          onChange={(e) =>
+            uploadFiles(Array.from(e.target.files ?? []), "video").finally(() => {
+              if (videoRef.current) videoRef.current.value = "";
+            })
+          }
+        />
+
+        {uploadError ? (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-inset ring-red-600/20">
+            {uploadError}
+          </p>
+        ) : null}
+
+        {media.length > 0 ? (
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {media.map((m) => (
+              <div
+                key={m.localId}
+                className="relative aspect-square overflow-hidden rounded-lg ring-1 ring-slate-200"
+              >
+                {m.kind === "photo" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.previewUrl} alt="" className="size-full object-cover" />
+                ) : (
+                  <div className="flex size-full items-center justify-center bg-slate-900">
+                    <video src={m.previewUrl} className="size-full object-cover" muted playsInline />
+                    <Play className="absolute size-7 fill-white text-white drop-shadow-md" />
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setMedia((prev) => prev.filter((x) => x.localId !== m.localId))}
+                  className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/75"
+                  aria-label="Quitar"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div
+          className={cn(
+            "grid grid-cols-1 gap-3",
+            sections.length > 0 ? "sm:grid-cols-3" : "sm:grid-cols-2",
+          )}
+        >
+          <label className="block text-xs">
+            <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
+              Fecha
+            </span>
+            <input
+              type="date"
+              value={occurredOn}
+              onChange={(e) => setOccurredOn(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+            />
+          </label>
+          <label className="block text-xs">
+            <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
+              Estado
+            </span>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as MilestoneStatus)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+            >
+              {MILESTONE_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {MILESTONE_STATUS_LABEL[s]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {sections.length > 0 ? (
             <label className="block text-xs">
               <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
-                Fecha
-              </span>
-              <input
-                type="date"
-                value={occurredOn}
-                onChange={(e) => setOccurredOn(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-              />
-            </label>
-            <label className="block text-xs">
-              <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
-                Estado
+                Pestaña
               </span>
               <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as MilestoneStatus)}
+                value={sectionId ?? ""}
+                onChange={(e) => setSectionId(e.target.value || null)}
                 className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
               >
-                {MILESTONE_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {MILESTONE_STATUS_LABEL[s]}
+                <option value="">Sin categoría</option>
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
                   </option>
                 ))}
               </select>
             </label>
-            {sections.length > 0 ? (
-              <label className="block text-xs">
-                <span className="mb-1 block font-semibold uppercase tracking-wider text-slate-500">
-                  Pestaña
-                </span>
-                <select
-                  value={sectionId ?? ""}
-                  onChange={(e) => setSectionId(e.target.value || null)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-                >
-                  <option value="">Sin categoría</option>
-                  {sections.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-          </div>
+          ) : null}
+        </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handle}
-              disabled={!title.trim() || busy}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-            >
-              {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-              Guardar hito
-            </button>
-            <button
-              type="button"
-              onClick={onCancel}
-              className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-            >
-              Cancelar
-            </button>
-            <p className="ml-auto text-xs text-slate-400">
-              Las fotos y videos se agregan después de crear el hito.
-            </p>
-          </div>
+        <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
+          <button
+            type="button"
+            onClick={handle}
+            disabled={!title.trim() || busy || uploading}
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+            Guardar hito
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
+          >
+            Cancelar
+          </button>
         </div>
       </div>
+
+      {showVoice ? (
+        <VoiceCaptureModal
+          onClose={() => setShowVoice(false)}
+          onSave={async (text) => {
+            appendToDescription("", text);
+            setShowVoice(false);
+          }}
+        />
+      ) : null}
+      {showNote ? (
+        <TextCaptureModal
+          onClose={() => setShowNote(false)}
+          onSave={async (text) => {
+            appendToDescription("", text);
+            setShowNote(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
