@@ -46,11 +46,69 @@ export const TENDER_STATUS_COLOR: Record<TenderStatus, string> = {
   por_partir: "#A855F7",
 };
 
+export type Modalidad = "licitacion_publica" | "compra_menor" | "contratacion_menor" | "otro";
+
+export const MODALIDAD_LABEL: Record<Modalidad, string> = {
+  licitacion_publica: "Licitación Pública",
+  compra_menor: "Compra Menor",
+  contratacion_menor: "Contratación Menor",
+  otro: "Otro",
+};
+
+// Filas completas (Fase B) — lo que consume la tabla editable.
+export type QuoteRow = {
+  id: string;
+  quote_number: string;
+  year: number | null;
+  sent_date: string | null;
+  amount_usd: number | null;
+  status: QuoteStatus;
+  payment_status: "facturado" | null;
+  invoice_status: "pendiente" | "cancelada" | null;
+  client_name: string | null;
+  description: string | null;
+  notes: string | null;
+  rubro: Rubro | null;
+  progress: number | null;
+  follow_up_date: string | null;
+  rejection_reason: string | null;
+  converted_project_id: string | null;
+};
+
+export type TenderRow = {
+  id: string;
+  acto_number: string | null;
+  year: number | null;
+  modalidad: Modalidad | null;
+  entity: string | null;
+  location_text: string | null;
+  objeto: string | null;
+  status: TenderStatus;
+  execution_status: string | null;
+  amount_ref_usd: number | null;
+  delivery_date: string | null;
+  notes: string | null;
+  folder_url: string | null;
+  rubro: Rubro | null;
+  progress: number | null;
+  converted_project_id: string | null;
+};
+
 export function formatMoney(n: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
+  }).format(n);
+}
+
+export function formatMoneyExact(n: number | null): string {
+  if (n === null || n === undefined) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(n);
 }
 
