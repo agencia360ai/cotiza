@@ -31,6 +31,7 @@ import {
 } from "@/lib/maintenance/types";
 import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
 import { StackedStatusBar } from "@/components/maintenance/charts";
+import { pipelineDerived, formatMoney } from "@/lib/pipeline/types";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -343,6 +344,9 @@ export default async function MaintenanceDashboard() {
             : "Estado global de todos tus clientes y mantenimientos"}
         </p>
       </header>
+
+      {/* Potenciales band — pipeline comercial (snapshot Excel, vivo en Fase C) */}
+      {!isProjectsFocus ? <PotencialesBand /> : null}
 
       {/* Projects KPI Strip — focus='projects' */}
       {isProjectsFocus ? (
@@ -787,6 +791,46 @@ export default async function MaintenanceDashboard() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+function PotencialesBand() {
+  const d = pipelineDerived();
+  const items = [
+    { label: "En juego", value: formatMoney(d.enJuegoMonto), sub: `${d.enJuegoCount} potenciales`, accent: "#F59E0B" },
+    { label: "Aprobado", value: formatMoney(d.aprobadoMonto), sub: `${d.aprobadoCount} cotizaciones`, accent: "#10B981" },
+    { label: "Por cobrar", value: String(d.porCobrar), sub: "aprobadas sin pago", accent: "#2563EB" },
+    { label: "Licitaciones vivas", value: String(d.licitacionesVivas), sub: `${d.licitacionesGanadas} ganadas`, accent: "#6366F1" },
+  ];
+  return (
+    <section className="mb-8">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="size-4 text-slate-400" />
+          <h2 className="text-sm font-semibold text-slate-700">Pipeline comercial</h2>
+        </div>
+        <Link href="/maintenance/potenciales" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
+          Ver potenciales
+          <ArrowRight className="size-3.5" />
+        </Link>
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {items.map((it) => (
+          <Link
+            key={it.label}
+            href="/maintenance/potenciales"
+            className="rounded-2xl border border-border bg-card p-4 transition-colors hover:border-slate-300 hover:bg-slate-50/50"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{it.label}</span>
+              <span className="size-2 rounded-full" style={{ backgroundColor: it.accent }} />
+            </div>
+            <p className="mt-2 text-xl font-bold tracking-tight text-slate-900">{it.value}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{it.sub}</p>
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
 

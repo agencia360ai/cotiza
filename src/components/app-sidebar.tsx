@@ -3,19 +3,36 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Users, Building2, ClipboardCheck, Calendar, Home, Menu, X, Settings, Hammer } from "lucide-react";
+import { LogOut, Users, Building2, Home, Menu, X, Settings, Hammer, Wrench, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  exact?: boolean;
+  also?: string[];
+};
 
 const NAV: NavItem[] = [
-  { href: "/maintenance", label: "Inicio", icon: Home },
-  { href: "/maintenance/clients", label: "Clientes", icon: Building2 },
+  { href: "/maintenance", label: "Inicio", icon: Home, exact: true },
+  { href: "/maintenance/potenciales", label: "Potenciales", icon: TrendingUp },
   { href: "/maintenance/projects", label: "Proyectos", icon: Hammer },
-  { href: "/maintenance/reports", label: "Reportes", icon: ClipboardCheck },
-  { href: "/maintenance/schedule", label: "Cronograma", icon: Calendar },
+  {
+    href: "/maintenance/mantenimiento",
+    label: "Mantenimiento",
+    icon: Wrench,
+    also: ["/maintenance/reports", "/maintenance/schedule"],
+  },
+  { href: "/maintenance/clients", label: "Clientes", icon: Building2 },
   { href: "/maintenance/technicians", label: "Personal", icon: Users },
 ];
+
+function isNavActive(item: NavItem, pathname: string): boolean {
+  if (item.exact) return pathname === item.href;
+  if (pathname === item.href || pathname.startsWith(`${item.href}/`)) return true;
+  return (item.also ?? []).some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
 
 type Props = {
   org: { name: string };
@@ -35,21 +52,23 @@ export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
     <>
       <div className="px-5 py-5 border-b border-border flex items-center justify-between">
         <div className="min-w-0">
-          <p className="text-sm font-semibold tracking-tight">
-            Reportme<span className="text-blue-600">.ai</span>
-          </p>
           {showOrgSwitcher ? (
             <Link
               href="/select-org"
-              className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              className="group inline-flex items-center gap-1.5"
               title="Cambiar organización"
             >
-              <span className="truncate max-w-[140px]">{org.name}</span>
-              <span className="text-muted-foreground/70">↕</span>
+              <span className="truncate max-w-[150px] text-sm font-bold tracking-tight text-slate-900">
+                {org.name}
+              </span>
+              <span className="text-muted-foreground/70 group-hover:text-foreground">↕</span>
             </Link>
           ) : (
-            <p className="text-xs text-muted-foreground mt-0.5 truncate">{org.name}</p>
+            <p className="truncate text-sm font-bold tracking-tight text-slate-900">{org.name}</p>
           )}
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Reportme<span className="text-blue-600">.ai</span>
+          </p>
         </div>
         <button
           type="button"
@@ -64,10 +83,7 @@ export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
       <nav className="flex-1 overflow-y-auto p-3">
         <div className="flex flex-col gap-0.5">
           {NAV.map((item) => {
-            const active =
-              item.href === "/maintenance"
-                ? pathname === "/maintenance"
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const active = isNavActive(item, pathname);
             const Icon = item.icon;
             return (
               <Link
@@ -117,11 +133,7 @@ export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
     </>
   );
 
-  const activeItem = NAV.find((n) =>
-    n.href === "/maintenance"
-      ? pathname === "/maintenance"
-      : pathname === n.href || pathname.startsWith(`${n.href}/`),
-  );
+  const activeItem = NAV.find((n) => isNavActive(n, pathname));
 
   return (
     <>
