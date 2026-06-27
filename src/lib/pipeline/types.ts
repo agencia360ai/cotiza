@@ -66,6 +66,9 @@ export type QuoteRow = {
   payment_status: "facturado" | null;
   invoice_status: "pendiente" | "cancelada" | null;
   client_name: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
   description: string | null;
   notes: string | null;
   rubro: Rubro | null;

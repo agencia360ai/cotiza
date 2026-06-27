@@ -21,6 +21,8 @@ import {
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
+  MessageCircle,
+  Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -66,6 +68,11 @@ function suggestType(rubro: Rubro | null): ProjectType {
   if (rubro === "DC") return "obra";
   if (rubro === "DV") return "instalacion";
   return "otro";
+}
+function waLink(phone: string | null): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, "");
+  return digits ? `https://wa.me/${digits}` : null;
 }
 
 type Tab = "cotizaciones" | "licitaciones";
@@ -301,18 +308,41 @@ function CotizacionesTab({
                         {fmtDate(x.sent_date)}
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        {x.status === "aprobada" && !x.converted_project_id ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConverting(x);
-                            }}
-                            className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                          >
-                            → Proyecto
-                          </button>
-                        ) : null}
+                        <div className="flex items-center justify-end gap-1">
+                          {waLink(x.contact_phone) ? (
+                            <a
+                              href={waLink(x.contact_phone)!}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex size-7 items-center justify-center rounded-md text-emerald-600 hover:bg-emerald-50"
+                              title={`WhatsApp${x.contact_name ? ` · ${x.contact_name}` : ""}`}
+                            >
+                              <MessageCircle className="size-4" />
+                            </a>
+                          ) : x.contact_email ? (
+                            <a
+                              href={`mailto:${x.contact_email}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex size-7 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50"
+                              title={`Email${x.contact_name ? ` · ${x.contact_name}` : ""}`}
+                            >
+                              <Mail className="size-4" />
+                            </a>
+                          ) : null}
+                          {x.status === "aprobada" && !x.converted_project_id ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConverting(x);
+                              }}
+                              className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                            >
+                              → Proyecto
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -402,6 +432,9 @@ function QuoteDrawer({
       payment_status: f.payment_status,
       invoice_status: f.invoice_status,
       client_name: f.client_name,
+      contact_name: f.contact_name,
+      contact_phone: f.contact_phone,
+      contact_email: f.contact_email,
       description: f.description,
       notes: f.notes,
       rubro: f.rubro,
@@ -422,6 +455,59 @@ function QuoteDrawer({
         <Field label="Cliente">
           <input className={inputCls} value={f.client_name ?? ""} onChange={(e) => set("client_name", e.target.value || null)} />
         </Field>
+
+        {/* Contacto para seguimiento */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Contacto</span>
+            <div className="flex items-center gap-1.5">
+              {waLink(f.contact_phone) ? (
+                <a
+                  href={waLink(f.contact_phone)!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-200"
+                  title="Abrir WhatsApp"
+                >
+                  <MessageCircle className="size-3.5" /> WhatsApp
+                </a>
+              ) : null}
+              {f.contact_email ? (
+                <a
+                  href={`mailto:${f.contact_email}`}
+                  className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-200"
+                  title="Enviar email"
+                >
+                  <Mail className="size-3.5" /> Email
+                </a>
+              ) : null}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <input
+              className={inputCls}
+              placeholder="Persona de contacto"
+              value={f.contact_name ?? ""}
+              onChange={(e) => set("contact_name", e.target.value || null)}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className={inputCls}
+                placeholder="WhatsApp (ej. 50761234567)"
+                value={f.contact_phone ?? ""}
+                onChange={(e) => set("contact_phone", e.target.value || null)}
+              />
+              <input
+                type="email"
+                className={inputCls}
+                placeholder="Email"
+                value={f.contact_email ?? ""}
+                onChange={(e) => set("contact_email", e.target.value || null)}
+              />
+            </div>
+          </div>
+        </div>
+
         <Field label="Descripción">
           <textarea
             rows={3}
@@ -566,6 +652,9 @@ function NewQuoteDrawer({
 }) {
   const [quoteNumber, setQuoteNumber] = useState("");
   const [client, setClient] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [rubro, setRubro] = useState<Rubro | "">("");
@@ -589,6 +678,9 @@ function NewQuoteDrawer({
       amount_usd: amount === "" ? null : Number(amount),
       status,
       client_name: client || null,
+      contact_name: contactName || null,
+      contact_phone: contactPhone || null,
+      contact_email: contactEmail || null,
       description: description || null,
       rubro: rubro || null,
       follow_up_date: status === "enviada" ? followUp || null : null,
@@ -608,6 +700,9 @@ function NewQuoteDrawer({
       payment_status: null,
       invoice_status: null,
       client_name: client || null,
+      contact_name: contactName || null,
+      contact_phone: contactPhone || null,
+      contact_email: contactEmail || null,
       description: description || null,
       notes: null,
       rubro: rubro || null,
@@ -627,6 +722,16 @@ function NewQuoteDrawer({
         <Field label="Cliente">
           <input className={inputCls} value={client} onChange={(e) => setClient(e.target.value)} />
         </Field>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+          <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500">Contacto (opcional)</span>
+          <div className="space-y-2">
+            <input className={inputCls} placeholder="Persona de contacto" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+            <div className="grid grid-cols-2 gap-2">
+              <input className={inputCls} placeholder="WhatsApp" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} />
+              <input type="email" className={inputCls} placeholder="Email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+            </div>
+          </div>
+        </div>
         <Field label="Descripción">
           <textarea rows={3} className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
