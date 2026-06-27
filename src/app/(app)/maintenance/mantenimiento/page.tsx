@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ClipboardCheck, Calendar, Boxes, AlertOctagon, ChevronRight } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
+import { MaintenanceOverview } from "@/components/maintenance/maintenance-overview";
 
 export const dynamic = "force-dynamic";
 
@@ -114,6 +115,8 @@ export default async function MantenimientoHubPage() {
           );
         })}
       </div>
+
+      {orgId ? <MaintenanceOverview orgId={orgId} /> : null}
     </div>
   );
 }
