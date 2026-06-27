@@ -31,6 +31,9 @@ export async function updateQuote(
     payment_status: "facturado" | null;
     invoice_status: "pendiente" | "cancelada" | null;
     client_name: string | null;
+    contact_name: string | null;
+    contact_phone: string | null;
+    contact_email: string | null;
     description: string | null;
     notes: string | null;
     rubro: Rubro | null;
@@ -57,6 +60,9 @@ export async function createQuote(input: {
   amount_usd: number | null;
   status: QuoteStatus;
   client_name: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
   description: string | null;
   rubro: Rubro | null;
   follow_up_date: string | null;
@@ -74,6 +80,9 @@ export async function createQuote(input: {
       amount_usd: input.amount_usd,
       status: input.status,
       client_name: input.client_name,
+      contact_name: input.contact_name,
+      contact_phone: input.contact_phone,
+      contact_email: input.contact_email,
       description: input.description,
       rubro: input.rubro,
       follow_up_date: input.follow_up_date,
