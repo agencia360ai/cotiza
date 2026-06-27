@@ -5,24 +5,24 @@ import Link from "next/link";
 import { FileText, Gavel, Info, TrendingUp, CheckCircle2, XCircle, Clock, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  PIPELINE_SNAPSHOT,
   pipelineDerived,
   formatMoney,
   QUOTE_STATUS_LABEL,
   QUOTE_STATUS_COLOR,
   TENDER_STATUS_LABEL,
   TENDER_STATUS_COLOR,
+  type PipelineData,
   type QuoteStatus,
   type TenderStatus,
 } from "@/lib/pipeline/types";
 
 type Tab = "cotizaciones" | "licitaciones";
 
-export function PotencialesScreen() {
+export function PotencialesScreen({ data }: { data: PipelineData }) {
   const [tab, setTab] = useState<Tab>("cotizaciones");
-  const d = pipelineDerived();
-  const c = PIPELINE_SNAPSHOT.cotizaciones;
-  const l = PIPELINE_SNAPSHOT.licitaciones;
+  const d = pipelineDerived(data);
+  const c = data.cotizaciones;
+  const l = data.licitaciones;
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
@@ -33,14 +33,24 @@ export function PotencialesScreen() {
         </p>
       </header>
 
-      {/* Preview banner */}
-      <div className="mb-6 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-        <Info className="mt-0.5 size-4 shrink-0 text-amber-600" />
-        <p className="text-xs leading-relaxed text-amber-800">
-          <strong>Vista previa con tus números reales</strong> (snapshot del Excel de control · {PIPELINE_SNAPSHOT.year}).
-          En la próxima fase importamos las cotizaciones y licitaciones a la base y esta tabla pasa a ser editable y en vivo (con seguimiento, conversión a proyecto e import desde Dropbox).
-        </p>
-      </div>
+      {/* Source banner — live vs snapshot */}
+      {data.live ? (
+        <div className="mb-6 flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <Info className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+          <p className="text-xs leading-relaxed text-emerald-800">
+            <strong>Datos en vivo</strong> ({data.year}). Próximo paso: tabla editable con seguimiento de enviadas,
+            motivo de rechazo, conversión a proyecto e import desde Dropbox.
+          </p>
+        </div>
+      ) : (
+        <div className="mb-6 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <Info className="mt-0.5 size-4 shrink-0 text-amber-600" />
+          <p className="text-xs leading-relaxed text-amber-800">
+            <strong>Vista previa con tus números reales</strong> (snapshot del Excel de control · {data.year}).
+            Apenas se importe la data a la base, esta vista pasa a vivo automáticamente.
+          </p>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="mb-6 flex gap-1 border-b border-slate-200">

@@ -87,10 +87,62 @@ export const PIPELINE_SNAPSHOT = {
   },
 } as const;
 
+// Forma normalizada que consumen las vistas. La data puede venir del snapshot
+// (Excel) o de las tablas vivas (`sales_quotes` / `tenders`) — misma forma.
+export type PipelineData = {
+  year: number;
+  live: boolean;
+  cotizaciones: {
+    total: { count: number; monto: number };
+    porEstado: Record<QuoteStatus, { count: number; monto: number }>;
+    facturacion: { cobrada: number; porCobrar: number; sinEstado: number };
+  };
+  licitaciones: {
+    total: { count: number; monto: number };
+    porEstatus: Record<TenderStatus, { count: number; monto: number }>;
+    porModalidad: {
+      publica: { label: string; count: number };
+      compraMenor: { label: string; count: number };
+      contratacionMenor: { label: string; count: number };
+    };
+  };
+};
+
+export function snapshotPipelineData(): PipelineData {
+  return {
+    year: PIPELINE_SNAPSHOT.year,
+    live: false,
+    cotizaciones: {
+      total: { ...PIPELINE_SNAPSHOT.cotizaciones.total },
+      porEstado: {
+        enviada: { ...PIPELINE_SNAPSHOT.cotizaciones.porEstado.enviada },
+        aprobada: { ...PIPELINE_SNAPSHOT.cotizaciones.porEstado.aprobada },
+        rechazada: { ...PIPELINE_SNAPSHOT.cotizaciones.porEstado.rechazada },
+      },
+      facturacion: { ...PIPELINE_SNAPSHOT.cotizaciones.facturacion },
+    },
+    licitaciones: {
+      total: { ...PIPELINE_SNAPSHOT.licitaciones.total },
+      porEstatus: {
+        ganada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.ganada },
+        no_ganada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.no_ganada },
+        presentada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.presentada },
+        en_revision: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.en_revision },
+        por_partir: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.por_partir },
+      },
+      porModalidad: {
+        publica: { ...PIPELINE_SNAPSHOT.licitaciones.porModalidad.publica },
+        compraMenor: { ...PIPELINE_SNAPSHOT.licitaciones.porModalidad.compraMenor },
+        contratacionMenor: { ...PIPELINE_SNAPSHOT.licitaciones.porModalidad.contratacionMenor },
+      },
+    },
+  };
+}
+
 // Derivados útiles para el dashboard.
-export function pipelineDerived() {
-  const c = PIPELINE_SNAPSHOT.cotizaciones;
-  const l = PIPELINE_SNAPSHOT.licitaciones;
+export function pipelineDerived(data: PipelineData) {
+  const c = data.cotizaciones;
+  const l = data.licitaciones;
   const licitacionesVivas =
     l.porEstatus.presentada.count + l.porEstatus.en_revision.count + l.porEstatus.por_partir.count;
   const montoLicitacionesVivas =
