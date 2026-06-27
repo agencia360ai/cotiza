@@ -23,6 +23,7 @@ import {
   ChevronsUpDown,
   MessageCircle,
   Mail,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -49,6 +50,7 @@ import {
   convertQuoteToProject,
   updateTender,
 } from "./actions";
+import { DropboxImportDialog } from "./dropbox-import";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
@@ -142,6 +144,7 @@ function CotizacionesTab({
   const [editing, setEditing] = useState<QuoteRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [converting, setConverting] = useState<QuoteRow | null>(null);
+  const [showDropbox, setShowDropbox] = useState(false);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -226,6 +229,15 @@ function CotizacionesTab({
             className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-3 text-sm focus:border-slate-400 focus:outline-none"
           />
         </div>
+        <button
+          type="button"
+          onClick={() => setShowDropbox(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          title="Importar cotizaciones desde la carpeta de Dropbox"
+        >
+          <FolderOpen className="size-4 text-blue-600" />
+          <span className="hidden sm:inline">Dropbox</span>
+        </button>
         <button
           type="button"
           onClick={() => setCreating(true)}
@@ -393,6 +405,19 @@ function CotizacionesTab({
               prev.map((x) => (x.id === converting.id ? { ...x, converted_project_id: projectId } : x)),
             );
             setConverting(null);
+          }}
+        />
+      ) : null}
+
+      {showDropbox ? (
+        <DropboxImportDialog
+          onClose={() => setShowDropbox(false)}
+          onImported={(rows) => {
+            setQuotes((prev) => {
+              const existing = new Set(prev.map((x) => x.id));
+              const fresh = rows.filter((r) => !existing.has(r.id));
+              return [...fresh, ...prev];
+            });
           }}
         />
       ) : null}
