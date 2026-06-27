@@ -73,7 +73,13 @@ function suggestType(rubro: Rubro | null): ProjectType {
 }
 function waLink(phone: string | null): string | null {
   if (!phone) return null;
-  const digits = phone.replace(/\D/g, "");
+  const t = phone.trim();
+  // Acepta un link wa.me / whatsapp pegado tal cual.
+  if (/wa\.me|whatsapp/i.test(t)) {
+    return t.startsWith("http") ? t : `https://${t.replace(/^\/+/, "")}`;
+  }
+  // O un número en cualquier formato (+507 6123-4567, 507..., etc.) → wa.me/<dígitos>
+  const digits = t.replace(/\D/g, "");
   return digits ? `https://wa.me/${digits}` : null;
 }
 
@@ -518,7 +524,7 @@ function QuoteDrawer({
             <div className="grid grid-cols-2 gap-2">
               <input
                 className={inputCls}
-                placeholder="WhatsApp (ej. 50761234567)"
+                placeholder="WhatsApp: 507... o wa.me/507..."
                 value={f.contact_phone ?? ""}
                 onChange={(e) => set("contact_phone", e.target.value || null)}
               />
