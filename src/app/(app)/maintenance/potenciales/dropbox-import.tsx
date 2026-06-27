@@ -38,8 +38,8 @@ export function DropboxImportDialog({
       return;
     }
     setFiles(r.data.files);
-    // Pre-seleccionar las nuevas.
-    setSelected(new Set(r.data.files.filter((f) => !f.alreadyImported).map((f) => f.path)));
+    // Pre-seleccionar solo las nuevas (ni importadas ni posibles duplicados).
+    setSelected(new Set(r.data.files.filter((f) => !f.alreadyImported && !f.possibleDuplicate).map((f) => f.path)));
   }
 
   useEffect(() => {
@@ -56,7 +56,8 @@ export function DropboxImportDialog({
     });
   }
 
-  const nuevas = (files ?? []).filter((f) => !f.alreadyImported);
+  const nuevas = (files ?? []).filter((f) => !f.alreadyImported && !f.possibleDuplicate);
+  const dudosas = (files ?? []).filter((f) => f.possibleDuplicate && !f.alreadyImported);
   const selCount = (files ?? []).filter((f) => selected.has(f.path) && !f.alreadyImported).length;
 
   async function runImport() {
@@ -68,7 +69,7 @@ export function DropboxImportDialog({
     for (let i = 0; i < queue.length; i++) {
       const f = queue[i];
       setProgress({ done: i, total: queue.length, current: f.name });
-      const r = await importDropboxFile(f.path, f.name);
+      const r = await importDropboxFile(f.path, f.name, f.fileId);
       if ("error" in r) {
         setResults((prev) => [...prev, { name: f.name, ok: false, msg: r.error }]);
       } else {
@@ -148,6 +149,12 @@ export function DropboxImportDialog({
                         <p className="truncate text-sm text-slate-800">{f.name}</p>
                         {res ? (
                           <p className={cn("text-xs", res.ok ? "text-emerald-600" : "text-red-600")}>{res.msg}</p>
+                        ) : f.possibleDuplicate ? (
+                          <p className="truncate text-[11px] text-amber-600">
+                            ⚠ posible duplicado de {f.possibleDuplicate.number}
+                            {f.possibleDuplicate.client ? ` · ${f.possibleDuplicate.client}` : ""}
+                            {f.possibleDuplicate.amount !== null ? ` · ${formatMoneyExact(f.possibleDuplicate.amount)}` : ""}
+                          </p>
                         ) : (
                           <p className="text-[11px] text-slate-400">{f.guessedNumber ?? "número no detectado"}</p>
                         )}
@@ -155,6 +162,10 @@ export function DropboxImportDialog({
                       {f.alreadyImported ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
                           <CheckCircle2 className="size-3.5" /> importada
+                        </span>
+                      ) : f.possibleDuplicate ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                          <AlertTriangle className="size-3" /> revisar
                         </span>
                       ) : res && !res.ok ? (
                         <AlertTriangle className="size-4 text-red-500" />
@@ -181,7 +192,7 @@ export function DropboxImportDialog({
           ) : null}
           <div className="flex items-center justify-between">
             <p className="text-xs text-slate-500">
-              {files ? `${nuevas.length} nuevas · ${selCount} seleccionadas` : ""}
+              {files ? `${nuevas.length} nuevas · ${dudosas.length} a revisar · ${selCount} seleccionadas` : ""}
             </p>
             <button
               type="button"
@@ -194,7 +205,7 @@ export function DropboxImportDialog({
             </button>
           </div>
           <p className="mt-2 text-[11px] text-slate-400">
-            Cada PDF se lee con IA para extraer número, cliente, monto, fecha y rubro. Las ya importadas se saltean.
+            Dedup por archivo: las ya importadas no se repiten. Las marcadas <span className="text-amber-600">a revisar</span> tienen un número que ya existe — no van pre-seleccionadas; marcalas a mano si querés importarlas igual.
           </p>
         </footer>
       </div>
