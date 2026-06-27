@@ -31,7 +31,8 @@ import {
 } from "@/lib/maintenance/types";
 import { ReportTypeIcon } from "@/components/maintenance/report-type-badge";
 import { StackedStatusBar } from "@/components/maintenance/charts";
-import { pipelineDerived, formatMoney } from "@/lib/pipeline/types";
+import { pipelineDerived, formatMoney, type PipelineData } from "@/lib/pipeline/types";
+import { getPipelineData } from "@/lib/pipeline/queries";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -147,6 +148,9 @@ export default async function MaintenanceDashboard() {
   const focus = org?.focus ?? "mixed";
 
   const orgId = ctx?.orgId ?? "";
+
+  // Pipeline comercial (vivo si hay data, snapshot del Excel si no).
+  const pipeline = focus !== "projects" ? await getPipelineData(orgId) : null;
 
   const [
     clientsRes,
@@ -345,8 +349,8 @@ export default async function MaintenanceDashboard() {
         </p>
       </header>
 
-      {/* Potenciales band — pipeline comercial (snapshot Excel, vivo en Fase C) */}
-      {!isProjectsFocus ? <PotencialesBand /> : null}
+      {/* Potenciales band — pipeline comercial (vivo si hay data, snapshot si no) */}
+      {!isProjectsFocus && pipeline ? <PotencialesBand data={pipeline} /> : null}
 
       {/* Projects KPI Strip — focus='projects' */}
       {isProjectsFocus ? (
@@ -794,8 +798,8 @@ export default async function MaintenanceDashboard() {
   );
 }
 
-function PotencialesBand() {
-  const d = pipelineDerived();
+function PotencialesBand({ data }: { data: PipelineData }) {
+  const d = pipelineDerived(data);
   const items = [
     { label: "En juego", value: formatMoney(d.enJuegoMonto), sub: `${d.enJuegoCount} potenciales`, accent: "#F59E0B" },
     { label: "Aprobado", value: formatMoney(d.aprobadoMonto), sub: `${d.aprobadoCount} cotizaciones`, accent: "#10B981" },
