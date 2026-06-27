@@ -18,6 +18,9 @@ import {
   ArrowUpRight,
   Trash2,
   ExternalLink,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -46,6 +49,8 @@ import {
 } from "./actions";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
+type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
+type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
 const QUOTE_STATUSES: QuoteStatus[] = ["enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["presentada", "en_revision", "por_partir", "ganada", "no_ganada"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
@@ -124,6 +129,9 @@ function CotizacionesTab({
   const [estado, setEstado] = useState<QuoteStatus | "all">("all");
   const [rubro, setRubro] = useState<Rubro | "all">("all");
   const [q, setQ] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [sort, setSort] = useState<SortState<QSortKey>>({ key: "sent_date", dir: "desc" });
   const [editing, setEditing] = useState<QuoteRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [converting, setConverting] = useState<QuoteRow | null>(null);
@@ -134,13 +142,21 @@ function CotizacionesTab({
       if (year !== "all" && x.year !== year) return false;
       if (estado !== "all" && x.status !== estado) return false;
       if (rubro !== "all" && x.rubro !== rubro) return false;
+      if (from && (!x.sent_date || x.sent_date < from)) return false;
+      if (to && (!x.sent_date || x.sent_date > to)) return false;
       if (needle) {
         const hay = `${x.quote_number} ${x.client_name ?? ""} ${x.description ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
     });
-  }, [quotes, year, estado, rubro, q]);
+  }, [quotes, year, estado, rubro, q, from, to]);
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => compareVals(a[sort.key], b[sort.key], sort.dir));
+    return arr;
+  }, [filtered, sort]);
 
   const kpis = useMemo(() => {
     let enviadaMonto = 0;
@@ -213,6 +229,19 @@ function CotizacionesTab({
         </button>
       </div>
 
+      {/* Rango de fechas (por fecha de envío) */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span className="font-semibold uppercase tracking-wider">Envío</span>
+        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:border-slate-400 focus:outline-none" />
+        <span>→</span>
+        <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:border-slate-400 focus:outline-none" />
+        {(from || to) ? (
+          <button type="button" onClick={() => { setFrom(""); setTo(""); }} className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-slate-500 hover:bg-slate-100">
+            <X className="size-3" /> Limpiar
+          </button>
+        ) : null}
+      </div>
+
       <p className="mb-2 text-xs text-muted-foreground">
         {filtered.length} de {quotes.length} cotizaciones
       </p>
@@ -222,25 +251,25 @@ function CotizacionesTab({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
-                <th className="px-3 py-2.5 font-semibold">Nº</th>
-                <th className="px-3 py-2.5 font-semibold">Cliente</th>
+                <SortTh label="Nº" k="quote_number" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <SortTh label="Cliente" k="client_name" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Descripción</th>
                 <th className="px-3 py-2.5 font-semibold">Rubro</th>
-                <th className="px-3 py-2.5 text-right font-semibold">Monto</th>
-                <th className="px-3 py-2.5 font-semibold">Estado</th>
-                <th className="hidden px-3 py-2.5 font-semibold sm:table-cell">Envío</th>
+                <SortTh label="Monto" k="amount_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
+                <SortTh label="Estado" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <SortTh label="Envío" k="sent_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} className="hidden sm:table-cell" />
                 <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {sorted.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin cotizaciones con estos filtros.
                   </td>
                 </tr>
               ) : (
-                filtered.map((x) => {
+                sorted.map((x) => {
                   const overdue = x.status === "enviada" && x.follow_up_date && x.follow_up_date < today();
                   return (
                     <tr
@@ -791,11 +820,12 @@ function LicitacionesTab({
   const [estatus, setEstatus] = useState<TenderStatus | "all">("all");
   const [modalidad, setModalidad] = useState<Modalidad | "all">("all");
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<SortState<TSortKey>>({ key: "amount_ref_usd", dir: "desc" });
   const [editing, setEditing] = useState<TenderRow | null>(null);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return tenders.filter((x) => {
+    const arr = tenders.filter((x) => {
       if (estatus !== "all" && x.status !== estatus) return false;
       if (modalidad !== "all" && x.modalidad !== modalidad) return false;
       if (needle) {
@@ -804,7 +834,9 @@ function LicitacionesTab({
       }
       return true;
     });
-  }, [tenders, estatus, modalidad, q]);
+    arr.sort((a, b) => compareVals(a[sort.key], b[sort.key], sort.dir));
+    return arr;
+  }, [tenders, estatus, modalidad, q, sort]);
 
   const kpis = useMemo(() => {
     let vivas = 0;
@@ -863,11 +895,11 @@ function LicitacionesTab({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
-                <th className="px-3 py-2.5 font-semibold">Entidad</th>
+                <SortTh label="Entidad" k="entity" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Objeto</th>
-                <th className="px-3 py-2.5 font-semibold">Modalidad</th>
-                <th className="px-3 py-2.5 text-right font-semibold">Ref. (B/.)</th>
-                <th className="px-3 py-2.5 font-semibold">Estatus</th>
+                <SortTh label="Modalidad" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <SortTh label="Ref. (B/.)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
+                <SortTh label="Estatus" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold sm:table-cell">Rubro</th>
               </tr>
             </thead>
@@ -1032,6 +1064,59 @@ function TenderDrawer({
 
 const inputCls =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none";
+
+type SortDir = "asc" | "desc";
+type SortState<K extends string> = { key: K; dir: SortDir };
+
+function toggleSort<K extends string>(cur: SortState<K>, key: K, defaultDir: SortDir = "asc"): SortState<K> {
+  if (cur.key === key) return { key, dir: cur.dir === "asc" ? "desc" : "asc" };
+  return { key, dir: defaultDir };
+}
+
+function compareVals(a: unknown, b: unknown, dir: SortDir): number {
+  const an = a === null || a === undefined || a === "";
+  const bn = b === null || b === undefined || b === "";
+  if (an && bn) return 0;
+  if (an) return 1; // nulls/vacíos siempre al final
+  if (bn) return -1;
+  let r: number;
+  if (typeof a === "number" && typeof b === "number") r = a - b;
+  else r = String(a).localeCompare(String(b), "es", { numeric: true });
+  return dir === "asc" ? r : -r;
+}
+
+function SortTh<K extends string>({
+  label,
+  k,
+  sort,
+  onSort,
+  align = "left",
+  className,
+}: {
+  label: string;
+  k: K;
+  sort: SortState<K>;
+  onSort: (k: K) => void;
+  align?: "left" | "right";
+  className?: string;
+}) {
+  const active = sort.key === k;
+  return (
+    <th
+      className={cn("cursor-pointer select-none px-3 py-2.5 font-semibold hover:text-slate-700", className)}
+      onClick={() => onSort(k)}
+    >
+      <span className={cn("inline-flex items-center gap-1", align === "right" && "flex-row-reverse")}>
+        {label}
+        {active ? (
+          sort.dir === "asc" ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />
+        ) : (
+          <ChevronsUpDown className="size-3.5 opacity-30" />
+        )}
+      </span>
+    </th>
+  );
+}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
