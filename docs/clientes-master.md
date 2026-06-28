@@ -152,7 +152,7 @@ El orden refleja **pull-first**: QBO siembra el maestro *antes* de limpiar lo de
 
 | Fase | Qué | Entregable |
 |---|---|---|
-| CL-1 | Tablas: `clients.qb_customer_id`, `client_contacts`, `client_aliases`, `client_id` en quotes/tenders | migración |
+| CL-1 | Tablas: `clients.qb_customer_id`/`legal_name`/sync, `client_contacts`, `client_aliases`, `client_id` en tenders, `qb_sub_customer_id` en locations | ✅ `db/migrations/0004_clients_master.sql` |
 | CL-2 | **Pull de QuickBooks** → espejar customers (+ contactos + sub-customers) en `clients`/`client_contacts` | maestro sembrado desde QBO |
 | CL-3 | Clustering IA de nombres sueltos **contra el maestro de QBO** + **pantalla de revisión/merge** | UI de estandarización |
 | CL-4 | Aplicar merge: linkeo masivo de cotizaciones/licitaciones + alta en QBO de los que faltan (push) | clientes canónicos + links |
@@ -160,16 +160,21 @@ El orden refleja **pull-first**: QBO siembra el maestro *antes* de limpiar lo de
 
 ---
 
-## 8. Decisiones que necesito para cerrar el plan
+## 8. Decisiones (tomadas)
 
-✅ **Resuelto — Fuente de verdad: QuickBooks manda.** El maestro se siembra desde
-QBO (pull-first) y la app espeja por `qb_customer_id`. La app no renombra; sólo da
-de alta en QBO los clientes que aún no existen ahí.
+- ✅ **Fuente de verdad: QuickBooks manda.** El maestro se siembra desde QBO
+  (pull-first) y la app espeja por `qb_customer_id`. La app no renombra; sólo da
+  de alta en QBO los clientes que aún no existen ahí.
+- ✅ **Sucursales = `client_locations`** del mismo cliente (no clientes separados).
+  Colapsa los 15 "Esa Flaca Rica" en 1 cliente con ~8 ubicaciones.
+- ✅ **Sufijo legal fuera del nombre visible.** El `DisplayName` va sin `S.A./Inc.`;
+  la razón social se guarda en `clients.legal_name`.
+- ✅ **Mapeo de sucursal en QBO: se adopta lo que QBO traiga** en el pull inicial
+  (sub-customer/job si existe). La columna `client_locations.qb_sub_customer_id`
+  queda lista para guardarlo (base del costo→sucursal→proyecto en Fase D).
+- ✅ **Contactos/POCs**: contacto primario desde QBO + POCs adicionales manuales en
+  `client_contacts`. Sin importación de contactos desde otra fuente por ahora.
+- ✅ **Alcance del primer merge: todo el histórico (2025 + 2026).**
 
-Pendientes para cerrar:
-
-1. **Sucursales**: ¿como `locations` del mismo cliente (recomendado) o clientes separados?
-2. **Nombre canónico**: en QBO, ¿con o sin sufijo legal (`S.A./Inc.`) en el `DisplayName` visible? (recomendado: sin sufijo, guardado aparte.)
-3. **QuickBooks**: ¿el *customer* es el cliente (sucursal = sub-customer/job), o cada sucursal es un customer propio?
-4. **Contactos/POCs**: ¿alcanza con el contacto primario de QBO + POCs manuales en `client_contacts`, o necesitás importar varios contactos por cliente desde otra fuente?
-5. **Alcance del primer merge**: ¿estandarizamos solo los clientes de 2026, o todo el histórico (2025 incluido)?
+> Reabrir cualquiera de estas es barato: el esquema CL-1 no depende de ellas
+> (sólo cambian el merge de CL-3/CL-4 y el mapeo de Fase D).
