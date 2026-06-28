@@ -9,7 +9,7 @@ import { syncQuickbooksCustomers, type SyncSummary } from "./sync-actions";
 export function QuickbooksSync() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [subAsLoc, setSubAsLoc] = useState(true);
+  const [subAsLoc, setSubAsLoc] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<SyncSummary | null>(null);
@@ -49,15 +49,20 @@ export function QuickbooksSync() {
 
       {open ? (
         <div className="border-t border-emerald-100 px-5 py-4">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
               checked={subAsLoc}
               onChange={(e) => setSubAsLoc(e.target.checked)}
               disabled={running}
-              className="size-4"
+              className="mt-0.5 size-4"
             />
-            Importar sub-customers de QBO como sucursales
+            <span>
+              Importar sub-customers como sucursales
+              <span className="block text-xs text-slate-500">
+                Los proyectos/jobs de QBO (IsProject) nunca se importan como sucursales — se cuentan aparte.
+              </span>
+            </span>
           </label>
 
           <div className="mt-3 flex items-center gap-3">
@@ -90,6 +95,7 @@ export function QuickbooksSync() {
                 <li>Actualizados: <b className="tabular-nums text-slate-900">{summary.clientsUpdated}</b></li>
                 <li>Contactos: <b className="tabular-nums text-slate-900">{summary.contactsUpserted}</b></li>
                 <li>Sucursales: <b className="tabular-nums text-slate-900">{summary.locationsUpserted}</b></li>
+                {summary.qboProjects > 0 ? <li>Proyectos QBO (jobs): <b className="tabular-nums text-slate-900">{summary.qboProjects}</b></li> : null}
                 {summary.skipped > 0 ? <li>Omitidos: <b className="tabular-nums text-slate-900">{summary.skipped}</b></li> : null}
               </ul>
               {summary.toolUsed ? <p className="mt-1.5 text-[11px] text-slate-400">Tool QBO: {summary.toolUsed}</p> : null}
