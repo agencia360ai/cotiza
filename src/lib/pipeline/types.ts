@@ -66,6 +66,8 @@ export type QuoteRow = {
   payment_status: "facturado" | null;
   invoice_status: "pendiente" | "cancelada" | null;
   client_name: string | null;
+  client_id: string | null;
+  client_std_name: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   contact_email: string | null;
@@ -84,6 +86,8 @@ export type TenderRow = {
   year: number | null;
   modalidad: Modalidad | null;
   entity: string | null;
+  client_id: string | null;
+  client_std_name: string | null;
   location_text: string | null;
   objeto: string | null;
   status: TenderStatus;

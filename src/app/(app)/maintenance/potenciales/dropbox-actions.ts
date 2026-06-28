@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { hasDropboxConfig, listFolder, downloadFile } from "@/lib/dropbox/client";
 import { parseQuotePdf } from "@/lib/ai/parse-quote-pdf";
+import { matchClientByName } from "@/lib/clients/match";
 import type { QuoteRow } from "@/lib/pipeline/types";
 
 type Result<T> = { error: string } | { ok: true; data: T };
@@ -142,6 +143,7 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
     const number = (parsed.quote_number?.trim() || guessNumber(name) || name).toUpperCase();
     const year = (parsed.sent_date ? Number(parsed.sent_date.slice(0, 4)) : yearFromNumber(number)) || new Date().getFullYear();
     const notes = `Importado de Dropbox: ${name}`;
+    const matched = await matchClientByName(c.supabase, c.orgId, parsed.client_name);
 
     const base = {
       org_id: c.orgId,
@@ -151,6 +153,7 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
       amount_usd: parsed.amount_usd,
       status: "enviada" as const,
       client_name: parsed.client_name,
+      client_id: matched?.id ?? null,
       description: parsed.description,
       rubro: parsed.rubro,
       notes,
@@ -185,6 +188,8 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
         payment_status: null,
         invoice_status: null,
         client_name: parsed.client_name,
+        client_id: matched?.id ?? null,
+        client_std_name: matched?.name ?? null,
         contact_name: null,
         contact_phone: null,
         contact_email: null,

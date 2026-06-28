@@ -26,6 +26,7 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { norm } from "@/lib/clients/normalize";
 import {
   RUBROS,
   QUOTE_STATUS_LABEL,
@@ -119,7 +120,7 @@ export function PotencialesScreen({
       {tab === "cotizaciones" ? (
         <CotizacionesTab quotes={quotes} setQuotes={setQuotes} clients={clients} />
       ) : (
-        <LicitacionesTab tenders={tenders} setTenders={setTenders} />
+        <LicitacionesTab tenders={tenders} setTenders={setTenders} clients={clients} />
       )}
     </div>
   );
@@ -146,6 +147,7 @@ function CotizacionesTab({
   const [q, setQ] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [soloSinCliente, setSoloSinCliente] = useState(false);
   const [sort, setSort] = useState<SortState<QSortKey>>({ key: "sent_date", dir: "desc" });
   const [editing, setEditing] = useState<QuoteRow | null>(null);
   const [creating, setCreating] = useState(false);
@@ -160,13 +162,14 @@ function CotizacionesTab({
       if (rubro !== "all" && x.rubro !== rubro) return false;
       if (from && (!x.sent_date || x.sent_date < from)) return false;
       if (to && (!x.sent_date || x.sent_date > to)) return false;
+      if (soloSinCliente && x.client_id) return false;
       if (needle) {
-        const hay = `${x.quote_number} ${x.client_name ?? ""} ${x.description ?? ""}`.toLowerCase();
+        const hay = `${x.quote_number} ${x.client_name ?? ""} ${x.client_std_name ?? ""} ${x.description ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
     });
-  }, [quotes, year, estado, rubro, q, from, to]);
+  }, [quotes, year, estado, rubro, q, from, to, soloSinCliente]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -193,6 +196,8 @@ function CotizacionesTab({
     const cierre = decididas > 0 ? Math.round((aprobadaCount / decididas) * 100) : 0;
     return { enviadaMonto, aprobadaCount, aprobadaMonto, rechazadaCount, porCobrar, cierre };
   }, [filtered]);
+
+  const sinClienteCount = useMemo(() => quotes.filter((x) => !x.client_id).length, [quotes]);
 
   function applyLocal(updated: QuoteRow) {
     setQuotes((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
@@ -265,6 +270,18 @@ function CotizacionesTab({
             <X className="size-3" /> Limpiar
           </button>
         ) : null}
+        <span className="mx-1 h-4 w-px bg-slate-200" />
+        <button
+          type="button"
+          onClick={() => setSoloSinCliente((v) => !v)}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold",
+            soloSinCliente ? "bg-amber-100 text-amber-700" : "text-slate-500 hover:bg-slate-100",
+          )}
+          title="Mostrar solo cotizaciones sin cliente estandarizado"
+        >
+          Sin cliente{sinClienteCount > 0 ? ` (${sinClienteCount})` : ""}
+        </button>
       </div>
 
       <p className="mb-2 text-xs text-muted-foreground">
@@ -303,7 +320,14 @@ function CotizacionesTab({
                       className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
                     >
                       <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-900">{x.quote_number}</td>
-                      <td className="max-w-[160px] truncate px-3 py-2.5 text-slate-700">{x.client_name ?? "—"}</td>
+                      <td className="max-w-[180px] px-3 py-2.5">
+                        <div className="truncate text-slate-700">{x.client_std_name ?? x.client_name ?? "—"}</div>
+                        {!x.client_id && x.client_name ? (
+                          <span className="text-[10px] font-medium text-amber-600">sin estandarizar</span>
+                        ) : x.client_std_name && x.client_name && norm(x.client_std_name) !== norm(x.client_name) ? (
+                          <span className="block truncate text-[10px] text-slate-400">{x.client_name}</span>
+                        ) : null}
+                      </td>
                       <td className="hidden max-w-[280px] truncate px-3 py-2.5 text-slate-500 md:table-cell">
                         {x.description ?? "—"}
                       </td>
@@ -374,6 +398,7 @@ function CotizacionesTab({
       {editing ? (
         <QuoteDrawer
           quote={editing}
+          clients={clients}
           onClose={() => setEditing(null)}
           onSaved={(u) => {
             applyLocal(u);
@@ -433,12 +458,14 @@ function CotizacionesTab({
 
 function QuoteDrawer({
   quote,
+  clients,
   onClose,
   onSaved,
   onDeleted,
   onConvert,
 }: {
   quote: QuoteRow;
+  clients: { id: string; name: string }[];
   onClose: () => void;
   onSaved: (q: QuoteRow) => void;
   onDeleted: (id: string) => void;
@@ -463,6 +490,7 @@ function QuoteDrawer({
       payment_status: f.payment_status,
       invoice_status: f.invoice_status,
       client_name: f.client_name,
+      client_id: f.client_id,
       contact_name: f.contact_name,
       contact_phone: f.contact_phone,
       contact_email: f.contact_email,
@@ -483,8 +511,29 @@ function QuoteDrawer({
   return (
     <Drawer title={`Cotización ${quote.quote_number}`} onClose={onClose}>
       <div className="space-y-3">
-        <Field label="Cliente">
-          <input className={inputCls} value={f.client_name ?? ""} onChange={(e) => set("client_name", e.target.value || null)} />
+        <Field label="Cliente" hint="texto original + cliente estandarizado">
+          <input
+            className={inputCls}
+            value={f.client_name ?? ""}
+            onChange={(e) => set("client_name", e.target.value || null)}
+            placeholder="Nombre tal como vino"
+          />
+          <select
+            className={cn(inputCls, "mt-1.5")}
+            value={f.client_id ?? ""}
+            onChange={(e) => {
+              const id = e.target.value || null;
+              const name = id ? clients.find((c) => c.id === id)?.name ?? null : null;
+              setF((prev) => ({ ...prev, client_id: id, client_std_name: name }));
+            }}
+          >
+            <option value="">— Sin cliente estandarizado —</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
         </Field>
 
         {/* Contacto para seguimiento */}
@@ -731,6 +780,8 @@ function NewQuoteDrawer({
       payment_status: null,
       invoice_status: null,
       client_name: client || null,
+      client_id: r.data.client_id,
+      client_std_name: r.data.client_std_name,
       contact_name: contactName || null,
       contact_phone: contactPhone || null,
       contact_email: contactEmail || null,
@@ -833,10 +884,14 @@ function ConvertDialog({
 }) {
   // Pre-match cliente por nombre.
   const preMatch = useMemo(() => {
+    if (quote.client_id) {
+      const byId = clients.find((c) => c.id === quote.client_id);
+      if (byId) return byId;
+    }
     const n = (quote.client_name ?? "").trim().toLowerCase();
     if (!n) return null;
     return clients.find((c) => c.name.trim().toLowerCase() === n) ?? clients.find((c) => n.includes(c.name.trim().toLowerCase())) ?? null;
-  }, [quote.client_name, clients]);
+  }, [quote.client_id, quote.client_name, clients]);
 
   const [mode, setMode] = useState<"existing" | "new">(preMatch ? "existing" : clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState(preMatch?.id ?? clients[0]?.id ?? "");
@@ -949,9 +1004,11 @@ function ConvertDialog({
 function LicitacionesTab({
   tenders,
   setTenders,
+  clients,
 }: {
   tenders: TenderRow[];
   setTenders: React.Dispatch<React.SetStateAction<TenderRow[]>>;
+  clients: { id: string; name: string }[];
 }) {
   const [estatus, setEstatus] = useState<TenderStatus | "all">("all");
   const [modalidad, setModalidad] = useState<Modalidad | "all">("all");
@@ -965,7 +1022,7 @@ function LicitacionesTab({
       if (estatus !== "all" && x.status !== estatus) return false;
       if (modalidad !== "all" && x.modalidad !== modalidad) return false;
       if (needle) {
-        const hay = `${x.acto_number ?? ""} ${x.entity ?? ""} ${x.objeto ?? ""}`.toLowerCase();
+        const hay = `${x.acto_number ?? ""} ${x.entity ?? ""} ${x.client_std_name ?? ""} ${x.objeto ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
@@ -1053,7 +1110,14 @@ function LicitacionesTab({
                     onClick={() => setEditing(x)}
                     className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
                   >
-                    <td className="max-w-[200px] truncate px-3 py-2.5 font-medium text-slate-900">{x.entity ?? "—"}</td>
+                    <td className="max-w-[220px] px-3 py-2.5">
+                      <div className="truncate font-medium text-slate-900">{x.client_std_name ?? x.entity ?? "—"}</div>
+                      {!x.client_id && x.entity ? (
+                        <span className="text-[10px] font-medium text-amber-600">sin estandarizar</span>
+                      ) : x.client_std_name && x.entity && norm(x.client_std_name) !== norm(x.entity) ? (
+                        <span className="block truncate text-[10px] text-slate-400">{x.entity}</span>
+                      ) : null}
+                    </td>
                     <td className="hidden max-w-[300px] truncate px-3 py-2.5 text-slate-500 md:table-cell">{x.objeto ?? "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.modalidad ? MODALIDAD_LABEL[x.modalidad] : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
@@ -1074,6 +1138,7 @@ function LicitacionesTab({
       {editing ? (
         <TenderDrawer
           tender={editing}
+          clients={clients}
           onClose={() => setEditing(null)}
           onSaved={(u) => {
             setTenders((prev) => prev.map((x) => (x.id === u.id ? u : x)));
@@ -1087,10 +1152,12 @@ function LicitacionesTab({
 
 function TenderDrawer({
   tender,
+  clients,
   onClose,
   onSaved,
 }: {
   tender: TenderRow;
+  clients: { id: string; name: string }[];
   onClose: () => void;
   onSaved: (t: TenderRow) => void;
 }) {
@@ -1113,6 +1180,7 @@ function TenderDrawer({
       notes: f.notes,
       folder_url: f.folder_url,
       rubro: f.rubro,
+      client_id: f.client_id,
     });
     setSaving(false);
     if ("error" in r) {
@@ -1127,6 +1195,24 @@ function TenderDrawer({
       <div className="space-y-3">
         {f.objeto ? <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{f.objeto}</p> : null}
         {f.acto_number ? <p className="text-xs text-slate-400">Acto: {f.acto_number}</p> : null}
+        <Field label="Cliente" hint="entidad estandarizada">
+          <select
+            className={inputCls}
+            value={f.client_id ?? ""}
+            onChange={(e) => {
+              const id = e.target.value || null;
+              const name = id ? clients.find((c) => c.id === id)?.name ?? null : null;
+              setF((prev) => ({ ...prev, client_id: id, client_std_name: name }));
+            }}
+          >
+            <option value="">— Sin cliente estandarizado —</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Estatus">
             <select className={inputCls} value={f.status} onChange={(e) => set("status", e.target.value as TenderStatus)}>
