@@ -8,9 +8,17 @@ de proyectos. Se aplica una sola vez sobre el proyecto Supabase
 
 1. `migrations/0001_pipeline_tables.sql` — crea `sales_quotes`, `tenders`,
    índices, RLS y agrega `budget_usd` / `qb_customer_id` a `client_projects`.
-2. `seed/0002_quotes_part1.sql` … `0004_quotes_part3.sql` — importa las 316
+2. `migrations/0002_sales_quotes_contact.sql` — agrega `contact_name` /
+   `contact_phone` / `contact_email` a `sales_quotes`.
+3. `migrations/0003_sales_quotes_dropbox.sql` — agrega `dropbox_file_id` /
+   `dropbox_path` (dedup robusto del import de Dropbox).
+4. `migrations/0004_clients_master.sql` — **CL-1**: maestro de clientes
+   (espejo de QBO). Agrega `qb_customer_id`/`legal_name`/sync a `clients`,
+   `qb_sub_customer_id` a `client_locations`, crea `client_contacts` y
+   `client_aliases`, y agrega `client_id` a `tenders`. Idempotente.
+5. `seed/0002_quotes_part1.sql` … `0004_quotes_part3.sql` — importa las 316
    cotizaciones del Excel (2025 + 2026).
-3. `seed/0005_tenders.sql` — importa las 41 licitaciones.
+6. `seed/0005_tenders.sql` — importa las 41 licitaciones.
 
 El seed resuelve el `org_id` con
 `(SELECT id FROM cotiza.organizations WHERE name ILIKE '%dicec%' ...)`, así que
