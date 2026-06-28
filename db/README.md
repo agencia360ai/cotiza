@@ -16,9 +16,12 @@ de proyectos. Se aplica una sola vez sobre el proyecto Supabase
    (espejo de QBO). Agrega `qb_customer_id`/`legal_name`/sync a `clients`,
    `qb_sub_customer_id` a `client_locations`, crea `client_contacts` y
    `client_aliases`, y agrega `client_id` a `tenders`. Idempotente.
-5. `seed/0002_quotes_part1.sql` … `0004_quotes_part3.sql` — importa las 316
+5. `migrations/0005_quote_location.sql` — **CL-3.5**: agrega `location_id` a
+   `sales_quotes` / `tenders` (linkeo a la sucursal). El backfill lo hace el
+   "Aplicar" de Estandarizar (re-correrlo). Idempotente.
+6. `seed/0002_quotes_part1.sql` … `0004_quotes_part3.sql` — importa las 316
    cotizaciones del Excel (2025 + 2026).
-6. `seed/0005_tenders.sql` — importa las 41 licitaciones.
+7. `seed/0005_tenders.sql` — importa las 41 licitaciones.
 
 El seed resuelve el `org_id` con
 `(SELECT id FROM cotiza.organizations WHERE name ILIKE '%dicec%' ...)`, así que

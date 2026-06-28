@@ -10,12 +10,12 @@ export default async function PotencialesPage() {
   const supabase = await createClient();
 
   const [quotes, tenders] = await Promise.all([listQuotes(orgId), listTenders(orgId)]);
-  const { data: clientsData } = await supabase
+  const { data: clientsData } = (await supabase
     .from("clients")
-    .select("id, name")
+    .select("id, name, client_locations(id, name)")
     .eq("org_id", orgId)
-    .order("name");
-  const clients = (clientsData ?? []) as { id: string; name: string }[];
+    .order("name")) as { data: { id: string; name: string; client_locations: { id: string; name: string }[] | null }[] | null };
+  const clients = (clientsData ?? []).map((c) => ({ id: c.id, name: c.name, locations: c.client_locations ?? [] }));
 
   return <PotencialesScreen quotes={quotes} tenders={tenders} clients={clients} />;
 }

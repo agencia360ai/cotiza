@@ -68,6 +68,8 @@ export type QuoteRow = {
   client_name: string | null;
   client_id: string | null;
   client_std_name: string | null;
+  location_id: string | null;
+  location_name: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   contact_email: string | null;
@@ -88,6 +90,8 @@ export type TenderRow = {
   entity: string | null;
   client_id: string | null;
   client_std_name: string | null;
+  location_id: string | null;
+  location_name: string | null;
   location_text: string | null;
   objeto: string | null;
   status: TenderStatus;
