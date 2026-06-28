@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import type { ProjectType } from "@/lib/projects/types";
 import type { QuoteStatus, Rubro, TenderStatus } from "@/lib/pipeline/types";
+import { matchClientByName } from "@/lib/clients/match";
+import { norm } from "@/lib/clients/normalize";
 
 type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
 
@@ -31,6 +33,7 @@ export async function updateQuote(
     payment_status: "facturado" | null;
     invoice_status: "pendiente" | "cancelada" | null;
     client_name: string | null;
+    client_id: string | null;
     contact_name: string | null;
     contact_phone: string | null;
     contact_email: string | null;
@@ -49,6 +52,16 @@ export async function updateQuote(
     .eq("id", id)
     .eq("org_id", c.orgId);
   if (error) return { error: error.message };
+  // Aprendé del ajuste manual: guardá el alias para que la próxima importación
+  // con ese mismo nombre se auto-linkee.
+  if (patch.client_id && patch.client_name) {
+    await c.supabase
+      .from("client_aliases")
+      .upsert(
+        { org_id: c.orgId, client_id: patch.client_id, alias_norm: norm(patch.client_name), source: "manual" },
+        { onConflict: "org_id,alias_norm", ignoreDuplicates: true },
+      );
+  }
   revalidatePath(REVALIDATE);
   return { ok: true };
 }
@@ -66,10 +79,11 @@ export async function createQuote(input: {
   description: string | null;
   rubro: Rubro | null;
   follow_up_date: string | null;
-}): Promise<Result<{ id: string }>> {
+}): Promise<Result<{ id: string; client_id: string | null; client_std_name: string | null }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!input.quote_number.trim()) return { error: "Número requerido" };
+  const matched = await matchClientByName(c.supabase, c.orgId, input.client_name);
   const { data, error } = (await c.supabase
     .from("sales_quotes")
     .insert({
@@ -80,6 +94,7 @@ export async function createQuote(input: {
       amount_usd: input.amount_usd,
       status: input.status,
       client_name: input.client_name,
+      client_id: matched?.id ?? null,
       contact_name: input.contact_name,
       contact_phone: input.contact_phone,
       contact_email: input.contact_email,
@@ -92,7 +107,7 @@ export async function createQuote(input: {
     .single()) as { data: { id: string } | null; error: { message: string } | null };
   if (error || !data) return { error: error?.message ?? "No se pudo crear" };
   revalidatePath(REVALIDATE);
-  return { ok: true, data: { id: data.id } };
+  return { ok: true, data: { id: data.id, client_id: matched?.id ?? null, client_std_name: matched?.name ?? null } };
 }
 
 export async function deleteQuote(id: string): Promise<Result> {
@@ -182,6 +197,7 @@ export async function updateTender(
     notes: string | null;
     folder_url: string | null;
     rubro: Rubro | null;
+    client_id: string | null;
   }>,
 ): Promise<Result> {
   const c = await ctx();
