@@ -1,92 +1,152 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, ChevronRight, MapPin, Box, Sparkles, Tag, Wand2 } from "lucide-react";
+import { ChevronRight, Sparkles, Wand2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { CreateClientForm } from "./create-form";
 import { QuickbooksSync } from "./qbo-sync";
-import { CATEGORY_LABEL, imageUrl, type ClientCategory } from "@/lib/maintenance/types";
-import { cn } from "@/lib/utils";
+import { ClientsBoard, type ClientCard, type ClientRel } from "./clients-board";
+import type { ClientCategory } from "@/lib/maintenance/types";
 
 export const dynamic = "force-dynamic";
 
-type ClientRow = {
-  id: string;
-  name: string;
-  category: ClientCategory | null;
-  brand_color: string | null;
-  logo_path: string | null;
-  contact_email: string | null;
-  contact_phone: string | null;
-  created_at: string;
-  locations: { id: string }[];
+type Agg = {
+  quotes: number;
+  enviadas: number;
+  enJuego: number;
+  proyectos: number;
+  proyectosActivos: number;
+  mantenimientos: number;
+  sucursales: number;
+  equipos: number;
+  rubros: Set<string>;
+  lastActivity: string | null;
 };
 
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((s) => s[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+function emptyAgg(): Agg {
+  return {
+    quotes: 0,
+    enviadas: 0,
+    enJuego: 0,
+    proyectos: 0,
+    proyectosActivos: 0,
+    mantenimientos: 0,
+    sucursales: 0,
+    equipos: 0,
+    rubros: new Set(),
+    lastActivity: null,
+  };
 }
 
-export default async function ClientsListPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ category?: string }>;
-}) {
-  const sp = await searchParams;
+export default async function ClientsListPage() {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
   const orgId = await getActiveOrgId();
   if (!orgId) redirect("/onboarding");
 
-  let q = supabase
+  const { data: clientsRaw } = (await supabase
     .from("clients")
-    .select("*, locations:client_locations(id)")
-    .eq("org_id", orgId)
-    .order("name", { ascending: true });
-  if (sp.category) q = q.eq("category", sp.category);
-  const { data: clients } = (await q) as { data: ClientRow[] | null };
-
-  const rows = clients ?? [];
-
-  // Counts per category for filter chips
-  const { data: catCountsRaw } = (await supabase.from("clients").select("category").eq("org_id", orgId)) as {
-    data: { category: ClientCategory | null }[] | null;
+    .select("id, name, category, brand_color, logo_path")
+    .eq("org_id", orgId)) as {
+    data: { id: string; name: string; category: ClientCategory | null; brand_color: string | null; logo_path: string | null }[] | null;
   };
-  const categoryCounts = new Map<string, number>();
-  for (const r of catCountsRaw ?? []) {
-    const k = r.category ?? "_none";
-    categoryCounts.set(k, (categoryCounts.get(k) ?? 0) + 1);
-  }
+  const clients = clientsRaw ?? [];
+  const ids = clients.map((c) => c.id);
+  const safeIds = ids.length ? ids : ["00000000-0000-0000-0000-000000000000"];
 
-  // Get equipment counts in a separate query
-  const equipmentCounts = new Map<string, number>();
-  if (rows.length > 0) {
-    const { data: eqAll } = await supabase
+  const [quotesR, tendersR, projectsR, locsR, schedR, eqR] = await Promise.all([
+    supabase.from("sales_quotes").select("client_id, status, amount_usd, rubro, sent_date").eq("org_id", orgId).not("client_id", "is", null),
+    supabase.from("tenders").select("client_id, rubro").eq("org_id", orgId).not("client_id", "is", null),
+    supabase.from("client_projects").select("client_id, status").eq("org_id", orgId),
+    supabase.from("client_locations").select("id, client_id").in("client_id", safeIds),
+    supabase.from("maintenance_schedules").select("client_id").eq("active", true).in("client_id", safeIds),
+    supabase
       .from("client_equipment")
       .select("location_id, client_locations!inner(client_id, client:clients!inner(org_id))")
-      .eq("client_locations.client.org_id", orgId);
-    type EqRow = { location_id: string; client_locations: { client_id: string } | { client_id: string }[] };
-    for (const row of (eqAll ?? []) as EqRow[]) {
-      const loc = Array.isArray(row.client_locations) ? row.client_locations[0] : row.client_locations;
-      if (!loc) continue;
-      equipmentCounts.set(loc.client_id, (equipmentCounts.get(loc.client_id) ?? 0) + 1);
+      .eq("client_locations.client.org_id", orgId),
+  ]);
+
+  const agg = new Map<string, Agg>();
+  const get = (id: string | null) => {
+    if (!id) return null;
+    let a = agg.get(id);
+    if (!a) agg.set(id, (a = emptyAgg()));
+    return a;
+  };
+
+  for (const r of (quotesR.data ?? []) as { client_id: string | null; status: string; amount_usd: number | null; rubro: string | null; sent_date: string | null }[]) {
+    const a = get(r.client_id);
+    if (!a) continue;
+    a.quotes += 1;
+    if (r.rubro) a.rubros.add(r.rubro);
+    if (r.status === "enviada") {
+      a.enviadas += 1;
+      a.enJuego += Number(r.amount_usd) || 0;
     }
+    if (r.sent_date && (!a.lastActivity || r.sent_date > a.lastActivity)) a.lastActivity = r.sent_date;
   }
+  for (const r of (tendersR.data ?? []) as { client_id: string | null; rubro: string | null }[]) {
+    const a = get(r.client_id);
+    if (a && r.rubro) a.rubros.add(r.rubro);
+  }
+  for (const r of (projectsR.data ?? []) as { client_id: string | null; status: string | null }[]) {
+    const a = get(r.client_id);
+    if (!a) continue;
+    a.proyectos += 1;
+    if (r.status !== "completado" && r.status !== "cancelado") a.proyectosActivos += 1;
+  }
+  for (const r of (locsR.data ?? []) as { client_id: string }[]) {
+    const a = get(r.client_id);
+    if (a) a.sucursales += 1;
+  }
+  for (const r of (schedR.data ?? []) as { client_id: string | null }[]) {
+    const a = get(r.client_id);
+    if (a) a.mantenimientos += 1;
+  }
+  for (const row of (eqR.data ?? []) as { client_locations: { client_id: string } | { client_id: string }[] }[]) {
+    const loc = Array.isArray(row.client_locations) ? row.client_locations[0] : row.client_locations;
+    const a = get(loc?.client_id ?? null);
+    if (a) a.equipos += 1;
+  }
+
+  const cutoff = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+
+  const cards: ClientCard[] = clients.map((c) => {
+    const a = agg.get(c.id) ?? emptyAgg();
+    const rels: ClientRel[] = [];
+    if (a.rubros.has("DC")) rels.push("contratos");
+    if (a.rubros.has("DM") || a.mantenimientos > 0) rels.push("mantenimiento");
+    if (a.rubros.has("DS")) rels.push("servicio");
+    if (a.rubros.has("DV")) rels.push("ventas");
+    const activo =
+      a.enJuego > 0 || a.proyectosActivos > 0 || a.mantenimientos > 0 || (a.lastActivity !== null && a.lastActivity >= cutoff);
+    return {
+      id: c.id,
+      name: c.name,
+      category: c.category,
+      brand_color: c.brand_color,
+      logo_path: c.logo_path,
+      quotes: a.quotes,
+      enviadas: a.enviadas,
+      enJuego: a.enJuego,
+      proyectos: a.proyectos,
+      proyectosActivos: a.proyectosActivos,
+      mantenimientos: a.mantenimientos,
+      sucursales: a.sucursales,
+      equipos: a.equipos,
+      rels,
+      lastActivity: a.lastActivity,
+      activo,
+    };
+  });
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Clientes</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Tus clientes con sus sucursales y equipos
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">{cards.length} clientes · ordenados por actividad</p>
         </div>
         <Link
           href="/maintenance/clients/new"
@@ -124,8 +184,7 @@ export default async function ClientsListPage({
         <div className="flex-1">
           <p className="text-sm font-semibold text-slate-900">Crear cliente con IA</p>
           <p className="text-xs text-slate-600">
-            Pegá una descripción o subí un PDF — la IA arma el cliente con sus sucursales,
-            equipos y mantenimientos
+            Pegá una descripción o subí un PDF — la IA arma el cliente con sus sucursales, equipos y mantenimientos
           </p>
         </div>
         <ChevronRight className="size-5 text-violet-600 transition-transform group-hover:translate-x-1" />
@@ -133,108 +192,13 @@ export default async function ClientsListPage({
 
       <CreateClientForm />
 
-      {/* Category filter chips */}
-      {Array.from(categoryCounts.keys()).filter((k) => k !== "_none").length > 0 ? (
-        <div className="mt-6 flex flex-wrap items-center gap-1.5">
-          <Tag className="size-3.5 text-slate-400" />
-          <Link
-            href="/maintenance/clients"
-            className={cn(
-              "rounded-full px-3 py-1 text-xs font-medium",
-              !sp.category ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200",
-            )}
-          >
-            Todos
-            <span className={cn("ml-1 tabular-nums", sp.category ? "text-slate-400" : "text-white/70")}>
-              {(catCountsRaw ?? []).length}
-            </span>
-          </Link>
-          {(["restaurante", "hotel", "retail", "oficina", "industrial", "residencial", "salud", "educacion", "otro"] as ClientCategory[])
-            .filter((c) => (categoryCounts.get(c) ?? 0) > 0)
-            .map((c) => (
-              <Link
-                key={c}
-                href={`/maintenance/clients?category=${c}`}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium",
-                  sp.category === c
-                    ? "bg-slate-900 text-white"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200",
-                )}
-              >
-                {CATEGORY_LABEL[c]}
-                <span className={cn("ml-1 tabular-nums", sp.category === c ? "text-white/70" : "text-slate-400")}>
-                  {categoryCounts.get(c)}
-                </span>
-              </Link>
-            ))}
-        </div>
-      ) : null}
-
-      <div className="mt-8">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-700">
-          Cartera ({rows.length})
-        </h2>
-        {rows.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-border py-16 text-center text-sm text-muted-foreground">
-            Sin clientes aún. Creá el primero arriba.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {rows.map((c) => (
-              <li key={c.id}>
-                <Link
-                  href={`/maintenance/clients/${c.id}`}
-                  className="group flex items-center gap-4 rounded-xl border border-border bg-card p-4 transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm"
-                >
-                  {c.logo_path ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={imageUrl(c.logo_path)}
-                      alt={c.name}
-                      className="size-12 shrink-0 rounded-xl object-cover ring-1 ring-slate-200"
-                    />
-                  ) : (
-                    <div
-                      className="flex size-12 shrink-0 items-center justify-center rounded-xl text-base font-bold text-white"
-                      style={{ backgroundColor: c.brand_color ?? "#0EA5E9" }}
-                    >
-                      {initials(c.name)}
-                    </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-semibold text-slate-900">{c.name}</p>
-                      {c.category ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
-                          <Tag className="size-2.5" />
-                          {CATEGORY_LABEL[c.category]}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-3 text-xs text-slate-500">
-                      <span className="inline-flex items-center gap-1">
-                        <MapPin className="size-3" />
-                        {c.locations.length} sucursal{c.locations.length === 1 ? "" : "es"}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <Box className="size-3" />
-                        {equipmentCounts.get(c.id) ?? 0} equipo{(equipmentCounts.get(c.id) ?? 0) === 1 ? "" : "s"}
-                      </span>
-                      {c.contact_email ? <span>{c.contact_email}</span> : null}
-                    </div>
-                  </div>
-                  <ChevronRight className="size-5 text-slate-300 transition-transform group-hover:translate-x-1" />
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <span hidden>
-        <Building2 />
-      </span>
+      {cards.length === 0 ? (
+        <p className="mt-6 rounded-xl border border-dashed border-border py-16 text-center text-sm text-muted-foreground">
+          Sin clientes aún. Creá el primero arriba o estandarizá desde las cotizaciones.
+        </p>
+      ) : (
+        <ClientsBoard clients={cards} />
+      )}
     </div>
   );
 }
