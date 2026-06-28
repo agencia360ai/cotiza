@@ -4,6 +4,7 @@ import { Building2, ChevronRight, MapPin, Box, Sparkles, Tag } from "lucide-reac
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { CreateClientForm } from "./create-form";
+import { QuickbooksSync } from "./qbo-sync";
 import { CATEGORY_LABEL, imageUrl, type ClientCategory } from "@/lib/maintenance/types";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +95,8 @@ export default async function ClientsListPage({
           + Nuevo cliente
         </Link>
       </header>
+
+      <QuickbooksSync />
 
       <Link
         href="/maintenance/clients/import"
