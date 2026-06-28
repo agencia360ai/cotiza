@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, ChevronRight, MapPin, Box, Sparkles, Tag } from "lucide-react";
+import { Building2, ChevronRight, MapPin, Box, Sparkles, Tag, Wand2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { CreateClientForm } from "./create-form";
@@ -97,6 +97,22 @@ export default async function ClientsListPage({
       </header>
 
       <QuickbooksSync />
+
+      <Link
+        href="/maintenance/clients/standardize"
+        className="group mb-3 flex items-center gap-3 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-5 transition-all hover:-translate-y-0.5 hover:shadow-md"
+      >
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white">
+          <Wand2 className="size-5" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-slate-900">Estandarizar nombres (IA)</p>
+          <p className="text-xs text-slate-600">
+            Agrupá los nombres sueltos de las cotizaciones en clientes reales y linkealos automáticamente
+          </p>
+        </div>
+        <ChevronRight className="size-5 text-amber-600 transition-transform group-hover:translate-x-1" />
+      </Link>
 
       <Link
         href="/maintenance/clients/import"
