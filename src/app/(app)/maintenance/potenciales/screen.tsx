@@ -24,6 +24,7 @@ import {
   MessageCircle,
   Mail,
   FolderOpen,
+  MapPin,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { norm } from "@/lib/clients/normalize";
@@ -54,6 +55,8 @@ import {
 import { DropboxImportDialog } from "./dropbox-import";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
+type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
+
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
 type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
 const QUOTE_STATUSES: QuoteStatus[] = ["enviada", "aprobada", "rechazada"];
@@ -93,7 +96,7 @@ export function PotencialesScreen({
 }: {
   quotes: QuoteRow[];
   tenders: TenderRow[];
-  clients: { id: string; name: string }[];
+  clients: ClientOpt[];
 }) {
   const [tab, setTab] = useState<Tab>("cotizaciones");
   const [quotes, setQuotes] = useState<QuoteRow[]>(quotesProp);
@@ -135,7 +138,7 @@ function CotizacionesTab({
 }: {
   quotes: QuoteRow[];
   setQuotes: React.Dispatch<React.SetStateAction<QuoteRow[]>>;
-  clients: { id: string; name: string }[];
+  clients: ClientOpt[];
 }) {
   const years = useMemo(
     () => Array.from(new Set(quotes.map((q) => q.year).filter((y): y is number => !!y))).sort((a, b) => b - a),
@@ -295,6 +298,7 @@ function CotizacionesTab({
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
                 <SortTh label="Nº" k="quote_number" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Cliente" k="client_name" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <th className="hidden px-3 py-2.5 font-semibold lg:table-cell">Sucursal</th>
                 <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Descripción</th>
                 <th className="px-3 py-2.5 font-semibold">Rubro</th>
                 <SortTh label="Monto" k="amount_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
@@ -306,7 +310,7 @@ function CotizacionesTab({
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={9} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin cotizaciones con estos filtros.
                   </td>
                 </tr>
@@ -324,9 +328,17 @@ function CotizacionesTab({
                         <div className="truncate text-slate-700">{x.client_std_name ?? x.client_name ?? "—"}</div>
                         {!x.client_id && x.client_name ? (
                           <span className="text-[10px] font-medium text-amber-600">sin estandarizar</span>
-                        ) : x.client_std_name && x.client_name && norm(x.client_std_name) !== norm(x.client_name) ? (
-                          <span className="block truncate text-[10px] text-slate-400">{x.client_name}</span>
                         ) : null}
+                      </td>
+                      <td className="hidden max-w-[150px] truncate px-3 py-2.5 text-slate-500 lg:table-cell">
+                        {x.location_name ? (
+                          <span className="inline-flex items-center gap-1">
+                            <MapPin className="size-3 text-slate-400" />
+                            {x.location_name}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td className="hidden max-w-[280px] truncate px-3 py-2.5 text-slate-500 md:table-cell">
                         {x.description ?? "—"}
@@ -465,7 +477,7 @@ function QuoteDrawer({
   onConvert,
 }: {
   quote: QuoteRow;
-  clients: { id: string; name: string }[];
+  clients: ClientOpt[];
   onClose: () => void;
   onSaved: (q: QuoteRow) => void;
   onDeleted: (id: string) => void;
@@ -478,6 +490,7 @@ function QuoteDrawer({
   function set<K extends keyof QuoteRow>(k: K, v: QuoteRow[K]) {
     setF((prev) => ({ ...prev, [k]: v }));
   }
+  const clientLocs = clients.find((c) => c.id === f.client_id)?.locations ?? [];
 
   async function save() {
     setSaving(true);
@@ -491,6 +504,7 @@ function QuoteDrawer({
       invoice_status: f.invoice_status,
       client_name: f.client_name,
       client_id: f.client_id,
+      location_id: f.location_id,
       contact_name: f.contact_name,
       contact_phone: f.contact_phone,
       contact_email: f.contact_email,
@@ -524,7 +538,7 @@ function QuoteDrawer({
             onChange={(e) => {
               const id = e.target.value || null;
               const name = id ? clients.find((c) => c.id === id)?.name ?? null : null;
-              setF((prev) => ({ ...prev, client_id: id, client_std_name: name }));
+              setF((prev) => ({ ...prev, client_id: id, client_std_name: name, location_id: null, location_name: null }));
             }}
           >
             <option value="">— Sin cliente estandarizado —</option>
@@ -535,6 +549,26 @@ function QuoteDrawer({
             ))}
           </select>
         </Field>
+        {f.client_id && clientLocs.length > 0 ? (
+          <Field label="Sucursal / lugar">
+            <select
+              className={inputCls}
+              value={f.location_id ?? ""}
+              onChange={(e) => {
+                const id = e.target.value || null;
+                const name = id ? clientLocs.find((l) => l.id === id)?.name ?? null : null;
+                setF((prev) => ({ ...prev, location_id: id, location_name: name }));
+              }}
+            >
+              <option value="">— Sin sucursal —</option>
+              {clientLocs.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
 
         {/* Contacto para seguimiento */}
         <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3">
@@ -782,6 +816,8 @@ function NewQuoteDrawer({
       client_name: client || null,
       client_id: r.data.client_id,
       client_std_name: r.data.client_std_name,
+      location_id: r.data.location_id,
+      location_name: r.data.location_name,
       contact_name: contactName || null,
       contact_phone: contactPhone || null,
       contact_email: contactEmail || null,
@@ -878,7 +914,7 @@ function ConvertDialog({
   onConverted,
 }: {
   quote: QuoteRow;
-  clients: { id: string; name: string }[];
+  clients: ClientOpt[];
   onClose: () => void;
   onConverted: (projectId: string) => void;
 }) {
@@ -1008,7 +1044,7 @@ function LicitacionesTab({
 }: {
   tenders: TenderRow[];
   setTenders: React.Dispatch<React.SetStateAction<TenderRow[]>>;
-  clients: { id: string; name: string }[];
+  clients: ClientOpt[];
 }) {
   const [estatus, setEstatus] = useState<TenderStatus | "all">("all");
   const [modalidad, setModalidad] = useState<Modalidad | "all">("all");
@@ -1157,7 +1193,7 @@ function TenderDrawer({
   onSaved,
 }: {
   tender: TenderRow;
-  clients: { id: string; name: string }[];
+  clients: ClientOpt[];
   onClose: () => void;
   onSaved: (t: TenderRow) => void;
 }) {
@@ -1168,6 +1204,7 @@ function TenderDrawer({
   function set<K extends keyof TenderRow>(k: K, v: TenderRow[K]) {
     setF((prev) => ({ ...prev, [k]: v }));
   }
+  const tenderLocs = clients.find((c) => c.id === f.client_id)?.locations ?? [];
 
   async function save() {
     setSaving(true);
@@ -1181,6 +1218,7 @@ function TenderDrawer({
       folder_url: f.folder_url,
       rubro: f.rubro,
       client_id: f.client_id,
+      location_id: f.location_id,
     });
     setSaving(false);
     if ("error" in r) {
@@ -1202,7 +1240,7 @@ function TenderDrawer({
             onChange={(e) => {
               const id = e.target.value || null;
               const name = id ? clients.find((c) => c.id === id)?.name ?? null : null;
-              setF((prev) => ({ ...prev, client_id: id, client_std_name: name }));
+              setF((prev) => ({ ...prev, client_id: id, client_std_name: name, location_id: null, location_name: null }));
             }}
           >
             <option value="">— Sin cliente estandarizado —</option>
@@ -1213,6 +1251,26 @@ function TenderDrawer({
             ))}
           </select>
         </Field>
+        {f.client_id && tenderLocs.length > 0 ? (
+          <Field label="Sucursal / lugar">
+            <select
+              className={inputCls}
+              value={f.location_id ?? ""}
+              onChange={(e) => {
+                const id = e.target.value || null;
+                const name = id ? tenderLocs.find((l) => l.id === id)?.name ?? null : null;
+                setF((prev) => ({ ...prev, location_id: id, location_name: name }));
+              }}
+            >
+              <option value="">— Sin sucursal —</option>
+              {tenderLocs.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Estatus">
             <select className={inputCls} value={f.status} onChange={(e) => set("status", e.target.value as TenderStatus)}>

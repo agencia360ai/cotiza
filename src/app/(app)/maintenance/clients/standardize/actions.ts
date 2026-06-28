@@ -89,6 +89,11 @@ export async function applyStandardization(clusters: ConfirmedCluster[]): Promis
   const byNorm = new Map<string, string>();
   for (const r of existing ?? []) if (!byNorm.has(norm(r.name))) byNorm.set(norm(r.name), r.id);
 
+  // ¿La columna location_id ya existe? (migración 0005). Si no, linkeamos solo
+  // client_id y no rompemos el flujo previo.
+  const locProbe = await supabase.from("sales_quotes").select("location_id").limit(1);
+  const locSupported = !locProbe.error;
+
   for (const cl of clusters) {
     const canonical = cl.canonical.trim();
     const members = cl.members.filter((m) => m.name.trim().length > 0);
@@ -118,8 +123,37 @@ export async function applyStandardization(clusters: ConfirmedCluster[]): Promis
       }
     }
 
-    // 2) Aliases (un alias por nombre miembro). Ignora duplicados por (org, alias_norm).
-    const aliasRows = members.map((m) => ({ org_id: orgId, client_id: clientId, alias_norm: norm(m.name), source: "excel" }));
+    // 2) Sucursales detectadas → client_locations; capturamos el id de cada una.
+    const branchNames = Array.from(new Set(members.map((m) => m.branch?.trim()).filter((b): b is string => !!b)));
+    const locIdByBranch = new Map<string, string>(); // norm(branch) → location id
+    if (branchNames.length > 0) {
+      const { data: locs } = (await supabase.from("client_locations").select("id, name").eq("client_id", clientId)) as {
+        data: { id: string; name: string }[] | null;
+      };
+      for (const l of locs ?? []) locIdByBranch.set(norm(l.name), l.id);
+      const toAdd = branchNames.filter((b) => !locIdByBranch.has(norm(b))).map((name) => ({ client_id: clientId, name }));
+      if (toAdd.length > 0) {
+        const { data: ins, error } = (await supabase.from("client_locations").insert(toAdd).select("id, name")) as {
+          data: { id: string; name: string }[] | null;
+          error: { message: string } | null;
+        };
+        if (error) errors.push(`Sucursales de "${canonical}": ${error.message}`);
+        else {
+          for (const l of ins ?? []) locIdByBranch.set(norm(l.name), l.id);
+          summary.locations += ins?.length ?? 0;
+        }
+      }
+    }
+    const locFor = (m: { branch: string | null }) => (m.branch ? locIdByBranch.get(norm(m.branch)) ?? null : null);
+
+    // 3) Aliases (un alias por nombre miembro), con su sucursal si corresponde.
+    const aliasRows = members.map((m) => ({
+      org_id: orgId,
+      client_id: clientId,
+      alias_norm: norm(m.name),
+      location_id: locFor(m),
+      source: "excel",
+    }));
     if (aliasRows.length > 0) {
       const { error } = await supabase
         .from("client_aliases")
@@ -128,42 +162,36 @@ export async function applyStandardization(clusters: ConfirmedCluster[]): Promis
       else summary.aliases += aliasRows.length;
     }
 
-    // 3) Sucursales detectadas → client_locations (dedup por nombre dentro del cliente).
-    const branchNames = Array.from(new Set(members.map((m) => m.branch?.trim()).filter((b): b is string => !!b)));
-    if (branchNames.length > 0) {
-      const { data: locs } = (await supabase.from("client_locations").select("name").eq("client_id", clientId)) as {
-        data: { name: string }[] | null;
-      };
-      const have = new Set((locs ?? []).map((l) => norm(l.name)));
-      const toAdd = branchNames.filter((b) => !have.has(norm(b))).map((name) => ({ client_id: clientId, name }));
-      if (toAdd.length > 0) {
-        const { error } = await supabase.from("client_locations").insert(toAdd);
-        if (error) errors.push(`Sucursales de "${canonical}": ${error.message}`);
-        else summary.locations += toAdd.length;
+    // 4) Linkear cotizaciones/licitaciones por grupo de sucursal (client_id + location_id).
+    const byLoc = new Map<string | null, string[]>();
+    for (const m of members) {
+      const lid = locFor(m);
+      const arr = byLoc.get(lid) ?? [];
+      arr.push(m.name);
+      byLoc.set(lid, arr);
+    }
+    for (const [locId, names] of byLoc) {
+      const quotePatch = locSupported ? { client_id: clientId, location_id: locId } : { client_id: clientId };
+      {
+        const { data, error } = (await supabase
+          .from("sales_quotes")
+          .update(quotePatch)
+          .eq("org_id", orgId)
+          .in("client_name", names)
+          .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
+        if (error) errors.push(`Linkear cotizaciones de "${canonical}": ${error.message}`);
+        else summary.quotesLinked += data?.length ?? 0;
       }
-    }
-
-    // 4) Linkear cotizaciones y licitaciones cuyos nombres caen en este cluster.
-    const memberNames = members.map((m) => m.name);
-    {
-      const { data, error } = (await supabase
-        .from("sales_quotes")
-        .update({ client_id: clientId })
-        .eq("org_id", orgId)
-        .in("client_name", memberNames)
-        .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
-      if (error) errors.push(`Linkear cotizaciones de "${canonical}": ${error.message}`);
-      else summary.quotesLinked += data?.length ?? 0;
-    }
-    {
-      const { data, error } = (await supabase
-        .from("tenders")
-        .update({ client_id: clientId })
-        .eq("org_id", orgId)
-        .in("entity", memberNames)
-        .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
-      if (error) errors.push(`Linkear licitaciones de "${canonical}": ${error.message}`);
-      else summary.tendersLinked += data?.length ?? 0;
+      {
+        const { data, error } = (await supabase
+          .from("tenders")
+          .update(quotePatch)
+          .eq("org_id", orgId)
+          .in("entity", names)
+          .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
+        if (error) errors.push(`Linkear licitaciones de "${canonical}": ${error.message}`);
+        else summary.tendersLinked += data?.length ?? 0;
+      }
     }
   }
 

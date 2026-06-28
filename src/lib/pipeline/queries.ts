@@ -10,6 +10,7 @@ import {
 } from "./types";
 
 const QUOTE_JOIN = "client_id, client:clients(name)";
+const LOC_JOIN = "location_id, location:client_locations(name)";
 const QUOTE_COLS =
   `id, quote_number, year, sent_date, amount_usd, status, payment_status, invoice_status, client_name, contact_name, contact_phone, contact_email, description, notes, rubro, progress, follow_up_date, rejection_reason, converted_project_id, ${QUOTE_JOIN}`;
 // Sin columnas de contacto — fallback si la migración 0002 aún no se aplicó.
@@ -29,16 +30,20 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
       .eq("org_id", orgId)
       .order("sent_date", { ascending: false, nullsFirst: false })
       .order("quote_number", { ascending: false });
-  type Raw = Omit<QuoteRow, "client_std_name"> & { client: { name: string } | null };
-  let res = (await run(QUOTE_COLS)) as { data: Raw[] | null; error: { message: string } | null };
-  if (res.error) {
-    // La migración de contacto (0002) todavía no se aplicó: caer a columnas base.
-    res = (await run(QUOTE_COLS_BASE)) as { data: Raw[] | null; error: { message: string } | null };
-  }
-  return (res.data ?? []).map(({ client, ...q }) => ({
+  type Raw = Omit<QuoteRow, "client_std_name" | "location_name"> & {
+    client: { name: string } | null;
+    location?: { name: string } | null;
+  };
+  type Res = { data: Raw[] | null; error: { message: string } | null };
+  let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res;
+  if (res.error) res = (await run(QUOTE_COLS)) as Res; // sin location (migración 0005 pendiente)
+  if (res.error) res = (await run(QUOTE_COLS_BASE)) as Res; // sin contacto (0002 pendiente)
+  return (res.data ?? []).map(({ client, location, ...q }) => ({
     ...q,
     client_id: q.client_id ?? null,
     client_std_name: client?.name ?? null,
+    location_id: q.location_id ?? null,
+    location_name: location?.name ?? null,
     contact_name: q.contact_name ?? null,
     contact_phone: q.contact_phone ?? null,
     contact_email: q.contact_email ?? null,
@@ -50,17 +55,26 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
 export async function listTenders(orgId: string): Promise<TenderRow[]> {
   if (!orgId) return [];
   const supabase = await createClient();
-  type Raw = Omit<TenderRow, "client_std_name"> & { client: { name: string } | null };
-  const { data } = (await supabase
-    .from("tenders")
-    .select(TENDER_COLS)
-    .eq("org_id", orgId)
-    .order("year", { ascending: false, nullsFirst: false })
-    .order("acto_number", { ascending: false })) as { data: Raw[] | null };
-  return (data ?? []).map(({ client, ...t }) => ({
+  type Raw = Omit<TenderRow, "client_std_name" | "location_name"> & {
+    client: { name: string } | null;
+    location?: { name: string } | null;
+  };
+  type Res = { data: Raw[] | null; error: { message: string } | null };
+  const run = (cols: string) =>
+    supabase
+      .from("tenders")
+      .select(cols)
+      .eq("org_id", orgId)
+      .order("year", { ascending: false, nullsFirst: false })
+      .order("acto_number", { ascending: false });
+  let res = (await run(`${TENDER_COLS}, ${LOC_JOIN}`)) as Res;
+  if (res.error) res = (await run(TENDER_COLS)) as Res; // sin location (0005 pendiente)
+  return (res.data ?? []).map(({ client, location, ...t }) => ({
     ...t,
     client_id: t.client_id ?? null,
     client_std_name: client?.name ?? null,
+    location_id: t.location_id ?? null,
+    location_name: location?.name ?? null,
     amount_ref_usd: t.amount_ref_usd === null ? null : Number(t.amount_ref_usd),
   }));
 }

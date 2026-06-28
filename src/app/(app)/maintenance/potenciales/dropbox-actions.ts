@@ -144,6 +144,7 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
     const year = (parsed.sent_date ? Number(parsed.sent_date.slice(0, 4)) : yearFromNumber(number)) || new Date().getFullYear();
     const notes = `Importado de Dropbox: ${name}`;
     const matched = await matchClientByName(c.supabase, c.orgId, parsed.client_name);
+    const locOk = !(await c.supabase.from("sales_quotes").select("location_id").limit(1)).error;
 
     const base = {
       org_id: c.orgId,
@@ -154,6 +155,7 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
       status: "enviada" as const,
       client_name: parsed.client_name,
       client_id: matched?.id ?? null,
+      ...(locOk ? { location_id: matched?.location_id ?? null } : {}),
       description: parsed.description,
       rubro: parsed.rubro,
       notes,
@@ -190,6 +192,8 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
         client_name: parsed.client_name,
         client_id: matched?.id ?? null,
         client_std_name: matched?.name ?? null,
+        location_id: matched?.location_id ?? null,
+        location_name: matched?.location_name ?? null,
         contact_name: null,
         contact_phone: null,
         contact_email: null,

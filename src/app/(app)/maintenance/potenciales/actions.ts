@@ -21,6 +21,11 @@ async function ctx() {
 
 const REVALIDATE = "/maintenance/potenciales";
 
+// ¿Existe location_id? (migración 0005). Evita romper create/update si falta.
+async function locationSupported(supabase: Awaited<ReturnType<typeof createClient>>): Promise<boolean> {
+  return !(await supabase.from("sales_quotes").select("location_id").limit(1)).error;
+}
+
 // ── Cotizaciones ────────────────────────────────────────────────────────────
 
 export async function updateQuote(
@@ -34,6 +39,7 @@ export async function updateQuote(
     invoice_status: "pendiente" | "cancelada" | null;
     client_name: string | null;
     client_id: string | null;
+    location_id: string | null;
     contact_name: string | null;
     contact_phone: string | null;
     contact_email: string | null;
@@ -46,19 +52,17 @@ export async function updateQuote(
 ): Promise<Result> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const { error } = await c.supabase
-    .from("sales_quotes")
-    .update(patch)
-    .eq("id", id)
-    .eq("org_id", c.orgId);
+  const p = { ...patch };
+  if ("location_id" in p && !(await locationSupported(c.supabase))) delete p.location_id;
+  const { error } = await c.supabase.from("sales_quotes").update(p).eq("id", id).eq("org_id", c.orgId);
   if (error) return { error: error.message };
-  // Aprendé del ajuste manual: guardá el alias para que la próxima importación
-  // con ese mismo nombre se auto-linkee.
+  // Aprendé del ajuste manual: guardá el alias (con sucursal si se asignó) para
+  // que la próxima importación con ese mismo nombre se auto-linkee.
   if (patch.client_id && patch.client_name) {
     await c.supabase
       .from("client_aliases")
       .upsert(
-        { org_id: c.orgId, client_id: patch.client_id, alias_norm: norm(patch.client_name), source: "manual" },
+        { org_id: c.orgId, client_id: patch.client_id, location_id: patch.location_id ?? null, alias_norm: norm(patch.client_name), source: "manual" },
         { onConflict: "org_id,alias_norm", ignoreDuplicates: true },
       );
   }
@@ -79,35 +83,45 @@ export async function createQuote(input: {
   description: string | null;
   rubro: Rubro | null;
   follow_up_date: string | null;
-}): Promise<Result<{ id: string; client_id: string | null; client_std_name: string | null }>> {
+}): Promise<Result<{ id: string; client_id: string | null; client_std_name: string | null; location_id: string | null; location_name: string | null }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!input.quote_number.trim()) return { error: "Número requerido" };
   const matched = await matchClientByName(c.supabase, c.orgId, input.client_name);
-  const { data, error } = (await c.supabase
-    .from("sales_quotes")
-    .insert({
-      org_id: c.orgId,
-      quote_number: input.quote_number.trim(),
-      year: input.year,
-      sent_date: input.sent_date,
-      amount_usd: input.amount_usd,
-      status: input.status,
-      client_name: input.client_name,
-      client_id: matched?.id ?? null,
-      contact_name: input.contact_name,
-      contact_phone: input.contact_phone,
-      contact_email: input.contact_email,
-      description: input.description,
-      rubro: input.rubro,
-      follow_up_date: input.follow_up_date,
-      source: "manual",
-    })
-    .select("id")
-    .single()) as { data: { id: string } | null; error: { message: string } | null };
+  const base = {
+    org_id: c.orgId,
+    quote_number: input.quote_number.trim(),
+    year: input.year,
+    sent_date: input.sent_date,
+    amount_usd: input.amount_usd,
+    status: input.status,
+    client_name: input.client_name,
+    client_id: matched?.id ?? null,
+    contact_name: input.contact_name,
+    contact_phone: input.contact_phone,
+    contact_email: input.contact_email,
+    description: input.description,
+    rubro: input.rubro,
+    follow_up_date: input.follow_up_date,
+    source: "manual" as const,
+  };
+  const insertObj = (await locationSupported(c.supabase)) ? { ...base, location_id: matched?.location_id ?? null } : base;
+  const { data, error } = (await c.supabase.from("sales_quotes").insert(insertObj).select("id").single()) as {
+    data: { id: string } | null;
+    error: { message: string } | null;
+  };
   if (error || !data) return { error: error?.message ?? "No se pudo crear" };
   revalidatePath(REVALIDATE);
-  return { ok: true, data: { id: data.id, client_id: matched?.id ?? null, client_std_name: matched?.name ?? null } };
+  return {
+    ok: true,
+    data: {
+      id: data.id,
+      client_id: matched?.id ?? null,
+      client_std_name: matched?.name ?? null,
+      location_id: matched?.location_id ?? null,
+      location_name: matched?.location_name ?? null,
+    },
+  };
 }
 
 export async function deleteQuote(id: string): Promise<Result> {
@@ -198,11 +212,14 @@ export async function updateTender(
     folder_url: string | null;
     rubro: Rubro | null;
     client_id: string | null;
+    location_id: string | null;
   }>,
 ): Promise<Result> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const { error } = await c.supabase.from("tenders").update(patch).eq("id", id).eq("org_id", c.orgId);
+  const p = { ...patch };
+  if ("location_id" in p && !(await locationSupported(c.supabase))) delete p.location_id;
+  const { error } = await c.supabase.from("tenders").update(p).eq("id", id).eq("org_id", c.orgId);
   if (error) return { error: error.message };
   revalidatePath(REVALIDATE);
   return { ok: true };
