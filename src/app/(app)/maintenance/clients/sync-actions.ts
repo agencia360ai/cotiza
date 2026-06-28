@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { hasQboConfig } from "@/lib/quickbooks/mcp";
 import { fetchQboCustomers, type QboCustomer } from "@/lib/quickbooks/customers";
+import { norm } from "@/lib/clients/normalize";
 
 export type SyncSummary = {
   toolUsed: string | null;
@@ -19,16 +20,6 @@ export type SyncSummary = {
 };
 
 type SyncResult = { ok: true; summary: SyncSummary } | { ok: false; error: string };
-
-function norm(s: string): string {
-  let out = "";
-  for (const ch of s.normalize("NFD")) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (code >= 0x300 && code <= 0x36f) continue; // marcas diacriticas combinantes
-    out += ch;
-  }
-  return out.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
 
 async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<void>): Promise<void> {
   for (let i = 0; i < items.length; i += size) {
