@@ -13,6 +13,7 @@ export type SyncSummary = {
   clientsUpdated: number;
   contactsUpserted: number;
   locationsUpserted: number;
+  qboProjects: number; // sub-customers que son jobs/proyectos de QBO (no se importan como sucursales)
   skipped: number;
   errors: string[];
 };
@@ -36,7 +37,9 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<vo
 }
 
 export async function syncQuickbooksCustomers(opts?: { subCustomersAsLocations?: boolean }): Promise<SyncResult> {
-  const subAsLoc = opts?.subCustomersAsLocations ?? true;
+  // Default OFF: en esta cuenta los sub-customers de QBO son proyectos/jobs, no
+  // sucursales. Aun en ON, los IsProject nunca se importan como sucursales.
+  const subAsLoc = opts?.subCustomersAsLocations ?? false;
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return { ok: false, error: "Sesión expirada" };
@@ -55,12 +58,16 @@ export async function syncQuickbooksCustomers(opts?: { subCustomersAsLocations?:
   if (customers.length === 0) {
     return {
       ok: true,
-      summary: { toolUsed, fetched: 0, clientsCreated: 0, clientsUpdated: 0, contactsUpserted: 0, locationsUpserted: 0, skipped: 0, errors: ["QBO no devolvió customers (o no se pudo parsear la respuesta)."] },
+      summary: { toolUsed, fetched: 0, clientsCreated: 0, clientsUpdated: 0, contactsUpserted: 0, locationsUpserted: 0, qboProjects: 0, skipped: 0, errors: ["QBO no devolvió customers (o no se pudo parsear la respuesta)."] },
     };
   }
 
   const tops = customers.filter((c) => !c.parentId);
   const subs = customers.filter((c) => c.parentId);
+  // Los jobs/proyectos de QBO (IsProject) NO son sucursales — se cuentan aparte
+  // y, más adelante (Fase D), se linkean a client_projects por su número de rubro.
+  const branchSubs = subs.filter((s) => !s.isProject);
+  const qboProjects = subs.length - branchSubs.length;
 
   // Clientes existentes de la org (para match por qb_id o por nombre).
   const { data: existingClients } = (await supabase
@@ -183,8 +190,8 @@ export async function syncQuickbooksCustomers(opts?: { subCustomersAsLocations?:
   // ── Sub-customers → sucursales (client_locations) ──────────────────────
   let locationsUpserted = 0;
   let skipped = 0;
-  if (subAsLoc && subs.length > 0) {
-    const subIds = subs.map((s) => s.id);
+  if (subAsLoc && branchSubs.length > 0) {
+    const subIds = branchSubs.map((s) => s.id);
     const { data: existingLocs } = (await supabase
       .from("client_locations")
       .select("id, qb_sub_customer_id")
@@ -194,7 +201,7 @@ export async function syncQuickbooksCustomers(opts?: { subCustomersAsLocations?:
 
     const locInserts: Record<string, unknown>[] = [];
     const locUpdates: { id: string; name: string }[] = [];
-    for (const s of subs) {
+    for (const s of branchSubs) {
       const parentClientId = s.parentId ? clientIdByQb.get(s.parentId) : undefined;
       if (!parentClientId) {
         skipped++; // padre no sincronizado (o sub-customer anidado)
@@ -220,6 +227,6 @@ export async function syncQuickbooksCustomers(opts?: { subCustomersAsLocations?:
   revalidatePath("/maintenance/clients");
   return {
     ok: true,
-    summary: { toolUsed, fetched: customers.length, clientsCreated, clientsUpdated, contactsUpserted, locationsUpserted, skipped, errors: errors.slice(0, 12) },
+    summary: { toolUsed, fetched: customers.length, clientsCreated, clientsUpdated, contactsUpserted, locationsUpserted, qboProjects, skipped, errors: errors.slice(0, 12) },
   };
 }
