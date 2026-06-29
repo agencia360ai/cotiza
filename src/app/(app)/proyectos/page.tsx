@@ -14,6 +14,7 @@ import {
   type ProjectType,
 } from "@/lib/projects/types";
 import { cn } from "@/lib/utils";
+import { QboProjectsBoard } from "./qbo-projects";
 
 export const dynamic = "force-dynamic";
 
@@ -92,6 +93,10 @@ export default async function ProjectsListPage({
           Nuevo proyecto
         </Link>
       </header>
+
+      <QboProjectsBoard />
+
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-700">Con seguimiento en Reportme</h2>
 
       {(allRows ?? []).length > 0 ? (
         <div className="mb-6 flex flex-wrap items-center gap-1.5">
