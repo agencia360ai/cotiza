@@ -15,17 +15,17 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
-  { href: "/maintenance", label: "Inicio", icon: Home, exact: true },
-  { href: "/maintenance/potenciales", label: "Potenciales", icon: TrendingUp },
-  { href: "/maintenance/projects", label: "Proyectos", icon: Hammer },
+  { href: "/inicio", label: "Inicio", icon: Home, exact: true },
+  { href: "/potenciales", label: "Potenciales", icon: TrendingUp },
+  { href: "/proyectos", label: "Proyectos", icon: Hammer },
   {
-    href: "/maintenance/mantenimiento",
+    href: "/mantenimiento",
     label: "Mantenimiento",
     icon: Wrench,
-    also: ["/maintenance/reports", "/maintenance/schedule"],
+    also: ["/reportes", "/cronograma"],
   },
-  { href: "/maintenance/clients", label: "Clientes", icon: Building2 },
-  { href: "/maintenance/technicians", label: "Personal", icon: Users },
+  { href: "/clientes", label: "Clientes", icon: Building2 },
+  { href: "/personal", label: "Personal", icon: Users },
 ];
 
 function isNavActive(item: NavItem, pathname: string): boolean {

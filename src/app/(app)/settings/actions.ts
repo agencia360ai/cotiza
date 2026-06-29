@@ -89,7 +89,7 @@ export async function updateOrgFocus(focus: "maintenance" | "projects" | "mixed"
     .update({ focus })
     .eq("id", orgId);
   if (error) return { error: error.message };
-  revalidatePath("/maintenance");
+  revalidatePath("/inicio");
   revalidatePath("/settings");
   return { ok: true };
 }

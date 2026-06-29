@@ -43,7 +43,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
     <div className="mt-8 space-y-8">
       {/* KPI Strip */}
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-        <KpiCard label="Clientes" value={m.clients.length} icon={Building2} accent="#0F172A" href="/maintenance/clients" />
+        <KpiCard label="Clientes" value={m.clients.length} icon={Building2} accent="#0F172A" href="/clientes" />
         <KpiCard label="Equipos" value={totalEquipment} icon={Boxes} accent="#0F172A" hint={`${m.totalLocations} sucursales`} />
         <KpiCard label="Salud global" value={`${globalHealth}%`} icon={TrendingUp} accent={colorForScore(globalHealth)} hint={`${globalCounts.operativo} operativos`} />
         <KpiCard
@@ -53,7 +53,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
           accent={globalCounts.critico > 0 ? STATUS_COLOR.critico : globalCounts.atencion > 0 ? STATUS_COLOR.atencion : "#10B981"}
           hint={globalCounts.critico > 0 ? `${globalCounts.critico} crítico${globalCounts.critico === 1 ? "" : "s"}` : globalCounts.atencion > 0 ? `${globalCounts.atencion} atención` : "Todo operativo"}
         />
-        <KpiCard label="Vencidos" value={m.overdueSchedules.length} icon={AlertOctagon} accent={m.overdueSchedules.length > 0 ? "#EF4444" : "#10B981"} hint={`${m.thisWeekSchedules.length} esta semana`} href="/maintenance/schedule" />
+        <KpiCard label="Vencidos" value={m.overdueSchedules.length} icon={AlertOctagon} accent={m.overdueSchedules.length > 0 ? "#EF4444" : "#10B981"} hint={`${m.thisWeekSchedules.length} esta semana`} href="/cronograma" />
       </section>
 
       {/* Distribution + urgent actions */}
@@ -102,10 +102,10 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
             <h2 className="text-sm font-semibold text-slate-700">Acciones urgentes</h2>
           </div>
           <ul className="space-y-2">
-            <ActionRow count={m.overdueSchedules.length} label="Mantenimientos vencidos" href="/maintenance/schedule" tint={m.overdueSchedules.length > 0 ? "red" : "neutral"} />
-            <ActionRow count={globalCounts.critico} label="Equipos críticos" href="/maintenance/clients" tint={globalCounts.critico > 0 ? "red" : "neutral"} />
-            <ActionRow count={m.draftReportsCount} label="Reportes en revisión" href="/maintenance/reports?status=draft" tint={m.draftReportsCount > 0 ? "amber" : "neutral"} />
-            <ActionRow count={m.thisWeekSchedules.length} label="Próximos esta semana" href="/maintenance/schedule" tint="blue" />
+            <ActionRow count={m.overdueSchedules.length} label="Mantenimientos vencidos" href="/cronograma" tint={m.overdueSchedules.length > 0 ? "red" : "neutral"} />
+            <ActionRow count={globalCounts.critico} label="Equipos críticos" href="/clientes" tint={globalCounts.critico > 0 ? "red" : "neutral"} />
+            <ActionRow count={m.draftReportsCount} label="Reportes en revisión" href="/reportes?status=draft" tint={m.draftReportsCount > 0 ? "amber" : "neutral"} />
+            <ActionRow count={m.thisWeekSchedules.length} label="Próximos esta semana" href="/cronograma" tint="blue" />
           </ul>
         </div>
       </section>
@@ -117,7 +117,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Salud por cliente ({clientSummaries.length})</h2>
             <p className="text-xs text-slate-500">Ordenados por urgencia (críticos primero)</p>
           </div>
-          <Link href="/maintenance/clients" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-700 hover:text-slate-900">
+          <Link href="/clientes" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-700 hover:text-slate-900">
             Ver todos
             <ArrowRight className="size-3.5" />
           </Link>
@@ -127,7 +127,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
           <div className="rounded-2xl border border-dashed border-border bg-card py-16 text-center">
             <Building2 className="mx-auto mb-2 size-6 text-slate-400" />
             <p className="text-sm font-medium">Sin clientes aún</p>
-            <Link href="/maintenance/clients/new" className="mt-3 inline-flex items-center gap-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+            <Link href="/clientes/new" className="mt-3 inline-flex items-center gap-1 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
               Crear cliente
               <ChevronRight className="size-4" />
             </Link>
@@ -151,7 +151,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
                   {clientSummaries.map((c) => (
                     <tr key={c.id} className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50/50">
                       <td className="px-4 py-3">
-                        <Link href={`/maintenance/clients/${c.id}`} className="flex items-center gap-3">
+                        <Link href={`/clientes/${c.id}`} className="flex items-center gap-3">
                           {c.logo_path ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={imageUrl(c.logo_path)} alt={c.name} className="size-9 shrink-0 rounded-lg object-cover ring-1 ring-slate-200" />
@@ -188,7 +188,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
                       </td>
                       <td className="px-3 py-3 text-slate-600">{formatDate(c.nextSchedule)}</td>
                       <td className="px-3 py-3 text-right">
-                        <Link href={`/maintenance/clients/${c.id}`} className="text-slate-400 hover:text-slate-700">
+                        <Link href={`/clientes/${c.id}`} className="text-slate-400 hover:text-slate-700">
                           <ChevronRight className="size-4" />
                         </Link>
                       </td>
@@ -209,7 +209,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
               <ClipboardCheck className="size-4 text-slate-700" />
               <h2 className="text-sm font-semibold">Reportes recientes</h2>
             </div>
-            <Link href="/maintenance/reports" className="text-xs font-semibold text-slate-600 hover:text-slate-900">Ver todos →</Link>
+            <Link href="/reportes" className="text-xs font-semibold text-slate-600 hover:text-slate-900">Ver todos →</Link>
           </header>
           {reports.length === 0 ? (
             <p className="px-5 py-10 text-center text-sm text-slate-500">Sin reportes aún</p>
@@ -217,7 +217,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
             <ul className="divide-y divide-slate-100">
               {reports.slice(0, 5).map((r) => (
                 <li key={r.id}>
-                  <Link href={`/maintenance/reports/${r.id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
+                  <Link href={`/reportes/${r.id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
                     <div className="flex size-9 shrink-0 items-center justify-center rounded-lg text-white" style={{ backgroundColor: REPORT_TYPE_COLOR[r.report_type] }}>
                       <ReportTypeIcon type={r.report_type} className="size-4" />
                     </div>
@@ -244,7 +244,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
               <Calendar className="size-4 text-slate-700" />
               <h2 className="text-sm font-semibold">Próximos servicios</h2>
             </div>
-            <Link href="/maintenance/schedule" className="text-xs font-semibold text-slate-600 hover:text-slate-900">Ver cronograma →</Link>
+            <Link href="/cronograma" className="text-xs font-semibold text-slate-600 hover:text-slate-900">Ver cronograma →</Link>
           </header>
           {schedules.length === 0 ? (
             <p className="px-5 py-10 text-center text-sm text-slate-500">Sin mantenimientos programados</p>
@@ -254,7 +254,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
                 const overdue = new Date(s.next_due_date) < new Date();
                 return (
                   <li key={s.id}>
-                    <Link href={`/maintenance/clients/${s.client_id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
+                    <Link href={`/clientes/${s.client_id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
                       <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", overdue ? "bg-red-100 text-red-700" : "bg-blue-100 text-blue-700")}>
                         <Calendar className="size-4" />
                       </div>
@@ -281,7 +281,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
             <p className="text-slate-700">
               <strong>{m.techsCount}</strong> miembro{m.techsCount === 1 ? "" : "s"} de personal activo
             </p>
-            <Link href="/maintenance/technicians" className="text-xs font-semibold text-slate-600 hover:text-slate-900">Gestionar equipo →</Link>
+            <Link href="/personal" className="text-xs font-semibold text-slate-600 hover:text-slate-900">Gestionar equipo →</Link>
           </div>
         </section>
       ) : null}
