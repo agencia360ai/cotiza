@@ -24,7 +24,6 @@ import {
   MessageCircle,
   Mail,
   FolderOpen,
-  FolderInput,
   MapPin,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -54,7 +53,6 @@ import {
   updateTender,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
-import { DropboxRenameDialog } from "./dropbox-rename";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
@@ -158,7 +156,6 @@ function CotizacionesTab({
   const [creating, setCreating] = useState(false);
   const [converting, setConverting] = useState<QuoteRow | null>(null);
   const [showDropbox, setShowDropbox] = useState(false);
-  const [showRename, setShowRename] = useState(false);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -254,15 +251,6 @@ function CotizacionesTab({
         >
           <FolderOpen className="size-4 text-blue-600" />
           <span className="hidden sm:inline">Dropbox</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowRename(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          title="Normalizar los nombres de los archivos en Dropbox"
-        >
-          <FolderInput className="size-4 text-blue-600" />
-          <span className="hidden lg:inline">Renombrar</span>
         </button>
         <button
           type="button"
@@ -476,8 +464,6 @@ function CotizacionesTab({
           }}
         />
       ) : null}
-
-      {showRename ? <DropboxRenameDialog onClose={() => setShowRename(false)} /> : null}
     </>
   );
 }
@@ -539,6 +525,9 @@ function QuoteDrawer({
   return (
     <Drawer title={`Cotización ${quote.quote_number}`} onClose={onClose}>
       <div className="space-y-3">
+        <Field label="Número" hint="editable — acomodalo como quieras">
+          <input className={inputCls} value={f.quote_number} onChange={(e) => set("quote_number", e.target.value)} placeholder="COT DC 26-108" />
+        </Field>
         <Field label="Cliente" hint="texto original + cliente estandarizado">
           <input
             className={inputCls}
