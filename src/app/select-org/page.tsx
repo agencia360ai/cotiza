@@ -24,7 +24,7 @@ export default async function SelectOrgPage() {
   if (memberships.length === 0) redirect("/onboarding");
   if (memberships.length === 1) {
     // No hay nada que elegir
-    redirect("/maintenance");
+    redirect("/inicio");
   }
 
   const orgIds = memberships.map((m) => m.org_id);

@@ -20,5 +20,5 @@ export default async function Home() {
   const hasValidActive = !!cookieOrgId && memberships.some((m) => m.org_id === cookieOrgId);
   if (memberships.length > 1 && !hasValidActive) redirect("/select-org");
 
-  redirect("/maintenance");
+  redirect("/inicio");
 }

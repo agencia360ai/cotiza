@@ -1,0 +1,75 @@
+import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
+import { createClient } from "@/lib/supabase/server";
+import { getActiveOrgId } from "@/lib/org-context";
+import { ClientDetailEditor } from "./client-detail";
+
+export const dynamic = "force-dynamic";
+
+export default async function ClientDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) redirect("/login");
+  const orgId = await getActiveOrgId();
+  if (!orgId) redirect("/onboarding");
+
+  const { data: client } = await supabase
+    .from("clients")
+    .select("*")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!client) notFound();
+
+  const { data: locationsRaw } = await supabase
+    .from("client_locations")
+    .select("*, equipment:client_equipment(*)")
+    .eq("client_id", id)
+    .order("name", { ascending: true });
+
+  const { data: shareLinks } = await supabase
+    .from("share_links")
+    .select("*")
+    .eq("client_id", id)
+    .eq("kind", "client_view")
+    .order("created_at", { ascending: false });
+
+  const { data: schedules } = await supabase
+    .from("maintenance_schedules")
+    .select("*")
+    .eq("client_id", id)
+    .order("next_due_date", { ascending: true });
+
+  const { data: technicians } = await supabase
+    .from("technicians")
+    .select("id, name, active")
+    .eq("org_id", orgId)
+    .eq("active", true)
+    .order("name", { ascending: true });
+
+  return (
+    <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
+      <Link
+        href="/clientes"
+        className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
+      >
+        <ArrowLeft className="size-4" />
+        Volver a clientes
+      </Link>
+
+      <ClientDetailEditor
+        client={client}
+        locations={locationsRaw ?? []}
+        shareLinks={shareLinks ?? []}
+        schedules={schedules ?? []}
+        technicians={technicians ?? []}
+      />
+    </div>
+  );
+}

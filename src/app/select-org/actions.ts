@@ -18,7 +18,7 @@ export async function setActiveOrg(orgId: string): Promise<{ error: string } | v
     sameSite: "lax",
     maxAge: 60 * 60 * 24 * 365,
   });
-  redirect("/maintenance");
+  redirect("/inicio");
 }
 
 export async function createOrg(input: {
@@ -49,5 +49,5 @@ export async function createOrg(input: {
     sameSite: "lax",
     maxAge: 60 * 60 * 24 * 365,
   });
-  redirect("/maintenance");
+  redirect("/inicio");
 }
