@@ -109,7 +109,11 @@ async function fetchProjectFinancials(ids: string[]): Promise<Map<string, { inco
     }
   };
 
-  for (let i = 0; i < ids.length; i += 6) await Promise.all(ids.slice(i, i + 6).map(one));
+  // Concurrencia baja para no saturar el server: de a 3, con respiro entre tandas.
+  for (let i = 0; i < ids.length; i += 3) {
+    await Promise.all(ids.slice(i, i + 3).map(one));
+    if (i + 3 < ids.length) await new Promise((r) => setTimeout(r, 250));
+  }
   return out;
 }
 
