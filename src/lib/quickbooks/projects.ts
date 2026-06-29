@@ -56,7 +56,7 @@ export async function fetchQboProjects(opts?: { year?: number }): Promise<FetchP
   // Rentabilidad (best-effort): si el reporte de QBO responde, llenamos margen.
   let financialsOk = false;
   try {
-    const fin = await fetchProjectFinancials();
+    const fin = await fetchProjectFinancials(projects.map((p) => p.id));
     if (fin.size > 0) {
       financialsOk = true;
       for (const p of projects) {
@@ -75,73 +75,80 @@ export async function fetchQboProjects(opts?: { year?: number }): Promise<FetchP
   return { projects: projects.sort((a, b) => a.fullName.localeCompare(b.fullName)), financialsOk };
 }
 
-// ── Rentabilidad por proyecto (best-effort; se valida contra el gateway) ──────
-// Intenta un reporte de P&L resumido por customer/project. Devuelve
-// Map<key, {income, cost}> donde key puede ser el id o el nombre del project.
-async function fetchProjectFinancials(): Promise<Map<string, { income: number; cost: number }>> {
+// ── Rentabilidad por proyecto ────────────────────────────────────────────────
+// QBO calcula el Income vs Cost por project. Lo sacamos con get_profit_and_loss
+// FILTRADO por customer = el project (cada project es un customer). Una llamada
+// por proyecto (chunked); el reporte es el formato estándar de Intuit.
+async function fetchProjectFinancials(ids: string[]): Promise<Map<string, { income: number; cost: number }>> {
+  const out = new Map<string, { income: number; cost: number }>();
+  if (ids.length === 0) return out;
   const tools = await listQboTools();
   const tool = tools.find((t) => /profit.*loss|profit_loss|\bp_l\b|pnl/i.test(t.name));
-  if (!tool) return new Map();
+  if (!tool) return out;
 
-  const today = new Date().toISOString().slice(0, 10);
-  const argsVariants: Record<string, unknown>[] = [
-    { params: { start_date: `${today.slice(0, 4)}-01-01`, end_date: today, summarize_column_by: "Customers" } },
-    { start_date: `${today.slice(0, 4)}-01-01`, end_date: today, summarize_column_by: "Customers" },
-    { params: { summarize_column_by: "Customers" } },
-  ];
+  const year = new Date().getFullYear();
+  const start = `${year}-01-01`;
+  const end = new Date().toISOString().slice(0, 10);
 
-  for (const args of argsVariants) {
-    try {
-      const res = await callQboTool(tool.name, args);
-      const parsed = parsePnlByCustomer(res);
-      if (parsed.size > 0) return parsed;
-    } catch {
-      /* probar siguiente variante */
+  const one = async (id: string): Promise<void> => {
+    const variants: Record<string, unknown>[] = [
+      { params: { start_date: start, end_date: end, customer: id } },
+      { params: { start_date: start, end_date: end, customer_id: id } },
+      { start_date: start, end_date: end, customer: id },
+    ];
+    for (const args of variants) {
+      try {
+        const fin = parsePnl(await callQboTool(tool.name, args));
+        if (fin && (fin.income !== 0 || fin.cost !== 0)) {
+          out.set(id, fin);
+          return;
+        }
+      } catch {
+        /* siguiente variante */
+      }
     }
-  }
-  return new Map();
+  };
+
+  for (let i = 0; i < ids.length; i += 6) await Promise.all(ids.slice(i, i + 6).map(one));
+  return out;
 }
 
-// Parser defensivo del reporte ProfitAndLoss de QBO resumido por customer.
-// Estructura típica: { Columns: { Column: [...] }, Rows: { Row: [...] } }.
-function parsePnlByCustomer(result: QboToolResult): Map<string, { income: number; cost: number }> {
-  const out = new Map<string, { income: number; cost: number }>();
+type PnlRow = { group?: string; Summary?: { ColData?: { value?: string }[] }; Rows?: { Row?: PnlRow[] } };
+
+// Parser del ProfitAndLoss de QBO (un solo customer/project). Toma los totales
+// de las secciones de nivel superior; si hay NetIncome, cost = income - net.
+function parsePnl(result: QboToolResult): { income: number; cost: number } | null {
   let json: unknown = result.structuredContent;
   if (json === undefined) {
-    const text = (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
+    const text = (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
+    if (!text) return null;
     try {
       json = JSON.parse(text);
     } catch {
-      return out;
+      return null;
     }
   }
   const report = (json as { Report?: unknown }).Report ?? json;
-  const columns = ((report as { Columns?: { Column?: unknown[] } }).Columns?.Column ?? []) as { ColTitle?: string }[];
-  // Mapea índice de columna → nombre del customer/project.
-  const colNames: (string | null)[] = columns.map((c) => (c?.ColTitle ? c.ColTitle : null));
+  const rows = ((report as { Rows?: { Row?: PnlRow[] } }).Rows?.Row ?? []) as PnlRow[];
 
-  type Row = { type?: string; group?: string; Summary?: { ColData?: { value?: string }[] }; Rows?: { Row?: Row[] } };
-  const walk = (rows: Row[], bucket: "income" | "expense" | null) => {
-    for (const r of rows) {
-      const g = (r.group ?? "").toLowerCase();
-      const next = g.includes("income") || g.includes("revenue") ? "income" : g.includes("expense") || g.includes("cogs") ? "expense" : bucket;
-      const summary = r.Summary?.ColData ?? [];
-      if (next && summary.length) {
-        summary.forEach((cell, i) => {
-          const name = colNames[i];
-          const val = Number((cell.value ?? "").replace(/[^0-9.-]/g, "")) || 0;
-          if (name && i > 0 && val) {
-            const cur = out.get(name) ?? { income: 0, cost: 0 };
-            if (next === "income") cur.income += val;
-            else cur.cost += val;
-            out.set(name, cur);
-          }
-        });
-      }
-      if (r.Rows?.Row) walk(r.Rows.Row, next);
+  const total = (r: PnlRow): number => {
+    const cd = r.Summary?.ColData ?? [];
+    for (let i = cd.length - 1; i >= 0; i--) {
+      const v = Number((cd[i].value ?? "").replace(/[^0-9.-]/g, ""));
+      if (cd[i].value && !Number.isNaN(v)) return v;
     }
+    return 0;
   };
-  const topRows = ((report as { Rows?: { Row?: Row[] } }).Rows?.Row ?? []) as Row[];
-  walk(topRows, null);
-  return out;
+
+  let income = 0;
+  let cost = 0;
+  let net: number | null = null;
+  for (const r of rows) {
+    const g = (r.group ?? "").toLowerCase();
+    if (g === "income") income = total(r);
+    else if (g === "netincome") net = total(r);
+    else if (g === "cogs" || g === "expenses" || g === "otherexpenses" || g.includes("expense")) cost += total(r);
+  }
+  if (net !== null && income > 0) return { income, cost: income - net };
+  return { income, cost };
 }
