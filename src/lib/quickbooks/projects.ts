@@ -112,9 +112,11 @@ function parsePnl(result: QboToolResult): { income: number; cost: number } | nul
   let json: unknown = result.structuredContent;
   if (json === undefined) {
     const text = (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
-    if (!text) return null;
+    // El gateway antepone "Profit and Loss Report:" antes del JSON → arrancamos en la "{".
+    const start = text.indexOf("{");
+    if (start < 0) return null;
     try {
-      json = JSON.parse(text);
+      json = JSON.parse(text.slice(start));
     } catch {
       return null;
     }
