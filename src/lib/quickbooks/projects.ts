@@ -13,6 +13,7 @@ export type QboProject = {
   income: number | null;
   cost: number | null;
   margin: number | null; // 0..1
+  closed: boolean; // marcado cerrado en Reportme → no se re-consulta a QBO
 };
 
 // "DC25-02", "DC-2501", "DS25-27" → { rubro, year(20YY) }
@@ -27,9 +28,9 @@ function leafName(fullyQualified: string | null, displayName: string): string {
   return displayName;
 }
 
-export type FetchProjectsResult = { projects: QboProject[]; financialsOk: boolean };
-
-export async function fetchQboProjects(opts?: { year?: number }): Promise<FetchProjectsResult> {
+// Solo la LISTA de projects (1 llamada a QBO). Sin financials. La orquestación
+// (estado cerrado/abierto + financials de los abiertos) vive en la action.
+export async function fetchQboProjectsList(opts?: { year?: number }): Promise<QboProject[]> {
   const { customers } = await fetchQboCustomers();
   const byId = new Map(customers.map((c) => [c.id, c]));
 
@@ -48,38 +49,24 @@ export async function fetchQboProjects(opts?: { year?: number }): Promise<FetchP
         income: null,
         cost: null,
         margin: null,
+        closed: false,
       };
     });
 
   if (opts?.year) projects = projects.filter((p) => p.year === opts.year);
+  return projects.sort((a, b) => a.fullName.localeCompare(b.fullName));
+}
 
-  // Rentabilidad (best-effort): si el reporte de QBO responde, llenamos margen.
-  let financialsOk = false;
-  try {
-    const fin = await fetchProjectFinancials(projects.map((p) => p.id));
-    if (fin.size > 0) {
-      financialsOk = true;
-      for (const p of projects) {
-        const f = fin.get(p.id) ?? fin.get(p.fullName) ?? fin.get(p.name);
-        if (f) {
-          p.income = f.income;
-          p.cost = f.cost;
-          p.margin = f.income > 0 ? (f.income - f.cost) / f.income : null;
-        }
-      }
-    }
-  } catch {
-    /* sin financials: la lista igual se muestra */
-  }
-
-  return { projects: projects.sort((a, b) => a.fullName.localeCompare(b.fullName)), financialsOk };
+export function marginOf(income: number | null, cost: number | null): number | null {
+  if (income === null || cost === null || income <= 0) return null;
+  return (income - cost) / income;
 }
 
 // ── Rentabilidad por proyecto ────────────────────────────────────────────────
 // QBO calcula el Income vs Cost por project. Lo sacamos con get_profit_and_loss
 // FILTRADO por customer = el project (cada project es un customer). Una llamada
 // por proyecto (chunked); el reporte es el formato estándar de Intuit.
-async function fetchProjectFinancials(ids: string[]): Promise<Map<string, { income: number; cost: number }>> {
+export async function fetchProjectFinancials(ids: string[]): Promise<Map<string, { income: number; cost: number }>> {
   const out = new Map<string, { income: number; cost: number }>();
   if (ids.length === 0) return out;
   const tools = await listQboTools();

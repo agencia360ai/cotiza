@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Loader2, AlertTriangle, Building2, TrendingUp } from "lucide-react";
+import { RefreshCw, Loader2, AlertTriangle, Building2, TrendingUp, Lock, LockOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getQboProjects, type QboProjectsResult } from "./qbo-actions";
+import { getQboProjects, setProjectClosed, type QboProjectsResult } from "./qbo-actions";
 import type { QboProject } from "@/lib/quickbooks/projects";
 
 const RUBRO_LABEL: Record<string, string> = { DC: "Contratos", DM: "Mantenimiento", DS: "Servicio", DV: "Ventas" };
@@ -27,12 +27,20 @@ export function QboProjectsBoard() {
   const [res, setRes] = useState<QboProjectsResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<string>("all");
+  const [override, setOverride] = useState<Map<string, boolean>>(new Map());
 
   async function load(force = false) {
     setLoading(true);
     const r = await getQboProjects(force ? { force: true } : undefined);
     setRes(r);
+    setOverride(new Map());
     setLoading(false);
+  }
+  const isClosed = (p: QboProject) => (override.has(p.id) ? override.get(p.id)! : p.closed);
+  async function toggleClosed(p: QboProject) {
+    const next = !isClosed(p);
+    setOverride((m) => new Map(m).set(p.id, next));
+    await setProjectClosed(p.id, next);
   }
   useEffect(() => {
     void load(); // usa cache: refrescar la página no re-consulta QBO
@@ -41,7 +49,10 @@ export function QboProjectsBoard() {
 
   const projects = res?.ok ? res.projects : [];
   const rubros = useMemo(() => Array.from(new Set(projects.map((p) => p.rubro).filter((r): r is string => !!r))), [projects]);
-  const shown = tab === "all" ? projects : projects.filter((p) => p.rubro === tab);
+  const shown = (tab === "all" ? projects : projects.filter((p) => p.rubro === tab))
+    .slice()
+    .sort((a, b) => Number(isClosed(a)) - Number(isClosed(b))); // abiertos primero
+  const closedCount = projects.filter(isClosed).length;
 
   return (
     <section className="mb-8 rounded-2xl border border-slate-200 bg-card">
@@ -102,18 +113,23 @@ export function QboProjectsBoard() {
 
           <ul className="divide-y divide-slate-50 px-2 py-2">
             {shown.map((p) => (
-              <ProjectRow key={p.id} p={p} />
+              <ProjectRow key={p.id} p={p} closed={isClosed(p)} onToggle={() => toggleClosed(p)} />
             ))}
           </ul>
+          {closedCount > 0 ? (
+            <p className="px-4 pb-3 text-[11px] text-slate-400">
+              {closedCount} cerrado{closedCount === 1 ? "" : "s"} — no se re-consultan a QBO en cada actualización.
+            </p>
+          ) : null}
         </>
       )}
     </section>
   );
 }
 
-function ProjectRow({ p }: { p: QboProject }) {
+function ProjectRow({ p, closed, onToggle }: { p: QboProject; closed: boolean; onToggle: () => void }) {
   return (
-    <li className="flex items-center gap-4 rounded-lg px-2 py-2.5 hover:bg-slate-50/60">
+    <li className={cn("flex items-center gap-3 rounded-lg px-2 py-2.5 hover:bg-slate-50/60", closed && "opacity-60")}>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           {p.rubro ? (
@@ -122,6 +138,7 @@ function ProjectRow({ p }: { p: QboProject }) {
             </span>
           ) : null}
           <p className="truncate text-sm font-medium text-slate-900">{p.name}</p>
+          {closed ? <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">cerrado</span> : null}
         </div>
         {p.clientName ? (
           <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">
@@ -131,12 +148,12 @@ function ProjectRow({ p }: { p: QboProject }) {
         ) : null}
       </div>
 
-      <div className="w-44 shrink-0">
+      <div className="w-40 shrink-0">
         {p.margin !== null ? (
           <>
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold text-slate-900">{Math.round(p.margin * 100)}%</span>
-              <span className="text-[10px] text-slate-400">margen</span>
+              <span className="text-[10px] text-slate-400">{closed ? "último" : "margen"}</span>
             </div>
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
               <div className={cn("h-full rounded-full", marginColor(p.margin))} style={{ width: `${Math.max(4, Math.min(100, p.margin * 100))}%` }} />
@@ -147,9 +164,18 @@ function ProjectRow({ p }: { p: QboProject }) {
             </div>
           </>
         ) : (
-          <p className="text-right text-[11px] text-slate-400">sin datos de QBO</p>
+          <p className="text-right text-[11px] text-slate-400">{closed ? "—" : "sin datos de QBO"}</p>
         )}
       </div>
+
+      <button
+        type="button"
+        onClick={onToggle}
+        title={closed ? "Reabrir — vuelve a refrescar desde QBO" : "Cerrar — deja de refrescar (congela los números)"}
+        className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+      >
+        {closed ? <LockOpen className="size-4" /> : <Lock className="size-4" />}
+      </button>
     </li>
   );
 }
