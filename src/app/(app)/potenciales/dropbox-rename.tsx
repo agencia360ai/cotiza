@@ -134,7 +134,6 @@ export function DropboxRenameDialog({ onClose }: { onClose: () => void }) {
                           {f.toName}
                         </p>
                         {fail ? <p className="mt-0.5 text-[11px] text-red-600">⚠ {fail}</p> : null}
-                        {!f.matched ? <p className="mt-0.5 text-[11px] text-amber-600">solo número (no está importada — sin cliente/descripción)</p> : null}
                       </div>
                       {isDone ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" /> : null}
                     </label>
@@ -173,7 +172,7 @@ export function DropboxRenameDialog({ onClose }: { onClose: () => void }) {
           </div>
           <p className="mt-2 flex items-start gap-1 text-[11px] text-slate-400">
             <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-            Renombra los archivos en Dropbox. El número queda con 3 dígitos para ordenar bien. Dropbox guarda el historial; el dedup usa el file-id, no se rompe.
+            Solo padea el número a 3 dígitos (para ordenar bien) y limpia espacios. Conserva el resto del nombre — no borra cliente ni descripción. Dropbox guarda el historial.
           </p>
         </footer>
       </div>
