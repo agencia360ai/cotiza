@@ -37,7 +37,7 @@ function parseNum(raw: string) {
   return { rubro: m[1].toUpperCase(), yy: m[2], seq: m[3], letter: (m[4] ?? "").toUpperCase(), rev: m[5] ?? m[6] ?? null };
 }
 
-// Nombre canónico: "COT DC 26-009 · Cliente – Sucursal · Descripción.pdf".
+// Nombre canónico: "COT DC 26-009 - Cliente (Sucursal) - Descripción.pdf".
 // El número va con 3 dígitos (cero a la izquierda) para que ordene bien.
 function buildCanonical(originalName: string, q: MatchedQuote | null): string | null {
   const extM = originalName.match(PDF_IMG);
@@ -51,9 +51,9 @@ function buildCanonical(originalName: string, q: MatchedQuote | null): string | 
   let desc = q?.description ? sanitize(q.description) : "";
   if (desc.length > 60) desc = desc.slice(0, 57).trim() + "…";
   const parts = [prefix];
-  if (client) parts.push(loc ? `${client} – ${loc}` : client);
+  if (client) parts.push(loc ? `${client} (${loc})` : client);
   if (desc) parts.push(desc);
-  return `${parts.join(" · ")}.${ext}`;
+  return `${parts.join(" - ")}.${ext}`;
 }
 
 export type RenameItem = {
