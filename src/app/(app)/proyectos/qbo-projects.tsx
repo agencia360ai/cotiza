@@ -28,14 +28,15 @@ export function QboProjectsBoard() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<string>("all");
 
-  async function load() {
+  async function load(force = false) {
     setLoading(true);
-    const r = await getQboProjects();
+    const r = await getQboProjects(force ? { force: true } : undefined);
     setRes(r);
     setLoading(false);
   }
   useEffect(() => {
-    void load();
+    void load(); // usa cache: refrescar la página no re-consulta QBO
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const projects = res?.ok ? res.projects : [];
@@ -53,9 +54,10 @@ export function QboProjectsBoard() {
         </div>
         <button
           type="button"
-          onClick={load}
+          onClick={() => load(true)}
           disabled={loading}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          title="Re-consulta QuickBooks (lo demás usa cache de 15 min)"
         >
           {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
           Actualizar
