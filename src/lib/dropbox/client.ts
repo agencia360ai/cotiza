@@ -119,16 +119,3 @@ export async function downloadFile(path: string): Promise<Buffer> {
   if (!res.ok) throw new Error(`Dropbox download ${res.status}: ${await res.text()}`);
   return Buffer.from(await res.arrayBuffer());
 }
-
-/** Renombra / mueve un archivo. Devuelve el nuevo path_display. */
-export async function moveFile(fromPath: string, toPath: string): Promise<string> {
-  const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
-  const res = await fetch("https://api.dropboxapi.com/2/files/move_v2", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ from_path: fromPath, to_path: toPath, autorename: false, allow_ownership_transfer: false }),
-  });
-  if (!res.ok) throw new Error(`Dropbox move ${res.status}: ${await res.text()}`);
-  const j = (await res.json()) as { metadata?: { path_display?: string } };
-  return j.metadata?.path_display ?? toPath;
-}
