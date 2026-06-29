@@ -17,6 +17,15 @@ const RUBRO_CHIP: Record<string, string> = {
 function bal(n: number): string {
   return "B/. " + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+function relTime(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return "recién";
+  const m = Math.round(s / 60);
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `hace ${h} h`;
+  return `hace ${Math.round(h / 24)} d`;
+}
 function marginColor(m: number): string {
   if (m >= 0.4) return "bg-emerald-500";
   if (m >= 0.2) return "bg-amber-500";
@@ -43,7 +52,7 @@ export function QboProjectsBoard() {
     await setProjectClosed(p.id, next);
   }
   useEffect(() => {
-    void load(); // usa cache: refrescar la página no re-consulta QBO
+    void load(); // lee de la base: abrir la página NO consulta QBO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -59,16 +68,19 @@ export function QboProjectsBoard() {
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
         <div className="flex items-center gap-2">
           <TrendingUp className="size-4 text-emerald-600" />
-          <h2 className="text-sm font-semibold text-slate-900">
-            Proyectos en QuickBooks {res?.ok ? <span className="text-slate-400">· {res.year}</span> : null}
-          </h2>
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              Proyectos en QuickBooks {res?.ok ? <span className="text-slate-400">· {res.year}</span> : null}
+            </h2>
+            {res?.ok && res.syncedAt ? <p className="text-[11px] text-slate-400">Actualizado {relTime(res.syncedAt)}</p> : null}
+          </div>
         </div>
         <button
           type="button"
           onClick={() => load(true)}
           disabled={loading}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          title="Re-consulta QuickBooks (lo demás usa cache de 15 min)"
+          title="Trae los datos de QuickBooks y los guarda. Abrir la página usa lo guardado, no consulta QBO."
         >
           {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
           Actualizar
@@ -83,7 +95,22 @@ export function QboProjectsBoard() {
           <span>{res.error}</span>
         </div>
       ) : projects.length === 0 ? (
-        <p className="px-4 py-10 text-center text-sm text-slate-500">No hay proyectos {res?.ok ? res.year : ""} en QuickBooks (o no se pudieron leer).</p>
+        res?.ok && res.syncedAt === null ? (
+          <div className="px-4 py-10 text-center">
+            <p className="text-sm text-slate-500">Todavía no trajiste los proyectos de QuickBooks.</p>
+            <button
+              type="button"
+              onClick={() => load(true)}
+              disabled={loading}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+              Traer de QuickBooks
+            </button>
+          </div>
+        ) : (
+          <p className="px-4 py-10 text-center text-sm text-slate-500">No hay proyectos {res?.ok ? res.year : ""} en QuickBooks.</p>
+        )
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-1.5 px-4 pt-3">
