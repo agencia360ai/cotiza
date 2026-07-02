@@ -37,8 +37,9 @@ function baseHeaders(session?: { userToken: string; userSesionId: string }): Rec
 export type PcSession = { userToken: string; userSesionId: string };
 
 export async function pcLogin(): Promise<PcSession> {
-  const user = process.env.PANAMACOMPRA_USER;
-  const pass = process.env.PANAMACOMPRA_PASSWORD;
+  // trim(): un espacio/salto de línea al pegar la env var rompe el login.
+  const user = process.env.PANAMACOMPRA_USER?.trim();
+  const pass = process.env.PANAMACOMPRA_PASSWORD?.trim();
   if (!user || !pass) throw new Error("Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD");
   const res = await fetch(`${BASE}/autenticacion/ingresar`, {
     method: "POST",
