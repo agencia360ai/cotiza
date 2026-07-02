@@ -62,7 +62,9 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
 }
 
 // "Actualizar": delega al sync compartido (mismo código que el cron diario).
-export async function refreshGovTenders(): Promise<Result<{ total: number; nuevos: number; relevantes: number; conPrecio: number }>> {
+export async function refreshGovTenders(): Promise<
+  Result<{ total: number; nuevos: number; relevantes: number; conPrecio: number; pendientesPrecio: number }>
+> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   const r = await syncGovTenders(c.supabase, c.orgId);
