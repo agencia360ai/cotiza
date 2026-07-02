@@ -18,6 +18,9 @@ const TIPOS: { idEstado: string; idTipoProceso: string; enviada?: string; key: s
   { idEstado: "15", idTipoProceso: "2", key: "programada", maxPages: 8 },
 ];
 
+// tipo guardado → idTipoProceso de la API (lo usan el backfill y la evaluación).
+export const TIPO_TO_ID: Record<string, string> = Object.fromEntries(TIPOS.map((t) => [t.key, t.idTipoProceso]));
+
 export type SyncStats = {
   total: number;
   nuevos: number;
@@ -166,14 +169,13 @@ export async function syncGovTenders(
 
     // 4b) Pliego para el resto, hasta el presupuesto.
     const PRECIO_BUDGET = 60;
-    const tipoToId = new Map(TIPOS.map((t) => [t.key, t.idTipoProceso]));
     const intentar = paraPliego.slice(0, PRECIO_BUDGET);
     for (let i = 0; i < intentar.length; i += 3) {
       await Promise.all(
         intentar.slice(i, i + 3).map(async (p) => {
           const rw = p.raw as { idProcesosContratacionFlujos?: string | number } | null;
           const idFlujos = rw?.idProcesosContratacionFlujos;
-          const idTipo = p.tipo ? tipoToId.get(p.tipo) : undefined;
+          const idTipo = p.tipo ? TIPO_TO_ID[p.tipo] : undefined;
           if (!idFlujos || !idTipo) {
             await marcarSinPrecio(p.id, p.raw);
             return;

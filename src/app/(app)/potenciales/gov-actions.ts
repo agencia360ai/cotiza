@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { syncGovTenders } from "@/lib/panamacompra/sync";
+import { evaluateTender } from "@/lib/panamacompra/evaluate";
+import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
@@ -29,6 +31,7 @@ export type GovTenderRow = {
   relevante: boolean | null;
   relevancia_motivo: string | null;
   converted_tender_id: string | null;
+  eval: GovTenderEval | null;
 };
 
 // Abrir la vista lee SOLO de la base (cero llamadas al gobierno).
@@ -38,8 +41,14 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
   const run = (cols: string) =>
     c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).order("fecha_cierre", { ascending: true, nullsFirst: false });
   let res = (await run(
-    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id",
+    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval",
   )) as { data: GovTenderRow[] | null; error: { message: string } | null };
+  if (res.error) {
+    // migración 0013 pendiente: sin columna eval
+    res = (await run(
+      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id",
+    )) as { data: GovTenderRow[] | null; error: { message: string } | null };
+  }
   if (res.error) {
     // migración 0011 pendiente: sin columnas de relevancia
     res = (await run("id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, converted_tender_id")) as {
@@ -56,9 +65,40 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
       precio_ref: r.precio_ref === null ? null : Number(r.precio_ref),
       relevante: r.relevante ?? null,
       relevancia_motivo: r.relevancia_motivo ?? null,
+      eval: r.eval ?? null,
     };
   });
   return { ok: true, data: { rows, syncedAt } };
+}
+
+// Evaluación IA "¿cumplimos?" bajo demanda (botón en el detalle de la fila).
+export async function evaluateGovTender(govId: string): Promise<Result<{ eval: GovTenderEval }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("titulo, entidad, tipo, precio_ref, raw")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as {
+    data: { titulo: string | null; entidad: string | null; tipo: string | null; precio_ref: number | null; raw: unknown } | null;
+  };
+  if (!g) return { error: "No encontrada" };
+  try {
+    const ev = await evaluateTender({
+      titulo: g.titulo,
+      entidad: g.entidad,
+      tipo: g.tipo,
+      precioRef: g.precio_ref === null ? null : Number(g.precio_ref),
+      raw: g.raw,
+    });
+    const { error } = await c.supabase.from("gov_tenders").update({ eval: ev }).eq("id", govId).eq("org_id", c.orgId);
+    if (error) return { error: "Falta la migración 0013 (eval) — corré el SQL y reintentá" };
+    revalidatePath("/potenciales");
+    return { ok: true, data: { eval: ev } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo evaluar" };
+  }
 }
 
 // "Actualizar": delega al sync compartido (mismo código que el cron diario).
