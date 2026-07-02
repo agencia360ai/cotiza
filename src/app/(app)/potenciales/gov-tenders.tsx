@@ -85,6 +85,8 @@ export function GovTendersBoard({ onFollowed }: { onFollowed?: () => void }) {
     const needle = q.trim().toLowerCase();
     return rows.filter((r) => {
       if (soloRelevantes && r.relevante !== true) return false;
+      // Relevantes = accionables: las ya cerradas solo se ven en "Todas".
+      if (soloRelevantes && r.fecha_cierre && +new Date(r.fecha_cierre) < Date.now()) return false;
       if (tipoFiltro !== "all" && r.tipo !== tipoFiltro) return false;
       if (needle && !`${r.num_proceso} ${r.titulo ?? ""} ${r.entidad ?? ""}`.toLowerCase().includes(needle)) return false;
       return true;

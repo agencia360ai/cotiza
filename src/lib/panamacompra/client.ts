@@ -79,7 +79,14 @@ export type PcRegistro = {
 // en maxPages para no colgar el serverless.
 export async function pcListProcesos(
   session: PcSession,
-  opts: { idEstado: string; idTipoProceso: string; enviada?: string; maxPages?: number },
+  opts: {
+    idEstado: string;
+    idTipoProceso: string;
+    enviada?: string;
+    maxPages?: number;
+    // Incremental: si una página entera ya es conocida, corta (lo nuevo sale primero).
+    shouldStop?: (pageNums: string[]) => boolean;
+  },
 ): Promise<PcRegistro[]> {
   const out: PcRegistro[] = [];
   let valorSiguiente = "";
@@ -104,6 +111,10 @@ export async function pcListProcesos(
     out.push(...regs);
     const next = j.result?.valorInicial;
     if (!next || regs.length === 0) break;
+    if (opts.shouldStop) {
+      const nums = regs.map((r) => (r.numProcesoOriginal || r.numProceso || "").trim()).filter(Boolean);
+      if (nums.length > 0 && opts.shouldStop(nums)) break;
+    }
     valorSiguiente = next;
   }
   return out;
