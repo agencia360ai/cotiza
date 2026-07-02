@@ -9,9 +9,9 @@ import type { QboProject } from "@/lib/quickbooks/projects";
 const RUBRO_LABEL: Record<string, string> = { DC: "Contratos", DM: "Mantenimiento", DS: "Servicio", DV: "Ventas" };
 const RUBRO_CHIP: Record<string, string> = {
   DC: "bg-indigo-50 text-indigo-700 ring-indigo-600/20",
-  DM: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
-  DS: "bg-amber-50 text-amber-700 ring-amber-600/20",
-  DV: "bg-violet-50 text-violet-700 ring-violet-600/20",
+  DM: "bg-sky-50 text-sky-700 ring-sky-600/20",
+  DS: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+  DV: "bg-amber-50 text-amber-700 ring-amber-600/20",
 };
 
 function bal(n: number): string {
@@ -64,7 +64,7 @@ export function QboProjectsBoard() {
   const closedCount = projects.filter(isClosed).length;
 
   return (
-    <section className="mb-8 rounded-2xl border border-slate-200 bg-card">
+    <section className="mb-8 rounded-2xl border border-slate-100 bg-white shadow-sm">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
         <div className="flex items-center gap-2">
           <TrendingUp className="size-4 text-emerald-600" />
