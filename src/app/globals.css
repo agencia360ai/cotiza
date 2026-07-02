@@ -84,4 +84,9 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+  /* Tailwind v4 dejó los botones con cursor default; restauramos el pointer. */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
 }
