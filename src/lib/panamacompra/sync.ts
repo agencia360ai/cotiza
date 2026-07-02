@@ -9,11 +9,13 @@ import { matchKeywords, classifyWithAI } from "./relevance";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Db = SupabaseClient<any, any, any>;
 
+// Topes generosos (50 procesos por página): el corte incremental hace que el
+// costo diario sea bajo; el tope solo protege el serverless en escaneos llenos.
 const TIPOS: { idEstado: string; idTipoProceso: string; enviada?: string; key: string; maxPages: number }[] = [
-  { idEstado: "36", idTipoProceso: "7", key: "licitacion_publica", maxPages: 10 },
-  { idEstado: "36", idTipoProceso: "6", key: "compra_menor_50k", maxPages: 8 },
-  { idEstado: "1011", idTipoProceso: "4", enviada: "1", key: "compra_menor_10k", maxPages: 6 },
-  { idEstado: "15", idTipoProceso: "2", key: "programada", maxPages: 4 },
+  { idEstado: "36", idTipoProceso: "7", key: "licitacion_publica", maxPages: 20 },
+  { idEstado: "36", idTipoProceso: "6", key: "compra_menor_50k", maxPages: 16 },
+  { idEstado: "1011", idTipoProceso: "4", enviada: "1", key: "compra_menor_10k", maxPages: 24 },
+  { idEstado: "15", idTipoProceso: "2", key: "programada", maxPages: 8 },
 ];
 
 export type SyncStats = {
@@ -23,9 +25,17 @@ export type SyncStats = {
   conPrecio: number;
   pendientesPrecio: number;
   incremental: boolean;
+  // Auditoría de cobertura: cuántos trajo cada tipo y si algún tipo quedó
+  // truncado por el tope de páginas (⇒ hay más en PanamaCompra).
+  porTipo: Record<string, number>;
+  truncados: string[];
 };
 
-export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: string } | { ok: true; data: SyncStats }> {
+export async function syncGovTenders(
+  db: Db,
+  orgId: string,
+  opts?: { full?: boolean },
+): Promise<{ error: string } | { ok: true; data: SyncStats }> {
   if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
   try {
     const session = await pcLogin();
@@ -35,17 +45,23 @@ export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: st
       data: { num_proceso: string }[] | null;
     };
     const have = new Set((existing ?? []).map((r) => r.num_proceso));
-    const incremental = have.size > 0;
+    // "Escaneo completo" recorre todas las páginas aunque ya conozca procesos —
+    // para recuperar cualquier cosa que el corte incremental se haya perdido.
+    const incremental = have.size > 0 && !opts?.full;
 
     // 1) Traer tipos; corte temprano cuando la página entera ya es conocida.
     const byNum = new Map<string, { r: PcRegistro; tipo: string; idTipoProceso: string }>();
+    const porTipo: Record<string, number> = {};
+    const truncados: string[] = [];
     for (const t of TIPOS) {
       try {
-        const regs = await pcListProcesos(session, {
+        const { registros, truncado } = await pcListProcesos(session, {
           ...t,
           shouldStop: incremental ? (nums) => nums.every((n) => have.has(n)) : undefined,
         });
-        for (const r of regs) {
+        porTipo[t.key] = registros.length;
+        if (truncado) truncados.push(t.key);
+        for (const r of registros) {
           const num = (r.numProcesoOriginal || r.numProceso || "").trim();
           if (num && !byNum.has(num)) byNum.set(num, { r, tipo: t.key, idTipoProceso: t.idTipoProceso });
         }
@@ -180,7 +196,7 @@ export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: st
     }
     pendientesPrecio = Math.max(0, paraPliego.length - intentar.length);
 
-    return { ok: true, data: { total: rows.length, nuevos, relevantes, conPrecio, pendientesPrecio, incremental } };
+    return { ok: true, data: { total: rows.length, nuevos, relevantes, conPrecio, pendientesPrecio, incremental, porTipo, truncados } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error consultando PanamaCompra" };
   }
