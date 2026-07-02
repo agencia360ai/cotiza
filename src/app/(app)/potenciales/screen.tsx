@@ -18,9 +18,7 @@ import {
   ArrowUpRight,
   Trash2,
   ExternalLink,
-  ChevronUp,
   ChevronDown,
-  ChevronsUpDown,
   MessageCircle,
   Mail,
   FolderOpen,
@@ -63,6 +61,7 @@ import { groupRevisions, parseRev } from "@/lib/pipeline/revisions";
 import { CotizadorDialog } from "./cotizador";
 import { publishQuote, getQuoteLetter, createQuoteSharedLink, type QuoteLetterBundle } from "./cotizador-actions";
 import { EngineerLinkDialog } from "./engineer-link";
+import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
@@ -1681,59 +1680,6 @@ function TenderDrawer({
 
 const inputCls =
   "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none";
-
-type SortDir = "asc" | "desc";
-type SortState<K extends string> = { key: K; dir: SortDir };
-
-function toggleSort<K extends string>(cur: SortState<K>, key: K, defaultDir: SortDir = "asc"): SortState<K> {
-  if (cur.key === key) return { key, dir: cur.dir === "asc" ? "desc" : "asc" };
-  return { key, dir: defaultDir };
-}
-
-function compareVals(a: unknown, b: unknown, dir: SortDir): number {
-  const an = a === null || a === undefined || a === "";
-  const bn = b === null || b === undefined || b === "";
-  if (an && bn) return 0;
-  if (an) return 1; // nulls/vacíos siempre al final
-  if (bn) return -1;
-  let r: number;
-  if (typeof a === "number" && typeof b === "number") r = a - b;
-  else r = String(a).localeCompare(String(b), "es", { numeric: true });
-  return dir === "asc" ? r : -r;
-}
-
-function SortTh<K extends string>({
-  label,
-  k,
-  sort,
-  onSort,
-  align = "left",
-  className,
-}: {
-  label: string;
-  k: K;
-  sort: SortState<K>;
-  onSort: (k: K) => void;
-  align?: "left" | "right";
-  className?: string;
-}) {
-  const active = sort.key === k;
-  return (
-    <th
-      className={cn("cursor-pointer select-none px-3 py-2.5 font-semibold hover:text-slate-700", className)}
-      onClick={() => onSort(k)}
-    >
-      <span className={cn("inline-flex items-center gap-1", align === "right" && "flex-row-reverse")}>
-        {label}
-        {active ? (
-          sort.dir === "asc" ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />
-        ) : (
-          <ChevronsUpDown className="size-3.5 opacity-30" />
-        )}
-      </span>
-    </th>
-  );
-}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
