@@ -57,7 +57,7 @@ import {
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
 import { CotizadorDialog } from "./cotizador";
-import { publishQuote, getQuoteLetter, type QuoteLetterBundle } from "./cotizador-actions";
+import { publishQuote, getQuoteLetter, createQuoteSharedLink, type QuoteLetterBundle } from "./cotizador-actions";
 import { EngineerLinkDialog } from "./engineer-link";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
@@ -697,7 +697,19 @@ function QuoteDrawer({
       setPubErr(r.error);
       return;
     }
-    onSaved({ ...f, status: "enviada", dropbox_shared_url: r.data.url });
+    onSaved({ ...f, status: "enviada", dropbox_shared_url: r.data.url, dropbox_path: r.data.path });
+  }
+
+  async function crearLink() {
+    setPubBusy(true);
+    setPubErr(null);
+    const r = await createQuoteSharedLink(quote.id);
+    setPubBusy(false);
+    if ("error" in r) {
+      setPubErr(r.error);
+      return;
+    }
+    onSaved({ ...f, dropbox_shared_url: r.data.url });
   }
 
   async function editarCarta() {
@@ -776,6 +788,18 @@ function QuoteDrawer({
                 Publicar PDF a Dropbox
               </button>
             </>
+          ) : null}
+          {!f.dropbox_shared_url && f.dropbox_path ? (
+            <button
+              type="button"
+              onClick={crearLink}
+              disabled={pubBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+              title="El PDF ya está en Dropbox — crear el link compartido para WhatsApp/Email"
+            >
+              {pubBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Link2 className="size-3.5" />}
+              Crear link
+            </button>
           ) : null}
           {f.dropbox_shared_url ? (
             <>
@@ -1104,6 +1128,7 @@ function NewQuoteDrawer({
       location_id: r.data.location_id,
       location_name: r.data.location_name,
       dropbox_shared_url: null,
+      dropbox_path: null,
       contact_name: contactName || null,
       contact_phone: contactPhone || null,
       contact_email: contactEmail || null,

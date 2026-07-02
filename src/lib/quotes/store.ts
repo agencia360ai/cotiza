@@ -143,6 +143,7 @@ export async function insertQuote(db: Db, orgId: string, input: SaveQuoteInput):
       location_id: matched?.location_id ?? null,
       location_name: matched?.location_name ?? null,
       dropbox_shared_url: null,
+      dropbox_path: null,
       contact_name: null,
       contact_phone: null,
       contact_email: null,
@@ -170,13 +171,14 @@ export async function updateQuoteLetter(
 
   const { data: cur } = (await db
     .from("sales_quotes")
-    .select("status, dropbox_shared_url, contact_name, contact_phone, contact_email, notes, follow_up_date")
+    .select("status, dropbox_shared_url, dropbox_path, contact_name, contact_phone, contact_email, notes, follow_up_date")
     .eq("id", quoteId)
     .eq("org_id", orgId)
     .maybeSingle()) as {
     data: {
       status: QuoteRow["status"];
       dropbox_shared_url?: string | null;
+      dropbox_path?: string | null;
       contact_name: string | null;
       contact_phone: string | null;
       contact_email: string | null;
@@ -221,6 +223,7 @@ export async function updateQuoteLetter(
       location_id: matched?.location_id ?? null,
       location_name: matched?.location_name ?? null,
       dropbox_shared_url: cur.dropbox_shared_url ?? null,
+      dropbox_path: cur.dropbox_path ?? null,
       contact_name: cur.contact_name,
       contact_phone: cur.contact_phone,
       contact_email: cur.contact_email,

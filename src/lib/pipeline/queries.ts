@@ -30,14 +30,16 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
       .eq("org_id", orgId)
       .order("sent_date", { ascending: false, nullsFirst: false })
       .order("quote_number", { ascending: false });
-  type Raw = Omit<QuoteRow, "client_std_name" | "location_name" | "dropbox_shared_url"> & {
+  type Raw = Omit<QuoteRow, "client_std_name" | "location_name" | "dropbox_shared_url" | "dropbox_path"> & {
     client: { name: string } | null;
     location?: { name: string } | null;
     dropbox_shared_url?: string | null;
+    dropbox_path?: string | null;
   };
   type Res = { data: Raw[] | null; error: { message: string } | null };
-  let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url`)) as Res;
-  if (res.error) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res; // sin shared_url (0009 pendiente)
+  let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url, dropbox_path`)) as Res;
+  if (res.error) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_path`)) as Res; // sin shared_url (0009 pendiente)
+  if (res.error) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res; // sin dropbox_path (0003 pendiente)
   if (res.error) res = (await run(QUOTE_COLS)) as Res; // sin location (migración 0005 pendiente)
   if (res.error) res = (await run(QUOTE_COLS_BASE)) as Res; // sin contacto (0002 pendiente)
   return (res.data ?? []).map(({ client, location, ...q }) => ({
@@ -47,6 +49,7 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
     location_id: q.location_id ?? null,
     location_name: location?.name ?? null,
     dropbox_shared_url: q.dropbox_shared_url ?? null,
+    dropbox_path: q.dropbox_path ?? null,
     contact_name: q.contact_name ?? null,
     contact_phone: q.contact_phone ?? null,
     contact_email: q.contact_email ?? null,

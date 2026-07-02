@@ -75,6 +75,7 @@ export type QuoteRow = {
   location_id: string | null;
   location_name: string | null;
   dropbox_shared_url: string | null;
+  dropbox_path: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   contact_email: string | null;
