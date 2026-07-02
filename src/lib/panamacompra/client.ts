@@ -210,3 +210,43 @@ export function extractPrecioRef(node: unknown): number | null {
   }
   return findFirstByKey(node, RE_PRECIO_REF);
 }
+
+// ── Renglones del pliego (para la evaluación IA de "¿cumplimos?") ─────────────
+
+function findFirstString(node: unknown, keyRe: RegExp, depth = 0): string | null {
+  if (node == null || depth > 6) return null;
+  if (Array.isArray(node)) {
+    for (const it of node) {
+      const v = findFirstString(it, keyRe, depth + 1);
+      if (v !== null) return v;
+    }
+    return null;
+  }
+  if (typeof node === "object") {
+    const o = node as Record<string, unknown>;
+    for (const [k, v] of Object.entries(o)) {
+      if (keyRe.test(k.replace(/[_\s]/g, "")) && typeof v === "string" && v.trim().length > 1) return v.trim();
+    }
+    for (const v of Object.values(o)) {
+      const r = findFirstString(v, keyRe, depth + 1);
+      if (r !== null) return r;
+    }
+  }
+  return null;
+}
+
+export type PliegoItem = { descripcion: string; cantidad: number | null; unidad: string | null; precioRef: number | null };
+
+export function extractItems(node: unknown): PliegoItem[] {
+  const arr = findItemsArray(node);
+  if (!arr) return [];
+  return arr
+    .slice(0, 40)
+    .map((it) => ({
+      descripcion: findFirstString(it, /descripcion|nombre|detalle|titulo/i) ?? "",
+      cantidad: findFirstByKey(it, /^cantidad/i, 4),
+      unidad: findFirstString(it, /unidad/i),
+      precioRef: findFirstByKey(it, RE_PRECIO_REF, 6),
+    }))
+    .filter((i) => i.descripcion.length > 1);
+}
