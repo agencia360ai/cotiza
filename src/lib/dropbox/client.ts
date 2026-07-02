@@ -119,3 +119,43 @@ export async function downloadFile(path: string): Promise<Buffer> {
   if (!res.ok) throw new Error(`Dropbox download ${res.status}: ${await res.text()}`);
   return Buffer.from(await res.arrayBuffer());
 }
+
+/** Sube un archivo (autorename si ya existe). Devuelve id/path/nombre finales. */
+export async function uploadFile(destPath: string, data: Uint8Array): Promise<{ id: string; path: string; name: string }> {
+  const headers = {
+    ...(await rpcHeaders()),
+    "Dropbox-API-Arg": asciiHeader({ path: destPath, mode: "add", autorename: true, mute: true }),
+    "Content-Type": "application/octet-stream",
+  };
+  const res = await fetch("https://content.dropboxapi.com/2/files/upload", { method: "POST", headers, body: Buffer.from(data) });
+  if (!res.ok) throw new Error(`Dropbox upload ${res.status}: ${await res.text()}`);
+  const j = (await res.json()) as { id: string; path_display?: string; name: string };
+  return { id: j.id, path: j.path_display ?? destPath, name: j.name };
+}
+
+/** Link compartido (para WhatsApp/Email). Reusa el existente si ya hay uno. */
+export async function getSharedLink(path: string): Promise<string> {
+  const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
+  const res = await fetch("https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ path }),
+  });
+  if (res.ok) {
+    const j = (await res.json()) as { url: string };
+    return j.url;
+  }
+  const errText = await res.text();
+  if (res.status === 409 && errText.includes("shared_link_already_exists")) {
+    const res2 = await fetch("https://api.dropboxapi.com/2/sharing/list_shared_links", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path, direct_only: true }),
+    });
+    if (res2.ok) {
+      const j2 = (await res2.json()) as { links: { url: string }[] };
+      if (j2.links?.[0]?.url) return j2.links[0].url;
+    }
+  }
+  throw new Error(`Dropbox shared link ${res.status}: ${errText.slice(0, 200)}`);
+}

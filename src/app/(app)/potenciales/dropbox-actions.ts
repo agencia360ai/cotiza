@@ -194,6 +194,7 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
         client_std_name: matched?.name ?? null,
         location_id: matched?.location_id ?? null,
         location_name: matched?.location_name ?? null,
+        dropbox_shared_url: null,
         contact_name: null,
         contact_phone: null,
         contact_email: null,

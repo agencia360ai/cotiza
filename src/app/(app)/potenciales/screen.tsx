@@ -26,6 +26,8 @@ import {
   FolderOpen,
   MapPin,
   Sparkles,
+  Link2,
+  CloudUpload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { norm } from "@/lib/clients/normalize";
@@ -55,13 +57,15 @@ import {
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
 import { CotizadorDialog } from "./cotizador";
+import { publishQuote } from "./cotizador-actions";
+import { EngineerLinkDialog } from "./engineer-link";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
 
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
 type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
-const QUOTE_STATUSES: QuoteStatus[] = ["enviada", "aprobada", "rechazada"];
+const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["presentada", "en_revision", "por_partir", "ganada", "no_ganada"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
 const PROJECT_TYPES: ProjectType[] = ["obra", "instalacion", "remodelacion", "otro"];
@@ -199,6 +203,7 @@ function CotizacionesTab({
   const [converting, setConverting] = useState<QuoteRow | null>(null);
   const [showDropbox, setShowDropbox] = useState(false);
   const [showCotizador, setShowCotizador] = useState(false);
+  const [showEngineerLink, setShowEngineerLink] = useState(false);
 
   // Agrupar revisiones: solo la vigente cuenta; las anteriores van colapsadas.
   const groups = useMemo(() => groupRevisions(quotes), [quotes]);
@@ -320,6 +325,14 @@ function CotizacionesTab({
         >
           <Sparkles className="size-4" />
           <span className="hidden sm:inline">Cotizador IA</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowEngineerLink(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-white px-2.5 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50"
+          title="Link del cotizador para ingenieros (sin login)"
+        >
+          <Link2 className="size-4" />
         </button>
         <button
           type="button"
@@ -609,8 +622,11 @@ function CotizacionesTab({
         <CotizadorDialog
           onClose={() => setShowCotizador(false)}
           onCreated={(row) => setQuotes((prev) => [row, ...prev])}
+          onUpdated={(row) => setQuotes((prev) => prev.map((x) => (x.id === row.id ? row : x)))}
         />
       ) : null}
+
+      {showEngineerLink ? <EngineerLinkDialog onClose={() => setShowEngineerLink(false)} /> : null}
     </>
   );
 }
@@ -633,11 +649,25 @@ function QuoteDrawer({
   const [f, setF] = useState<QuoteRow>(quote);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pubBusy, setPubBusy] = useState(false);
+  const [pubErr, setPubErr] = useState<string | null>(null);
 
   function set<K extends keyof QuoteRow>(k: K, v: QuoteRow[K]) {
     setF((prev) => ({ ...prev, [k]: v }));
   }
   const clientLocs = clients.find((c) => c.id === f.client_id)?.locations ?? [];
+
+  async function publicar() {
+    setPubBusy(true);
+    setPubErr(null);
+    const r = await publishQuote(quote.id);
+    setPubBusy(false);
+    if ("error" in r) {
+      setPubErr(r.error);
+      return;
+    }
+    onSaved({ ...f, status: "enviada", dropbox_shared_url: r.data.url });
+  }
 
   async function save() {
     setSaving(true);
@@ -672,14 +702,57 @@ function QuoteDrawer({
   return (
     <Drawer title={`Cotización ${quote.quote_number}`} onClose={onClose}>
       <div className="space-y-3">
-        <a
-          href={`/carta/${quote.id}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          <ExternalLink className="size-3.5" /> Ver carta / imprimir
-        </a>
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href={`/carta/${quote.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <ExternalLink className="size-3.5" /> Ver carta
+          </a>
+          {f.status === "borrador" ? (
+            <button
+              type="button"
+              onClick={publicar}
+              disabled={pubBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+              title="Genera el PDF con membrete y lo sube a la carpeta de cartas en Dropbox"
+            >
+              {pubBusy ? <Loader2 className="size-3.5 animate-spin" /> : <CloudUpload className="size-3.5" />}
+              Publicar PDF a Dropbox
+            </button>
+          ) : null}
+          {f.dropbox_shared_url ? (
+            <>
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(`Cotización ${f.quote_number} - ${f.client_std_name ?? f.client_name ?? ""}: ${f.dropbox_shared_url}`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-lg bg-emerald-100 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-200"
+                title="Compartir el PDF por WhatsApp"
+              >
+                <MessageCircle className="size-3.5" /> WhatsApp
+              </a>
+              <a
+                href={`mailto:?subject=${encodeURIComponent(`Cotización ${f.quote_number}`)}&body=${encodeURIComponent(`Cotización ${f.quote_number} - ${f.client_std_name ?? f.client_name ?? ""}: ${f.dropbox_shared_url}`)}`}
+                className="inline-flex items-center gap-1 rounded-lg bg-blue-100 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-200"
+                title="Compartir el PDF por Email"
+              >
+                <Mail className="size-3.5" /> Email
+              </a>
+              <a
+                href={f.dropbox_shared_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                PDF
+              </a>
+            </>
+          ) : null}
+        </div>
+        {pubErr ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{pubErr}</p> : null}
         <Field label="Número" hint="editable — acomodalo como quieras">
           <input className={inputCls} value={f.quote_number} onChange={(e) => set("quote_number", e.target.value)} placeholder="COT DC 26-108" />
         </Field>
@@ -976,6 +1049,7 @@ function NewQuoteDrawer({
       client_std_name: r.data.client_std_name,
       location_id: r.data.location_id,
       location_name: r.data.location_name,
+      dropbox_shared_url: null,
       contact_name: contactName || null,
       contact_phone: contactPhone || null,
       contact_email: contactEmail || null,

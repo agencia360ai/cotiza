@@ -3,6 +3,12 @@ import type { NextConfig } from "next";
 // Punto E: rutas limpias. Redirige los links viejos /maintenance/* a las nuevas
 // (bookmarks / links compartidos del equipo siguen funcionando).
 const nextConfig: NextConfig = {
+  // El renderer del PDF (pdf-lib) lee el membrete del filesystem en runtime;
+  // hay que incluirlo explícitamente en el bundle serverless de esas rutas.
+  outputFileTracingIncludes: {
+    "/potenciales": ["./public/dicec-membrete.png"],
+    "/q/[token]": ["./public/dicec-membrete.png"],
+  },
   async redirects() {
     return [
       { source: "/maintenance/potenciales/:path*", destination: "/potenciales/:path*", permanent: true },

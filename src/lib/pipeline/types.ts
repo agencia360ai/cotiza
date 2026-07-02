@@ -16,14 +16,18 @@ export const RUBROS: Record<Rubro, { label: string; full: string; color: string;
   DV: { label: "Ventas", full: "Ventas / Suministro", color: "#F59E0B", soft: "#FFFBEB" },
 };
 
-export type QuoteStatus = "enviada" | "aprobada" | "rechazada";
+// 'borrador' = creada en el cotizador, PDF aún no publicado a Dropbox.
+// No cuenta en KPIs ni agregados; al publicar pasa a 'enviada'.
+export type QuoteStatus = "borrador" | "enviada" | "aprobada" | "rechazada";
 
 export const QUOTE_STATUS_LABEL: Record<QuoteStatus, string> = {
+  borrador: "Borrador",
   enviada: "Enviada",
   aprobada: "Aprobada",
   rechazada: "Rechazada",
 };
 export const QUOTE_STATUS_COLOR: Record<QuoteStatus, string> = {
+  borrador: "#94A3B8",
   enviada: "#F59E0B",
   aprobada: "#10B981",
   rechazada: "#EF4444",
@@ -70,6 +74,7 @@ export type QuoteRow = {
   client_std_name: string | null;
   location_id: string | null;
   location_name: string | null;
+  dropbox_shared_url: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   contact_email: string | null;
@@ -184,6 +189,7 @@ export function snapshotPipelineData(): PipelineData {
     cotizaciones: {
       total: { ...PIPELINE_SNAPSHOT.cotizaciones.total },
       porEstado: {
+        borrador: { count: 0, monto: 0 },
         enviada: { ...PIPELINE_SNAPSHOT.cotizaciones.porEstado.enviada },
         aprobada: { ...PIPELINE_SNAPSHOT.cotizaciones.porEstado.aprobada },
         rechazada: { ...PIPELINE_SNAPSHOT.cotizaciones.porEstado.rechazada },

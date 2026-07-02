@@ -32,7 +32,7 @@ export async function updateSession(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
   const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/auth");
-  const isPublicShareRoute = pathname.startsWith("/p/") || pathname.startsWith("/t/");
+  const isPublicShareRoute = pathname.startsWith("/p/") || pathname.startsWith("/t/") || pathname.startsWith("/q/");
   const isPublicRoute = isAuthRoute || isPublicShareRoute || pathname === "/";
 
   if (!user && process.env.DEMO_MODE !== "false" && !isPublicShareRoute) {
