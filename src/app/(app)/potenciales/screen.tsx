@@ -149,6 +149,7 @@ export function PotencialesScreen({
   const [tenders, setTenders] = useState<TenderRow[]>(tendersProp);
 
   return (
+    <div className="min-h-full bg-slate-50/70">
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Cotizaciones y Licitaciones</h1>
@@ -171,6 +172,7 @@ export function PotencialesScreen({
       ) : (
         <LicitacionesTab tenders={tenders} setTenders={setTenders} clients={clients} />
       )}
+    </div>
     </div>
   );
 }
@@ -386,7 +388,7 @@ function CotizacionesTab({
         {dupTotal > 0 ? <span className="font-medium text-amber-600"> · {dupTotal} posible{dupTotal === 1 ? "" : "s"} duplicado{dupTotal === 1 ? "" : "s"}</span> : null}
       </p>
 
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1430,7 +1432,7 @@ function LicitacionesTab({
         {filtered.length} de {tenders.length} licitaciones
       </p>
 
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1794,15 +1796,17 @@ function Kpi({
   accent: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
-        <span className="flex size-7 items-center justify-center rounded-lg" style={{ backgroundColor: `${accent}1f`, color: accent }}>
-          <Icon className="size-4" />
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex items-start gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${accent}17`, color: accent }}>
+          <Icon className="size-5" />
         </span>
+        <div className="min-w-0">
+          <p className="truncate text-xs font-medium text-slate-500">{label}</p>
+          <p className="mt-0.5 truncate text-xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-2xl">{value}</p>
+        </div>
       </div>
-      <p className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{value}</p>
-      <p className="mt-0.5 text-xs text-muted-foreground">{sub}</p>
+      <p className="mt-2 truncate text-[11px] text-slate-500">{sub}</p>
     </div>
   );
 }

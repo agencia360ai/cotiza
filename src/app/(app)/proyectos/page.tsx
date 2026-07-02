@@ -77,6 +77,7 @@ export default async function ProjectsListPage({
   ];
 
   return (
+    <div className="min-h-full bg-slate-50/70">
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-6xl">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
@@ -137,7 +138,7 @@ export default async function ProjectsListPage({
       ) : null}
 
       {rows.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-border bg-card py-16 px-6 text-center">
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white py-16 px-6 text-center">
           <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
             <Hammer className="size-6" />
           </div>
@@ -165,7 +166,7 @@ export default async function ProjectsListPage({
               <li key={p.id}>
                 <Link
                   href={`/proyectos/${p.id}`}
-                  className="group flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all hover:-translate-y-0.5 hover:shadow-md"
+                  className="group flex h-full flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
                 >
                   <div
                     className="relative aspect-[16/10] w-full bg-slate-100"
@@ -245,6 +246,7 @@ export default async function ProjectsListPage({
           })}
         </ul>
       )}
+    </div>
     </div>
   );
 }
