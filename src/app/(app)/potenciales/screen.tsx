@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -25,6 +25,7 @@ import {
   Mail,
   FolderOpen,
   MapPin,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { norm } from "@/lib/clients/normalize";
@@ -53,6 +54,7 @@ import {
   updateTender,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
+import { CotizadorDialog } from "./cotizador";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
@@ -87,6 +89,42 @@ function waLink(phone: string | null): string | null {
   return digits ? `https://wa.me/${digits}` : null;
 }
 
+// ── Revisiones: "COT DC 26-020 REV. 2" → base "COT DC 26-020" + rev 2 ─────────
+// La última revisión es la vigente (cuenta en KPIs); las anteriores quedan como
+// historial colapsado. Misma base + misma rev = posible duplicado real.
+type QuoteGroup = { main: QuoteRow; older: QuoteRow[]; dupCount: number };
+
+function parseRev(qn: string): { base: string; rev: number } {
+  const s = qn.replace(/\s+/g, " ").trim();
+  const m = s.match(/^(.*?)[\s.-]*(?:rev\.?\s*|r)(\d+(?:\.\d+)?)$/i);
+  if (m && m[1].trim().length >= 4) return { base: m[1].trim().toUpperCase(), rev: parseFloat(m[2]) };
+  return { base: s.toUpperCase(), rev: 0 };
+}
+
+function groupRevisions(rows: QuoteRow[]): QuoteGroup[] {
+  const byBase = new Map<string, QuoteRow[]>();
+  for (const r of rows) {
+    const { base } = parseRev(r.quote_number);
+    const arr = byBase.get(base) ?? [];
+    arr.push(r);
+    byBase.set(base, arr);
+  }
+  const out: QuoteGroup[] = [];
+  for (const arr of byBase.values()) {
+    const sortedArr = [...arr].sort((a, b) => {
+      const ra = parseRev(a.quote_number).rev;
+      const rb = parseRev(b.quote_number).rev;
+      if (ra !== rb) return rb - ra;
+      return (b.sent_date ?? "").localeCompare(a.sent_date ?? "");
+    });
+    const main = sortedArr[0];
+    const maxRev = parseRev(main.quote_number).rev;
+    const dupCount = sortedArr.filter((r) => parseRev(r.quote_number).rev === maxRev).length - 1;
+    out.push({ main, older: sortedArr.slice(1), dupCount });
+  }
+  return out;
+}
+
 type Tab = "cotizaciones" | "licitaciones";
 
 export function PotencialesScreen({
@@ -105,9 +143,9 @@ export function PotencialesScreen({
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Potenciales</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Cotizaciones y Licitaciones</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Cotizaciones y licitaciones — lo que puede convertirse en negocio.
+          Lo que puede convertirse en negocio.
         </p>
       </header>
 
@@ -156,10 +194,14 @@ function CotizacionesTab({
   const [creating, setCreating] = useState(false);
   const [converting, setConverting] = useState<QuoteRow | null>(null);
   const [showDropbox, setShowDropbox] = useState(false);
+  const [showCotizador, setShowCotizador] = useState(false);
+
+  // Agrupar revisiones: solo la vigente cuenta; las anteriores van colapsadas.
+  const groups = useMemo(() => groupRevisions(quotes), [quotes]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return quotes.filter((x) => {
+    return groups.filter(({ main: x, older }) => {
       if (year !== "all" && x.year !== year) return false;
       if (estado !== "all" && x.status !== estado) return false;
       if (rubro !== "all" && x.rubro !== rubro) return false;
@@ -167,16 +209,19 @@ function CotizacionesTab({
       if (to && (!x.sent_date || x.sent_date > to)) return false;
       if (soloSinCliente && x.client_id) return false;
       if (needle) {
-        const hay = `${x.quote_number} ${x.client_name ?? ""} ${x.client_std_name ?? ""} ${x.description ?? ""}`.toLowerCase();
+        const hay = [x, ...older]
+          .map((r) => `${r.quote_number} ${r.client_name ?? ""} ${r.client_std_name ?? ""} ${r.description ?? ""}`)
+          .join(" ")
+          .toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
     });
-  }, [quotes, year, estado, rubro, q, from, to, soloSinCliente]);
+  }, [groups, year, estado, rubro, q, from, to, soloSinCliente]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
-    arr.sort((a, b) => compareVals(a[sort.key], b[sort.key], sort.dir));
+    arr.sort((a, b) => compareVals(a.main[sort.key], b.main[sort.key], sort.dir));
     return arr;
   }, [filtered, sort]);
 
@@ -186,7 +231,7 @@ function CotizacionesTab({
     let aprobadaMonto = 0;
     let rechazadaCount = 0;
     let porCobrar = 0;
-    for (const x of filtered) {
+    for (const { main: x } of filtered) {
       const m = x.amount_usd ?? 0;
       if (x.status === "enviada") enviadaMonto += m;
       else if (x.status === "aprobada") {
@@ -200,7 +245,18 @@ function CotizacionesTab({
     return { enviadaMonto, aprobadaCount, aprobadaMonto, rechazadaCount, porCobrar, cierre };
   }, [filtered]);
 
-  const sinClienteCount = useMemo(() => quotes.filter((x) => !x.client_id).length, [quotes]);
+  const sinClienteCount = useMemo(() => groups.filter((g) => !g.main.client_id).length, [groups]);
+  const olderTotal = useMemo(() => groups.reduce((a, g) => a + g.older.length, 0), [groups]);
+  const dupTotal = useMemo(() => groups.reduce((a, g) => a + g.dupCount, 0), [groups]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  function toggleExpand(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function applyLocal(updated: QuoteRow) {
     setQuotes((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
@@ -254,6 +310,15 @@ function CotizacionesTab({
         </button>
         <button
           type="button"
+          onClick={() => setShowCotizador(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700"
+          title="Generar una cotización con IA a partir de una línea"
+        >
+          <Sparkles className="size-4" />
+          <span className="hidden sm:inline">Cotizador IA</span>
+        </button>
+        <button
+          type="button"
           onClick={() => setCreating(true)}
           className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
         >
@@ -288,7 +353,9 @@ function CotizacionesTab({
       </div>
 
       <p className="mb-2 text-xs text-muted-foreground">
-        {filtered.length} de {quotes.length} cotizaciones
+        {filtered.length} de {groups.length} cotizaciones vigentes
+        {olderTotal > 0 ? <span className="text-slate-400"> · {olderTotal} versiones anteriores (colapsadas)</span> : null}
+        {dupTotal > 0 ? <span className="font-medium text-amber-600"> · {dupTotal} posible{dupTotal === 1 ? "" : "s"} duplicado{dupTotal === 1 ? "" : "s"}</span> : null}
       </p>
 
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
@@ -315,15 +382,46 @@ function CotizacionesTab({
                   </td>
                 </tr>
               ) : (
-                sorted.map((x) => {
+                sorted.map((g) => {
+                  const x = g.main;
                   const overdue = x.status === "enviada" && x.follow_up_date && x.follow_up_date < today();
+                  const rev = parseRev(x.quote_number).rev;
+                  const isOpen = expanded.has(x.id);
                   return (
+                    <React.Fragment key={x.id}>
                     <tr
-                      key={x.id}
                       onClick={() => setEditing(x)}
                       className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
                     >
-                      <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-900">{x.quote_number}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-900">
+                        <span className="inline-flex items-center gap-1.5">
+                          {x.quote_number}
+                          {rev > 0 ? (
+                            <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 ring-1 ring-inset ring-blue-600/20">
+                              Rev {rev}
+                            </span>
+                          ) : null}
+                          {g.older.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleExpand(x.id);
+                              }}
+                              className={cn(
+                                "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
+                                g.dupCount > 0
+                                  ? "bg-amber-50 text-amber-700 ring-amber-600/20 hover:bg-amber-100"
+                                  : "bg-slate-100 text-slate-500 ring-slate-200 hover:bg-slate-200",
+                              )}
+                              title={g.dupCount > 0 ? "Incluye posibles duplicados" : "Ver versiones anteriores"}
+                            >
+                              <ChevronDown className={cn("size-3 transition-transform", isOpen && "rotate-180")} />
+                              {g.older.length}
+                            </button>
+                          ) : null}
+                        </span>
+                      </td>
                       <td className="max-w-[180px] px-3 py-2.5">
                         <div className="truncate text-slate-700">{x.client_std_name ?? x.client_name ?? "—"}</div>
                         {!x.client_id && x.client_name ? (
@@ -399,6 +497,44 @@ function CotizacionesTab({
                         </div>
                       </td>
                     </tr>
+                    {isOpen
+                      ? g.older.map((o) => {
+                          const oRev = parseRev(o.quote_number).rev;
+                          const isDup = oRev === rev;
+                          return (
+                            <tr
+                              key={o.id}
+                              onClick={() => setEditing(o)}
+                              className="cursor-pointer border-b border-slate-50 bg-slate-50/40 text-slate-400 last:border-0 hover:bg-slate-100/60"
+                            >
+                              <td className="whitespace-nowrap px-3 py-2 pl-8 text-xs">
+                                <span className="inline-flex items-center gap-1.5">
+                                  {o.quote_number}
+                                  <span
+                                    className={cn(
+                                      "rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
+                                      isDup ? "bg-amber-50 text-amber-700 ring-amber-600/20" : "bg-slate-100 text-slate-500 ring-slate-200",
+                                    )}
+                                  >
+                                    {isDup ? "posible duplicado" : "reemplazada"}
+                                  </span>
+                                </span>
+                              </td>
+                              <td className="max-w-[180px] truncate px-3 py-2 text-xs">{o.client_std_name ?? o.client_name ?? "—"}</td>
+                              <td className="hidden px-3 py-2 text-xs lg:table-cell">{o.location_name ?? "—"}</td>
+                              <td className="hidden max-w-[280px] truncate px-3 py-2 text-xs md:table-cell">{o.description ?? "—"}</td>
+                              <td className="px-3 py-2 text-xs">{o.rubro ?? "—"}</td>
+                              <td className="whitespace-nowrap px-3 py-2 text-right text-xs tabular-nums">
+                                {o.amount_usd === null ? "—" : formatMoneyExact(o.amount_usd)}
+                              </td>
+                              <td className="px-3 py-2 text-xs">{QUOTE_STATUS_LABEL[o.status]}</td>
+                              <td className="hidden whitespace-nowrap px-3 py-2 text-xs sm:table-cell">{fmtDate(o.sent_date)}</td>
+                              <td className="px-3 py-2"></td>
+                            </tr>
+                          );
+                        })
+                      : null}
+                    </React.Fragment>
                   );
                 })
               )}
@@ -464,6 +600,13 @@ function CotizacionesTab({
           }}
         />
       ) : null}
+
+      {showCotizador ? (
+        <CotizadorDialog
+          onClose={() => setShowCotizador(false)}
+          onCreated={(row) => setQuotes((prev) => [row, ...prev])}
+        />
+      ) : null}
     </>
   );
 }
@@ -525,6 +668,14 @@ function QuoteDrawer({
   return (
     <Drawer title={`Cotización ${quote.quote_number}`} onClose={onClose}>
       <div className="space-y-3">
+        <a
+          href={`/carta/${quote.id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          <ExternalLink className="size-3.5" /> Ver carta / imprimir
+        </a>
         <Field label="Número" hint="editable — acomodalo como quieras">
           <input className={inputCls} value={f.quote_number} onChange={(e) => set("quote_number", e.target.value)} placeholder="COT DC 26-108" />
         </Field>
