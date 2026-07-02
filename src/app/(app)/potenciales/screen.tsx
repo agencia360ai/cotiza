@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -28,6 +28,7 @@ import {
   Sparkles,
   Link2,
   CloudUpload,
+  Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { norm } from "@/lib/clients/normalize";
@@ -57,6 +58,7 @@ import {
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
 import { GovTendersBoard } from "./gov-tenders";
+import { listGovTenders } from "./gov-actions";
 import { CotizadorDialog } from "./cotizador";
 import { publishQuote, getQuoteLetter, createQuoteSharedLink, type QuoteLetterBundle } from "./cotizador-actions";
 import { EngineerLinkDialog } from "./engineer-link";
@@ -1397,16 +1399,44 @@ function LicitacionesTab({
     return { vivas, ganadas, montoGanadas, montoRef };
   }, [filtered]);
 
+  // Conteo para el badge del tab gobierno (lee de la base; el board lo refresca).
+  const [govBadge, setGovBadge] = useState<number | null>(null);
+  useEffect(() => {
+    void listGovTenders().then((r) => {
+      if ("error" in r) return;
+      const now = Date.now();
+      setGovBadge(r.data.rows.filter((x) => x.relevante === true && (!x.fecha_cierre || +new Date(x.fecha_cierre) >= now)).length);
+    });
+  }, []);
+
+  const tabs = [
+    { k: "mias" as const, label: "Mis licitaciones", icon: Gavel, badge: tenders.length },
+    { k: "gobierno" as const, label: "Potenciales del gobierno", icon: Landmark, badge: govBadge },
+  ];
   const toggle = (
-    <div className="mb-4 inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white text-sm font-semibold">
-      {([["mias", "Mis licitaciones"], ["gobierno", "Potenciales del gobierno"]] as const).map(([k, label]) => (
+    <div className="mb-4 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1 text-sm font-semibold shadow-sm">
+      {tabs.map(({ k, label, icon: Icon, badge }) => (
         <button
           key={k}
           type="button"
           onClick={() => setVista(k)}
-          className={cn("px-3.5 py-2 transition-colors", vista === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition-colors",
+            vista === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100",
+          )}
         >
+          <Icon className="size-4" />
           {label}
+          {badge !== null ? (
+            <span
+              className={cn(
+                "rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+                vista === k ? "bg-white/20 text-white" : k === "gobierno" && badge > 0 ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500",
+              )}
+            >
+              {badge}
+            </span>
+          ) : null}
         </button>
       ))}
     </div>
@@ -1416,7 +1446,7 @@ function LicitacionesTab({
     return (
       <>
         {toggle}
-        <GovTendersBoard />
+        <GovTendersBoard onStats={setGovBadge} />
       </>
     );
   }
