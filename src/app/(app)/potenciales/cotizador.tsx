@@ -1,12 +1,35 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { X, Loader2, Sparkles, Plus, Trash2, ArrowLeft, CheckCircle2, ExternalLink } from "lucide-react";
+import {
+  X,
+  Loader2,
+  Sparkles,
+  Plus,
+  Trash2,
+  ArrowLeft,
+  CheckCircle2,
+  ExternalLink,
+  CloudUpload,
+  MessageCircle,
+  Mail,
+  AlertTriangle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { letterTotals, fmtBal, type LetterData, type LetterItem } from "@/lib/quotes/letter";
-import { generateQuoteDraft, saveGeneratedQuote } from "./cotizador-actions";
+import { generateQuoteDraft, saveGeneratedQuote, publishQuote, type CotizadorDraft, type SaveCotizacionInput } from "./cotizador-actions";
+import type { PublishOut } from "@/lib/quotes/store";
 import type { QuoteRow } from "@/lib/pipeline/types";
 import { RUBROS, type Rubro } from "@/lib/pipeline/types";
+
+type ApiResult<T> = { error: string } | { ok: true; data: T };
+export type CotizadorApi = {
+  generate: (brief: string) => Promise<ApiResult<CotizadorDraft>>;
+  save: (input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
+  publish: (quoteId: string) => Promise<ApiResult<PublishOut>>;
+};
+
+const APP_API: CotizadorApi = { generate: generateQuoteDraft, save: saveGeneratedQuote, publish: publishQuote };
 
 const inputCls =
   "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none disabled:bg-slate-50";
@@ -19,9 +42,15 @@ type Phase = "brief" | "generating" | "review" | "saving" | "done";
 export function CotizadorDialog({
   onClose,
   onCreated,
+  onUpdated,
+  api = APP_API,
+  embedded = false,
 }: {
   onClose: () => void;
   onCreated: (row: QuoteRow) => void;
+  onUpdated?: (row: QuoteRow) => void;
+  api?: CotizadorApi;
+  embedded?: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("brief");
   const [brief, setBrief] = useState("");
@@ -44,7 +73,12 @@ export function CotizadorDialog({
     condiciones: null,
     elaborado: null,
   });
-  const [savedId, setSavedId] = useState<string | null>(null);
+  const [savedRow, setSavedRow] = useState<QuoteRow | null>(null);
+  const [pub, setPub] = useState<{ state: "idle" | "working" | "ok"; result: PublishOut | null; error: string | null }>({
+    state: "idle",
+    result: null,
+    error: null,
+  });
 
   const totals = useMemo(() => letterTotals(letter), [letter]);
 
@@ -58,7 +92,7 @@ export function CotizadorDialog({
   async function generar() {
     setPhase("generating");
     setError(null);
-    const r = await generateQuoteDraft(brief);
+    const r = await api.generate(brief);
     if ("error" in r) {
       setError(r.error);
       setPhase("brief");
@@ -87,7 +121,7 @@ export function CotizadorDialog({
   async function guardar() {
     setPhase("saving");
     setError(null);
-    const r = await saveGeneratedQuote({
+    const r = await api.save({
       quote_number: numero,
       client_name: cliente,
       rubro,
@@ -100,14 +134,30 @@ export function CotizadorDialog({
       return;
     }
     onCreated(r.data);
-    setSavedId(r.data.id);
+    setSavedRow(r.data);
     setPhase("done");
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+  async function publicar() {
+    if (!savedRow) return;
+    setPub({ state: "working", result: null, error: null });
+    const r = await api.publish(savedRow.id);
+    if ("error" in r) {
+      setPub({ state: "idle", result: null, error: r.error });
+      return;
+    }
+    setPub({ state: "ok", result: r.data, error: null });
+    const updated: QuoteRow = { ...savedRow, status: "enviada", dropbox_shared_url: r.data.url };
+    setSavedRow(updated);
+    onUpdated?.(updated);
+  }
+
+  const card = (
       <div
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        className={cn(
+          "flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white",
+          embedded ? "border border-slate-200 shadow-sm" : "max-h-[90vh] shadow-2xl",
+        )}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
@@ -117,14 +167,16 @@ export function CotizadorDialog({
             </div>
             <h3 className="text-base font-semibold text-slate-900">Cotizador IA</h3>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex size-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
-            aria-label="Cerrar"
-          >
-            <X className="size-5" />
-          </button>
+          {!embedded ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex size-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
+              aria-label="Cerrar"
+            >
+              <X className="size-5" />
+            </button>
+          ) : null}
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -154,29 +206,92 @@ export function CotizadorDialog({
               </button>
             </div>
           ) : phase === "done" ? (
-            <div className="py-8 text-center">
+            <div className="py-6 text-center">
               <CheckCircle2 className="mx-auto size-10 text-emerald-500" />
-              <p className="mt-3 text-sm font-semibold text-slate-900">Cotización {numero} guardada</p>
-              <p className="mt-1 text-xs text-slate-500">Ya está en la lista como enviada.</p>
-              <div className="mt-4 flex items-center justify-center gap-2">
-                {savedId ? (
-                  <a
-                    href={`/carta/${savedId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                  >
-                    <ExternalLink className="size-4" /> Abrir carta
-                  </a>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
-                >
-                  Listo
-                </button>
-              </div>
+              <p className="mt-3 text-sm font-semibold text-slate-900">
+                Cotización {numero} guardada {savedRow?.status === "borrador" ? "como borrador" : ""}
+              </p>
+
+              {pub.state === "ok" && pub.result ? (
+                <div className="mx-auto mt-4 max-w-md">
+                  <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                    PDF subido a Dropbox: <b>{pub.result.fileName}</b>
+                  </p>
+                  {pub.result.linkWarning ? (
+                    <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-left text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                      {pub.result.linkWarning}
+                    </p>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                    {pub.result.url ? (
+                      <>
+                        <a
+                          href={`https://wa.me/?text=${encodeURIComponent(pub.result.waText)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        >
+                          <MessageCircle className="size-4" /> WhatsApp
+                        </a>
+                        <a
+                          href={`mailto:?subject=${encodeURIComponent(`Cotización ${numero} - ${cliente}`)}&body=${encodeURIComponent(pub.result.waText)}`}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                        >
+                          <Mail className="size-4" /> Email
+                        </a>
+                        <a
+                          href={pub.result.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <ExternalLink className="size-4" /> Ver PDF
+                        </a>
+                      </>
+                    ) : null}
+                    <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">
+                      Listo
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mx-auto mt-2 max-w-md">
+                  <p className="text-xs text-slate-500">
+                    Publicá para generar el PDF con membrete y subirlo a la carpeta de cartas en Dropbox.
+                  </p>
+                  {pub.error ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{pub.error}</p> : null}
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={publicar}
+                      disabled={pub.state === "working"}
+                      className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {pub.state === "working" ? <Loader2 className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
+                      {pub.state === "working" ? "Generando PDF y subiendo…" : "Publicar PDF a Dropbox"}
+                    </button>
+                    {!embedded && savedRow ? (
+                      <a
+                        href={`/carta/${savedRow.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <ExternalLink className="size-4" /> Ver carta
+                      </a>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      disabled={pub.state === "working"}
+                      className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      Dejar como borrador
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
@@ -382,6 +497,12 @@ export function CotizadorDialog({
           </footer>
         ) : null}
       </div>
+  );
+
+  if (embedded) return card;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      {card}
     </div>
   );
 }

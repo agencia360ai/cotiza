@@ -1,14 +1,20 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, hasAdminCredentials } from "@/lib/supabase/admin";
 import { getActiveOrgId } from "@/lib/org-context";
-import { generateQuote, type GeneratedQuote } from "@/lib/ai/generate-quote";
-import { matchClientByName } from "@/lib/clients/match";
-import { hasDropboxConfig, listFolder } from "@/lib/dropbox/client";
-import { quotesFolder } from "@/lib/dropbox/folders";
-import type { LetterData } from "@/lib/quotes/letter";
-import { letterTotals } from "@/lib/quotes/letter";
+import {
+  buildQuoteDraft,
+  insertQuote,
+  publishQuote as publishQuoteCore,
+  type DraftBundle,
+  type SaveQuoteInput,
+  type PublishOut,
+  type Db,
+} from "@/lib/quotes/store";
 import type { QuoteRow } from "@/lib/pipeline/types";
 
 type Result<T> = { error: string } | { ok: true; data: T };
@@ -22,148 +28,66 @@ async function ctx() {
   return { ok: true as const, supabase, orgId };
 }
 
-// Próximo número de la serie anual (todas las cartas usan "COT DC YY-NNN";
-// el rubro es clasificación aparte). Toma el máximo entre la BD y la carpeta
-// de cartas en Dropbox — la carpeta es la fuente real del correlativo.
-async function nextNumber(supabase: Awaited<ReturnType<typeof createClient>>, orgId: string): Promise<string> {
-  const yy = String(new Date().getFullYear()).slice(2);
-  const re = new RegExp(`COT\\s+[A-Z]{1,3}\\s+${yy}-(\\d+)`, "i");
-  let max = 0;
-
-  const { data } = (await supabase
-    .from("sales_quotes")
-    .select("quote_number")
-    .eq("org_id", orgId)
-    .ilike("quote_number", `%${yy}-%`)) as { data: { quote_number: string }[] | null };
-  for (const r of data ?? []) {
-    const m = r.quote_number.match(re);
-    if (m) max = Math.max(max, parseInt(m[1], 10));
-  }
-
-  if (hasDropboxConfig()) {
-    try {
-      const entries = await listFolder(quotesFolder());
-      for (const e of entries) {
-        if (e.tag !== "file") continue;
-        const m = e.name.match(re);
-        if (m) max = Math.max(max, parseInt(m[1], 10));
-      }
-    } catch {
-      /* sin Dropbox accesible: la BD alcanza */
-    }
-  }
-
-  return `COT DC ${yy}-${String(max + 1).padStart(3, "0")}`;
-}
-
-export type CotizadorDraft = {
-  generated: GeneratedQuote;
-  suggestedNumber: string;
-  matchedClientId: string | null;
-  matchedClientName: string | null;
-};
+export type CotizadorDraft = DraftBundle;
+export type SaveCotizacionInput = SaveQuoteInput;
 
 export async function generateQuoteDraft(brief: string): Promise<Result<CotizadorDraft>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!brief.trim()) return { error: "Contame qué hay que cotizar" };
   try {
-    const { data: clients } = (await c.supabase.from("clients").select("name").eq("org_id", c.orgId).order("name")) as {
-      data: { name: string }[] | null;
-    };
-    const generated = await generateQuote(brief.trim(), (clients ?? []).map((r) => r.name));
-    const [suggestedNumber, matched] = await Promise.all([
-      nextNumber(c.supabase, c.orgId),
-      matchClientByName(c.supabase, c.orgId, generated.client_name),
-    ]);
-    return {
-      ok: true,
-      data: {
-        generated,
-        suggestedNumber,
-        matchedClientId: matched?.id ?? null,
-        matchedClientName: matched?.name ?? null,
-      },
-    };
+    return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim()) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
   }
 }
 
-export type SaveCotizacionInput = {
-  quote_number: string;
-  client_name: string;
-  rubro: "DC" | "DM" | "DS" | "DV";
-  descripcion_corta: string;
-  letter: LetterData;
-};
-
 export async function saveGeneratedQuote(input: SaveCotizacionInput): Promise<Result<QuoteRow>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!input.quote_number.trim()) return { error: "Número requerido" };
-  if (input.letter.items.length === 0) return { error: "Agregá al menos un renglón" };
-
-  const { total } = letterTotals(input.letter);
-  const matched = await matchClientByName(c.supabase, c.orgId, input.client_name);
-  const year = Number(input.letter.fecha.slice(0, 4)) || new Date().getFullYear();
-
-  const base = {
-    org_id: c.orgId,
-    quote_number: input.quote_number.trim().toUpperCase(),
-    year,
-    sent_date: input.letter.fecha,
-    amount_usd: Math.round(total * 100) / 100,
-    status: "enviada" as const,
-    client_name: input.client_name,
-    client_id: matched?.id ?? null,
-    description: input.descripcion_corta,
-    rubro: input.rubro,
-    notes: "Generada con el cotizador IA",
-    source: "manual" as const,
-  };
-
-  // Insert con letter; si la columna no existe (migración 0008 pendiente), sin ella.
-  let ins = (await c.supabase
-    .from("sales_quotes")
-    .insert({ ...base, letter: input.letter })
-    .select("id")
-    .single()) as { data: { id: string } | null; error: { message: string } | null };
-  if (ins.error) {
-    ins = (await c.supabase.from("sales_quotes").insert(base).select("id").single()) as {
-      data: { id: string } | null;
-      error: { message: string } | null;
-    };
-  }
-  if (ins.error || !ins.data) return { error: ins.error?.message ?? "No se pudo guardar" };
-
+  const r = await insertQuote(c.supabase, c.orgId, input);
+  if ("error" in r) return { error: r.error };
   revalidatePath("/potenciales");
-  return {
-    ok: true,
-    data: {
-      id: ins.data.id,
-      quote_number: base.quote_number,
-      year,
-      sent_date: base.sent_date,
-      amount_usd: base.amount_usd,
-      status: "enviada",
-      payment_status: null,
-      invoice_status: null,
-      client_name: base.client_name,
-      client_id: matched?.id ?? null,
-      client_std_name: matched?.name ?? null,
-      location_id: matched?.location_id ?? null,
-      location_name: matched?.location_name ?? null,
-      contact_name: null,
-      contact_phone: null,
-      contact_email: null,
-      description: base.description,
-      notes: base.notes,
-      rubro: input.rubro,
-      progress: 0,
-      follow_up_date: null,
-      rejection_reason: null,
-      converted_project_id: null,
-    },
-  };
+  return { ok: true, data: r.row };
+}
+
+export async function publishQuote(quoteId: string): Promise<Result<PublishOut>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const r = await publishQuoteCore(c.supabase, c.orgId, quoteId);
+  if ("error" in r) return { error: r.error };
+  revalidatePath("/potenciales");
+  return { ok: true, data: r.data };
+}
+
+// ── Link del portal para ingenieros (/q/<token>) ─────────────────────────────
+
+async function portalUrl(token: string): Promise<string> {
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
+  return `${proto}://${host}/q/${token}`;
+}
+
+export async function getEngineerLink(): Promise<Result<{ url: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { data, error } = (await c.supabase
+    .from("organizations")
+    .select("cotizador_token")
+    .eq("id", c.orgId)
+    .maybeSingle()) as { data: { cotizador_token: string | null } | null; error: { message: string } | null };
+  if (error) return { error: "Falta la migración 0009 (cotizador_token)" };
+  return { ok: true, data: { url: data?.cotizador_token ? await portalUrl(data.cotizador_token) : null } };
+}
+
+export async function regenerateEngineerLink(): Promise<Result<{ url: string }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasAdminCredentials()) return { error: "SUPABASE_SERVICE_ROLE_KEY no está configurada" };
+  const token = randomBytes(24).toString("hex");
+  const admin = createAdminClient() as unknown as Db;
+  const { error } = await admin.from("organizations").update({ cotizador_token: token }).eq("id", c.orgId);
+  if (error) return { error: error.message };
+  return { ok: true, data: { url: await portalUrl(token) } };
 }

@@ -30,12 +30,14 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
       .eq("org_id", orgId)
       .order("sent_date", { ascending: false, nullsFirst: false })
       .order("quote_number", { ascending: false });
-  type Raw = Omit<QuoteRow, "client_std_name" | "location_name"> & {
+  type Raw = Omit<QuoteRow, "client_std_name" | "location_name" | "dropbox_shared_url"> & {
     client: { name: string } | null;
     location?: { name: string } | null;
+    dropbox_shared_url?: string | null;
   };
   type Res = { data: Raw[] | null; error: { message: string } | null };
-  let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res;
+  let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url`)) as Res;
+  if (res.error) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res; // sin shared_url (0009 pendiente)
   if (res.error) res = (await run(QUOTE_COLS)) as Res; // sin location (migración 0005 pendiente)
   if (res.error) res = (await run(QUOTE_COLS_BASE)) as Res; // sin contacto (0002 pendiente)
   return (res.data ?? []).map(({ client, location, ...q }) => ({
@@ -44,6 +46,7 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
     client_std_name: client?.name ?? null,
     location_id: q.location_id ?? null,
     location_name: location?.name ?? null,
+    dropbox_shared_url: q.dropbox_shared_url ?? null,
     contact_name: q.contact_name ?? null,
     contact_phone: q.contact_phone ?? null,
     contact_email: q.contact_email ?? null,
@@ -79,7 +82,7 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
   }));
 }
 
-const QUOTE_STATUSES: QuoteStatus[] = ["enviada", "aprobada", "rechazada"];
+const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["ganada", "no_ganada", "presentada", "en_revision", "por_partir"];
 
 type QuoteAggRow = { status: string; amount_usd: number | null; invoice_status: string | null };
@@ -115,6 +118,7 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
     let cTotalCount = 0;
     let cTotalMonto = 0;
     for (const q of quotes) {
+      if (q.status === "borrador") continue; // sin PDF publicado: no cuenta
       const monto = Number(q.amount_usd) || 0;
       cTotalCount += 1;
       cTotalMonto += monto;
