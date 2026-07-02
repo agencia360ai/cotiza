@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { formatMoney, formatMoneyExact } from "@/lib/pipeline/types";
 import { norm } from "@/lib/clients/normalize";
 import { tamizScore, BANDA_META, BANDAS_ORDEN, type TamizBanda, type TamizResult } from "@/lib/panamacompra/tamiz";
+import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
 import { listGovTenders, refreshGovTenders, followGovTender, evaluateGovTender, type GovTenderRow } from "./gov-actions";
 
 function relTime(ts: number): string {
@@ -67,6 +68,26 @@ function diasParaCierre(iso: string | null): number | null {
 
 function estaAbierta(r: GovTenderRow): boolean {
   return !r.fecha_cierre || +new Date(r.fecha_cierre) >= Date.now();
+}
+
+// Ordenamiento por columnas. El score no vive en la fila (lo calcula el tamiz),
+// así que se pasa aparte. Las cerradas se mantienen siempre al final vía `rank`.
+type GovSortKey = "score" | "titulo" | "tipo" | "cierre" | "precio";
+const TIPO_ORDEN: Record<string, number> = { licitacion_publica: 0, compra_menor_50k: 1, compra_menor_10k: 2, programada: 3 };
+
+function govSortValue(r: GovTenderRow, key: GovSortKey, score: number): string | number | null {
+  switch (key) {
+    case "score":
+      return score;
+    case "titulo":
+      return r.titulo;
+    case "tipo":
+      return r.tipo ? (TIPO_ORDEN[r.tipo] ?? 9) : null;
+    case "cierre":
+      return r.fecha_cierre ? +new Date(r.fecha_cierre) : null;
+    case "precio":
+      return r.precio_ref;
+  }
 }
 
 const FECHA_DIA = new Intl.DateTimeFormat("es-PA", { weekday: "short", day: "numeric", month: "short" });
@@ -492,7 +513,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [soloRelevantes, setSoloRelevantes] = useState(true);
   const [tipoFiltro, setTipoFiltro] = useState<string>("all");
   const [bandaFiltro, setBandaFiltro] = useState<"all" | TamizBanda>("all");
-  const [orden, setOrden] = useState<"score" | "cierre">("score");
+  const [sort, setSort] = useState<SortState<GovSortKey>>({ key: "score", dir: "desc" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [evalBusy, setEvalBusy] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
@@ -637,25 +658,22 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
       if (needle && !`${r.num_proceso} ${r.titulo ?? ""} ${r.entidad ?? ""}`.toLowerCase().includes(needle)) return false;
       return true;
     });
-    // Abiertas primero; cerradas al final. Entre abiertas: por score del tamiz
-    // (default) o por cierre más próximo.
+    // Abiertas primero; cerradas al final. Dentro de cada grupo, por la columna
+    // elegida (default: score desc). Desempate por cierre más próximo.
     const rank = (r: GovTenderRow) => (!r.fecha_cierre ? 1 : estaAbierta(r) ? 0 : 2);
+    const scoreOf = (r: GovTenderRow) => tamizDe.get(r.id)?.score ?? 0;
     return list.sort((a, b) => {
       const ra = rank(a);
       const rb = rank(b);
       if (ra !== rb) return ra - rb;
-      const ta = a.fecha_cierre ? +new Date(a.fecha_cierre) : 0;
-      const tb = b.fecha_cierre ? +new Date(b.fecha_cierre) : 0;
-      if (ra === 2) return tb - ta;
-      if (orden === "score") {
-        const sa = tamizDe.get(a.id)?.score ?? 0;
-        const sb = tamizDe.get(b.id)?.score ?? 0;
-        if (sa !== sb) return sb - sa;
-      }
+      const cmp = compareVals(govSortValue(a, sort.key, scoreOf(a)), govSortValue(b, sort.key, scoreOf(b)), sort.dir);
+      if (cmp !== 0) return cmp;
+      const ta = a.fecha_cierre ? +new Date(a.fecha_cierre) : Infinity;
+      const tb = b.fecha_cierre ? +new Date(b.fecha_cierre) : Infinity;
       return ta - tb;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeRows, q, tipoFiltro, bandaFiltro, soloSweet, ssMin, ssMax, orden, tamizDe]);
+  }, [scopeRows, q, tipoFiltro, bandaFiltro, soloSweet, ssMin, ssMax, sort, tamizDe]);
 
   return (
     <div className="space-y-4">
@@ -790,7 +808,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
             </span>
           </div>
 
-          {/* Bandas del tamiz + orden */}
+          {/* Bandas del tamiz (el orden se controla desde los headers de la tabla) */}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Tamiz</span>
             <button
@@ -821,24 +839,6 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                 </button>
               );
             })}
-            <span className="mx-1 h-4 w-px bg-slate-200" />
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ordenar</span>
-            {([
-              ["score", "Puntaje"],
-              ["cierre", "Cierre"],
-            ] as const).map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setOrden(k)}
-                className={cn(
-                  "rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
-                  orden === k ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-                )}
-              >
-                {label}
-              </button>
-            ))}
           </div>
 
           {lastRefresh ? (
@@ -884,20 +884,26 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
         ) : (
           <>
             <p className="px-4 pb-1 text-xs text-slate-400">
-              {shown.length} de {rows.length} procesos ·{" "}
-              {orden === "score" ? "ordenado por puntaje del tamiz (P1 arriba)" : "ordenado por cierre más próximo"} · click en una fila
-              para el desglose y evaluar si cumplimos
+              {shown.length} de {rows.length} procesos · ordená por cualquier columna (las cerradas quedan al final) · click en una
+              fila para el desglose y evaluar si cumplimos
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
                     <th className="w-12 py-2.5 pl-3 pr-1 font-semibold" aria-label="Rubro" />
-                    <th className="w-16 px-2 py-2.5 font-semibold">Score</th>
-                    <th className="px-2 py-2.5 font-semibold">Proceso</th>
-                    <th className="hidden px-2 py-2.5 font-semibold md:table-cell">Tipo</th>
-                    <th className="px-2 py-2.5 font-semibold">Presentar antes</th>
-                    <th className="px-2 py-2.5 text-right font-semibold">Precio ref.</th>
+                    <SortTh label="Score" k="score" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} className="w-16 px-2" />
+                    <SortTh label="Proceso" k="titulo" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} className="px-2" />
+                    <SortTh label="Tipo" k="tipo" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} className="hidden px-2 md:table-cell" />
+                    <SortTh label="Presentar antes" k="cierre" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} className="px-2" />
+                    <SortTh
+                      label="Precio ref."
+                      k="precio"
+                      sort={sort}
+                      onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))}
+                      align="right"
+                      className="px-2 text-right"
+                    />
                     <th className="w-32 py-2.5 pl-2 pr-3 font-semibold" aria-label="Acciones" />
                   </tr>
                 </thead>
