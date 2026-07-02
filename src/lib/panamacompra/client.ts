@@ -15,9 +15,18 @@ export function hasPanamaCompraConfig(): boolean {
 function baseHeaders(session?: { userToken: string; userSesionId: string }): Record<string, string> {
   const h: Record<string, string> = {
     Accept: "application/json;charset=utf-8",
+    "Accept-Language": "en-US,en;q=0.9,es-ES;q=0.8,es;q=0.7",
+    "Cache-Control": "no-cache",
     "Content-Type": "application/json;charset=utf-8",
     Origin: "https://www.panamacompra.gob.pa",
+    Pragma: "no-cache",
     Referer: "https://www.panamacompra.gob.pa/",
+    "Sec-Ch-Ua": '"Not A(Brand";v="8", "Chromium";v="132", "Google Chrome";v="132"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
     "User-Agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
   };
@@ -37,9 +46,18 @@ export async function pcLogin(): Promise<PcSession> {
     body: JSON.stringify({ usuario: user, contrasena: pass }),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`PanamaCompra login ${res.status}`);
-  const j = (await res.json()) as { result?: { userToken?: string; userSesionId?: string } };
-  if (!j.result?.userToken || !j.result?.userSesionId) throw new Error("PanamaCompra: login sin token (credenciales?)");
+  const text = await res.text();
+  if (!res.ok) throw new Error(`PanamaCompra login HTTP ${res.status}: ${text.slice(0, 200)}`);
+  let j: { result?: { userToken?: string; userSesionId?: string } } = {};
+  try {
+    j = JSON.parse(text);
+  } catch {
+    throw new Error(`PanamaCompra: respuesta no-JSON al login: ${text.slice(0, 200)}`);
+  }
+  if (!j.result?.userToken || !j.result?.userSesionId) {
+    // Mostrar qué contestó (mensaje de error del gobierno) sin exponer secretos.
+    throw new Error(`PanamaCompra: login sin token. Respuesta: ${text.slice(0, 300)}`);
+  }
   return { userToken: j.result.userToken, userSesionId: j.result.userSesionId };
 }
 
