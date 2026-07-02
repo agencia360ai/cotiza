@@ -18,7 +18,11 @@ const schema = z.object({
   rubro: z
     .enum(["DC", "DM", "DS", "DV"])
     .nullable()
-    .describe("Rubro: DC=Contratos, DM=Mantenimiento, DS=Servicio, DV=Ventas/Suministro. Inferí del contenido o del prefijo del número."),
+    .describe(
+      "Clasificá por el CONTENIDO del trabajo — el número casi siempre dice 'COT DC' y eso NO es el rubro. " +
+        "DM = mantenimiento preventivo/programado. DS = servicio o reparación puntual (reemplazos, reparaciones, diagnósticos; típicamente < B/.5,000). " +
+        "DV = venta/suministro de equipos sin instalación mayor. DC = contratos/obras/instalaciones grandes (proyectos, típicamente > B/.5,000).",
+    ),
 });
 
 export type ParsedQuote = z.infer<typeof schema>;
@@ -27,6 +31,7 @@ const SYSTEM = `Sos un asistente que extrae datos de cartas de cotización de DI
 Cada documento es UNA cotización. Extraé los campos pedidos con precisión.
 - El número suele estar como "COT DC YY-NNN" (puede tener sufijos: A, B, R1.1, Rev 2). Respetalo tal cual aparece; si no está en el texto, derivalo del nombre del archivo.
 - amount_usd: el TOTAL de la propuesta (incluí ITBMS si está incluido en el total mostrado). Solo el número.
+- rubro: el prefijo del número ("COT DC ...") es de la serie de DICEC, NO indica el rubro. Clasificá por lo que ES el trabajo: mantenimiento → DM; reparación/servicio puntual → DS; venta/suministro → DV; obra/instalación/contrato grande → DC.
 - Sé conservador: si un dato no está, devolvé null. No inventes.`;
 
 export async function parseQuotePdf(input: {

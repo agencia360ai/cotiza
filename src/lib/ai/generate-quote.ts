@@ -39,7 +39,7 @@ Reglas:
 - Precios en Balboas (B/.), SIN ITBMS (el 7% se suma aparte salvo que digan lo contrario).
 - Si el usuario da precio(s), respetalos EXACTAMENTE. Si dice "X más ITBMS", X es el precio sin ITBMS. Si dice "ITBMS incluido", calculá el precio base = X / 1.07.
 - Si NO da precio, estimá un precio razonable de mercado panameño para ese trabajo y dejalo evidente en la descripción corta que es estimado.
-- Si el trabajo es mantenimiento → DM; reparación/servicio puntual → DS; venta/suministro de equipos → DV; obra/instalación grande o contrato → DC.
+- Rubro por el CONTENIDO del trabajo (no por el número): mantenimiento preventivo/programado → DM; reparación/servicio puntual (reemplazos, diagnósticos; típicamente < B/.5,000) → DS; venta/suministro de equipos → DV; obra/instalación grande o contrato (típicamente > B/.5,000) → DC.
 - Si menciona un cliente de la LISTA DE CLIENTES, usá ese nombre exacto.
 - No inventes condiciones que el usuario no dio (validez default 30 días).`;
 
