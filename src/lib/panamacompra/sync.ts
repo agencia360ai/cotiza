@@ -16,7 +16,14 @@ const TIPOS: { idEstado: string; idTipoProceso: string; enviada?: string; key: s
   { idEstado: "15", idTipoProceso: "2", key: "programada", maxPages: 4 },
 ];
 
-export type SyncStats = { total: number; nuevos: number; relevantes: number; conPrecio: number; incremental: boolean };
+export type SyncStats = {
+  total: number;
+  nuevos: number;
+  relevantes: number;
+  conPrecio: number;
+  pendientesPrecio: number;
+  incremental: boolean;
+};
 
 export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: string } | { ok: true; data: SyncStats }> {
   if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
@@ -48,27 +55,8 @@ export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: st
     }
     const list = Array.from(byNum.entries());
 
-    // 2) Precio de referencia: solo para los NUEVOS (los viejos ya lo tienen o no).
-    const precios = new Map<string, number>();
-    const paraPrecio = list
-      .filter(([num, v]) => !have.has(num) && v.r.idProcesosContratacionFlujos)
-      .sort(([, a], [, b]) => (a.tipo === "licitacion_publica" ? -1 : 1) - (b.tipo === "licitacion_publica" ? -1 : 1))
-      .slice(0, 60);
-    for (let i = 0; i < paraPrecio.length; i += 3) {
-      await Promise.all(
-        paraPrecio.slice(i, i + 3).map(async ([num, v]) => {
-          try {
-            const raw = await pcPliegoRaw(session, v.idTipoProceso, String(v.r.idProcesosContratacionFlujos));
-            const precio = extractPrecioRef(raw);
-            if (precio !== null) precios.set(num, precio);
-          } catch {
-            /* sin precio */
-          }
-        }),
-      );
-    }
-
-    // 3) Upsert (seen_at refresca en los que siguen apareciendo).
+    // 2) Upsert (seen_at refresca en los que siguen apareciendo). El precio no
+    //    va acá: se completa en el paso 4 y nunca se pisa el ya guardado.
     const nowIso = new Date().toISOString();
     const rows = list.map(([num, v]) => ({
       org_id: orgId,
@@ -77,7 +65,6 @@ export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: st
       entidad: v.r.nombre ?? null,
       fecha_cierre: v.r.fechaCierre ? new Date(v.r.fechaCierre).toISOString() : null,
       tipo: v.tipo,
-      ...(precios.has(num) ? { precio_ref: precios.get(num) } : {}),
       url: `https://www.panamacompra.gob.pa/Inicio/#!/vistaPreviaCP?NumLc=${encodeURIComponent(num)}&esap=1&nnc=0&it=1`,
       raw: v.r as unknown,
       seen_at: nowIso,
@@ -88,7 +75,7 @@ export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: st
     }
     const nuevos = rows.filter((r) => !have.has(r.num_proceso)).length;
 
-    // 4) Clasificar lo sin clasificar (keywords fuertes directo; resto IA).
+    // 3) Clasificar lo sin clasificar (keywords fuertes directo; resto IA).
     let relevantes = 0;
     const { data: pend } = (await db
       .from("gov_tenders")
@@ -121,7 +108,79 @@ export async function syncGovTenders(db: Db, orgId: string): Promise<{ error: st
       relevantes = updates.filter((u) => u.relevante).length;
     }
 
-    return { ok: true, data: { total: rows.length, nuevos, relevantes, conPrecio: precios.size, incremental } };
+    // 4) Montos: backfill de precio_ref para TODO lo abierto sin precio (no solo
+    //    los nuevos). Relevantes y cierres próximos primero. Primero se intenta
+    //    extraer del JSON ya guardado (gratis); el resto consulta el pliego con
+    //    presupuesto por corrida — el cron diario va completando el backlog.
+    //    Los que el gobierno no publica quedan marcados para no reintentarlos.
+    let conPrecio = 0;
+    let pendientesPrecio = 0;
+    const { data: sinPrecio } = (await db
+      .from("gov_tenders")
+      .select("id, tipo, raw")
+      .eq("org_id", orgId)
+      .is("precio_ref", null)
+      .is("raw->>_precio_checked", null)
+      .or(`fecha_cierre.is.null,fecha_cierre.gte.${nowIso}`)
+      .order("relevante", { ascending: false, nullsFirst: false })
+      .order("fecha_cierre", { ascending: true, nullsFirst: false })
+      .limit(400)) as { data: { id: string; tipo: string | null; raw: unknown }[] | null };
+
+    const setPrecio = (id: string, precio: number) =>
+      db.from("gov_tenders").update({ precio_ref: precio }).eq("id", id).eq("org_id", orgId);
+    const marcarSinPrecio = (id: string, raw: unknown) =>
+      db
+        .from("gov_tenders")
+        .update({ raw: { ...(raw as Record<string, unknown>), _precio_checked: true } })
+        .eq("id", id)
+        .eq("org_id", orgId);
+
+    // 4a) Del registro ya guardado, sin tocar la API.
+    const paraPliego: { id: string; tipo: string | null; raw: unknown }[] = [];
+    const locales: { id: string; precio: number }[] = [];
+    for (const p of sinPrecio ?? []) {
+      const local = extractPrecioRef(p.raw);
+      if (local !== null) locales.push({ id: p.id, precio: local });
+      else paraPliego.push(p);
+    }
+    for (let i = 0; i < locales.length; i += 20) {
+      await Promise.all(locales.slice(i, i + 20).map((l) => setPrecio(l.id, l.precio)));
+    }
+    conPrecio += locales.length;
+
+    // 4b) Pliego para el resto, hasta el presupuesto.
+    const PRECIO_BUDGET = 60;
+    const tipoToId = new Map(TIPOS.map((t) => [t.key, t.idTipoProceso]));
+    const intentar = paraPliego.slice(0, PRECIO_BUDGET);
+    for (let i = 0; i < intentar.length; i += 3) {
+      await Promise.all(
+        intentar.slice(i, i + 3).map(async (p) => {
+          const rw = p.raw as { idProcesosContratacionFlujos?: string | number } | null;
+          const idFlujos = rw?.idProcesosContratacionFlujos;
+          const idTipo = p.tipo ? tipoToId.get(p.tipo) : undefined;
+          if (!idFlujos || !idTipo) {
+            await marcarSinPrecio(p.id, p.raw);
+            return;
+          }
+          try {
+            const rawPliego = await pcPliegoRaw(session, idTipo, String(idFlujos));
+            const precio = rawPliego ? extractPrecioRef(rawPliego) : null;
+            if (precio !== null) {
+              await setPrecio(p.id, precio);
+              conPrecio++;
+            } else {
+              // El pliego respondió pero no publica precio: no reintentar.
+              await marcarSinPrecio(p.id, p.raw);
+            }
+          } catch {
+            /* error de red: se reintenta en la próxima corrida */
+          }
+        }),
+      );
+    }
+    pendientesPrecio = Math.max(0, paraPliego.length - intentar.length);
+
+    return { ok: true, data: { total: rows.length, nuevos, relevantes, conPrecio, pendientesPrecio, incremental } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error consultando PanamaCompra" };
   }

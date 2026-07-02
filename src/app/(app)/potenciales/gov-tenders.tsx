@@ -42,6 +42,13 @@ const TIPO_LABEL: Record<string, string> = {
   programada: "Programada",
 };
 
+// Cuando el gobierno no publica precio de referencia, el tipo de proceso
+// al menos acota el monto — mejor que no mostrar nada.
+const TIPO_RANGO: Record<string, string> = {
+  compra_menor_50k: "$10,000 – $50,000",
+  compra_menor_10k: "hasta $10,000",
+};
+
 function diasParaCierre(iso: string | null): number | null {
   if (!iso) return null;
   return Math.ceil((+new Date(iso) - Date.now()) / 86400000);
@@ -235,6 +242,11 @@ function TenderRowItem({
               </p>
               <p className="text-[10px] text-slate-400">precio ref.</p>
             </>
+          ) : r.tipo && TIPO_RANGO[r.tipo] ? (
+            <>
+              <p className="text-xs font-semibold tabular-nums text-slate-500">{TIPO_RANGO[r.tipo]}</p>
+              <p className="text-[10px] text-slate-400">rango del tipo</p>
+            </>
           ) : (
             <p className="text-[11px] italic text-slate-300">sin precio ref.</p>
           )}
@@ -337,7 +349,11 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
       setError(r.error);
       return;
     }
-    setLastRefresh(`${r.data.total} procesos · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados`);
+    setLastRefresh(
+      `${r.data.total} procesos · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados` +
+        (r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos traídos` : "") +
+        (r.data.pendientesPrecio > 0 ? ` · quedan ~${r.data.pendientesPrecio} sin monto (tocá Actualizar de nuevo)` : ""),
+    );
     await load();
   }
 
