@@ -208,15 +208,14 @@ function CotizacionesTab({
   // Agrupar revisiones: solo la vigente cuenta; las anteriores van colapsadas.
   const groups = useMemo(() => groupRevisions(quotes), [quotes]);
 
-  const filtered = useMemo(() => {
+  const passesFilters = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return groups.filter(({ main: x, older }) => {
+    return ({ main: x, older }: QuoteGroup): boolean => {
       if (year !== "all" && x.year !== year) return false;
       if (estado !== "all" && x.status !== estado) return false;
       if (rubro !== "all" && x.rubro !== rubro) return false;
       if (from && (!x.sent_date || x.sent_date < from)) return false;
       if (to && (!x.sent_date || x.sent_date > to)) return false;
-      if (soloSinCliente && x.client_id) return false;
       if (needle) {
         const hay = [x, ...older]
           .map((r) => `${r.quote_number} ${r.client_name ?? ""} ${r.client_std_name ?? ""} ${r.description ?? ""}`)
@@ -225,8 +224,13 @@ function CotizacionesTab({
         if (!hay.includes(needle)) return false;
       }
       return true;
-    });
-  }, [groups, year, estado, rubro, q, from, to, soloSinCliente]);
+    };
+  }, [year, estado, rubro, q, from, to]);
+
+  const filtered = useMemo(
+    () => groups.filter((g) => passesFilters(g) && (!soloSinCliente || !g.main.client_id)),
+    [groups, passesFilters, soloSinCliente],
+  );
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -254,7 +258,13 @@ function CotizacionesTab({
     return { enviadaMonto, aprobadaCount, aprobadaMonto, rechazadaCount, porCobrar, cierre };
   }, [filtered]);
 
-  const sinClienteCount = useMemo(() => groups.filter((g) => !g.main.client_id).length, [groups]);
+  // Cuenta dentro de los filtros activos (lo que vas a ver al tocar el chip);
+  // la global sirve para avisar si hay más escondidas en otro año/filtro.
+  const sinClienteCount = useMemo(
+    () => groups.filter((g) => passesFilters(g) && !g.main.client_id).length,
+    [groups, passesFilters],
+  );
+  const sinClienteGlobal = useMemo(() => groups.filter((g) => !g.main.client_id).length, [groups]);
   const olderTotal = useMemo(() => groups.reduce((a, g) => a + g.older.length, 0), [groups]);
   const dupTotal = useMemo(() => groups.reduce((a, g) => a + g.dupCount, 0), [groups]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -396,6 +406,11 @@ function CotizacionesTab({
                 <tr>
                   <td colSpan={9} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin cotizaciones con estos filtros.
+                    {soloSinCliente && sinClienteGlobal > 0 ? (
+                      <span className="mt-1 block text-xs text-amber-600">
+                        Hay {sinClienteGlobal} sin cliente en otros años/filtros — probá con &ldquo;Todos&rdquo; en el año.
+                      </span>
+                    ) : null}
                   </td>
                 </tr>
               ) : (
