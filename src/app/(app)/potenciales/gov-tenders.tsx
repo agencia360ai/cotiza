@@ -6,7 +6,6 @@ import {
   AlarmClock,
   AlertTriangle,
   Building2,
-  CalendarClock,
   CheckCircle2,
   CircleDashed,
   Droplets,
@@ -16,6 +15,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  ScanSearch,
   Search,
   Snowflake,
   Target,
@@ -41,6 +41,12 @@ const TIPO_LABEL: Record<string, string> = {
   compra_menor_10k: "CM ≤10k",
   programada: "Programada",
 };
+const TIPO_SHORT: Record<string, string> = {
+  licitacion_publica: "LP",
+  compra_menor_50k: "CM 10–50k",
+  compra_menor_10k: "CM ≤10k",
+  programada: "Prog.",
+};
 
 // Cuando el gobierno no publica precio de referencia, el tipo de proceso
 // al menos acota el monto — mejor que no mostrar nada.
@@ -58,17 +64,8 @@ function estaAbierta(r: GovTenderRow): boolean {
   return !r.fecha_cierre || +new Date(r.fecha_cierre) >= Date.now();
 }
 
-const FECHA_FMT = new Intl.DateTimeFormat("es-PA", {
-  weekday: "short",
-  day: "numeric",
-  month: "short",
-  hour: "numeric",
-  minute: "2-digit",
-  hour12: true,
-});
-function fmtFechaCierre(iso: string): string {
-  return FECHA_FMT.format(new Date(iso));
-}
+const FECHA_DIA = new Intl.DateTimeFormat("es-PA", { weekday: "short", day: "numeric", month: "short" });
+const FECHA_HORA = new Intl.DateTimeFormat("es-PA", { hour: "numeric", minute: "2-digit", hour12: true });
 
 // Categorización visual: bucket HVAC por keywords sobre título + motivo.
 // El ícono identifica el rubro de un vistazo; el color nunca es el único indicador.
@@ -156,68 +153,69 @@ function MiniKpi({
   );
 }
 
-function TenderRowItem({
-  r,
-  sweet,
-  busy,
-  onSeguir,
-  className,
-}: {
-  r: GovTenderRow;
-  sweet: boolean;
-  busy: boolean;
-  onSeguir: () => void;
-  className?: string;
-}) {
+function TenderTr({ r, sweet, busy, onSeguir }: { r: GovTenderRow; sweet: boolean; busy: boolean; onSeguir: () => void }) {
   const dias = diasParaCierre(r.fecha_cierre);
   const cerrada = dias !== null && dias < 0;
+  const urgente = !cerrada && r.relevante === true && dias !== null && dias < 5;
   const siguiendo = !!r.converted_tender_id;
   const cat = categoriaVisual(r);
   const CatIcon = cat.icon;
   return (
-    <div className={cn("flex items-start gap-3 px-3 py-3", cerrada && "opacity-60", className)}>
-      <span className={cn("mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl", cat.cls)} title={cat.label}>
-        <CatIcon className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-semibold tabular-nums text-slate-500">{r.num_proceso}</span>
-          {r.tipo ? (
-            <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
-              {TIPO_LABEL[r.tipo] ?? r.tipo}
+    <tr
+      className={cn(
+        "border-b border-slate-50 transition-colors",
+        urgente ? "bg-red-50/40 hover:bg-red-50/70" : "hover:bg-slate-50/60",
+        cerrada && "opacity-60",
+      )}
+    >
+      <td className="py-3 pl-3 pr-1 align-top">
+        <span className={cn("flex size-8 items-center justify-center rounded-lg", cat.cls)} title={cat.label}>
+          <CatIcon className="size-4" />
+        </span>
+      </td>
+      <td className="px-2 py-3 align-top">
+        <div className="min-w-[240px] max-w-xl">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-semibold tabular-nums text-slate-500">{r.num_proceso}</span>
+            <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-600/20 md:hidden">
+              {(r.tipo && TIPO_SHORT[r.tipo]) ?? r.tipo ?? "—"}
             </span>
-          ) : null}
-          {r.relevante === true && r.relevancia_motivo ? (
-            <span className="max-w-56 truncate rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
-              {r.relevancia_motivo}
-            </span>
-          ) : null}
-          {r.relevante === false && r.relevancia_motivo ? (
-            <span className="max-w-56 truncate rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
-              {r.relevancia_motivo}
-            </span>
-          ) : null}
-          {r.relevante === null ? (
-            <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">sin clasificar</span>
-          ) : null}
-          {sweet ? (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
-              <Target className="size-3" /> sweet spot
-            </span>
-          ) : null}
+            {r.relevante === true && r.relevancia_motivo ? (
+              <span className="max-w-52 truncate rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                {r.relevancia_motivo}
+              </span>
+            ) : null}
+            {r.relevante === false && r.relevancia_motivo ? (
+              <span className="hidden max-w-52 truncate rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 lg:inline-block">
+                {r.relevancia_motivo}
+              </span>
+            ) : null}
+            {r.relevante === null ? (
+              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">sin clasificar</span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-sm font-medium leading-snug text-slate-900 line-clamp-2">{r.titulo ?? "—"}</p>
+          <p className="mt-0.5 truncate text-xs text-slate-500">{r.entidad ?? "—"}</p>
         </div>
-        <p className="mt-1 text-sm font-medium leading-snug text-slate-900 line-clamp-2">{r.titulo ?? "—"}</p>
-        <p className="mt-0.5 truncate text-xs text-slate-500">{r.entidad ?? "—"}</p>
+      </td>
+      <td className="hidden px-2 py-3 align-top md:table-cell">
+        {r.tipo ? (
+          <span className="whitespace-nowrap rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+            {TIPO_LABEL[r.tipo] ?? r.tipo}
+          </span>
+        ) : (
+          <span className="text-xs text-slate-300">—</span>
+        )}
+      </td>
+      <td className="px-2 py-3 align-top">
         {r.fecha_cierre ? (
-          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-            <CalendarClock className="size-3.5 shrink-0 text-slate-400" />
-            <span>
-              Presentar antes: <span className="font-semibold text-slate-700">{fmtFechaCierre(r.fecha_cierre)}</span>
-            </span>
+          <div className="whitespace-nowrap">
+            <p className="text-xs font-semibold text-slate-800">{FECHA_DIA.format(new Date(r.fecha_cierre))}</p>
+            <p className="text-[11px] text-slate-500">{FECHA_HORA.format(new Date(r.fecha_cierre))}</p>
             {dias !== null ? (
               <span
                 className={cn(
-                  "rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
+                  "mt-1 inline-block rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
                   cerrada
                     ? "bg-slate-100 text-slate-400 ring-slate-200"
                     : dias <= 2
@@ -227,31 +225,34 @@ function TenderRowItem({
                         : "bg-slate-100 text-slate-500 ring-slate-200",
                 )}
               >
-                {cerrada ? "cerrada" : dias === 0 ? "cierra hoy" : `cierra en ${dias} d`}
+                {cerrada ? "cerrada" : dias === 0 ? "cierra hoy" : `en ${dias} d`}
               </span>
             ) : null}
-          </p>
-        ) : null}
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-1.5">
-        <div className="text-right">
-          {r.precio_ref !== null ? (
-            <>
-              <p className={cn("text-sm font-bold tabular-nums", sweet ? "text-amber-600" : "text-slate-900")}>
-                {formatMoneyExact(r.precio_ref)}
-              </p>
-              <p className="text-[10px] text-slate-400">precio ref.</p>
-            </>
-          ) : r.tipo && TIPO_RANGO[r.tipo] ? (
-            <>
-              <p className="text-xs font-semibold tabular-nums text-slate-500">{TIPO_RANGO[r.tipo]}</p>
-              <p className="text-[10px] text-slate-400">rango del tipo</p>
-            </>
-          ) : (
-            <p className="text-[11px] italic text-slate-300">sin precio ref.</p>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
+          </div>
+        ) : (
+          <span className="text-xs text-slate-300">—</span>
+        )}
+      </td>
+      <td className="px-2 py-3 text-right align-top">
+        {r.precio_ref !== null ? (
+          <div className="whitespace-nowrap">
+            <p className={cn("text-sm font-bold tabular-nums", sweet ? "text-amber-600" : "text-slate-900")}>
+              {formatMoneyExact(r.precio_ref)}
+            </p>
+            {sweet ? (
+              <span className="mt-0.5 inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                <Target className="size-3" /> sweet spot
+              </span>
+            ) : null}
+          </div>
+        ) : r.tipo && TIPO_RANGO[r.tipo] ? (
+          <p className="whitespace-nowrap text-xs tabular-nums text-slate-500">{TIPO_RANGO[r.tipo]}</p>
+        ) : (
+          <span className="text-xs text-slate-300">—</span>
+        )}
+      </td>
+      <td className="py-3 pl-2 pr-3 text-right align-top">
+        <div className="flex items-center justify-end gap-1">
           {r.url ? (
             <a
               href={r.url}
@@ -264,7 +265,7 @@ function TenderRowItem({
             </a>
           ) : null}
           {siguiendo ? (
-            <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700">
+            <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700">
               <CheckCircle2 className="size-3.5" /> Siguiendo
             </span>
           ) : (
@@ -272,7 +273,7 @@ function TenderRowItem({
               type="button"
               onClick={onSeguir}
               disabled={busy}
-              className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
               title="Copiarla a tus licitaciones (pipeline propio)"
             >
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
@@ -280,8 +281,8 @@ function TenderRowItem({
             </button>
           )}
         </div>
-      </div>
-    </div>
+      </td>
+    </tr>
   );
 }
 
@@ -289,13 +290,14 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [rows, setRows] = useState<GovTenderRow[]>([]);
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState<false | "inc" | "full">(false);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [soloRelevantes, setSoloRelevantes] = useState(true);
   const [tipoFiltro, setTipoFiltro] = useState<string>("all");
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
   // Sweet spot parametrizable en la página; persiste por navegador.
   const [ssMin, setSsMin] = useState(SWEET_DEFAULT.min);
@@ -339,21 +341,31 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refresh() {
-    setRefreshing(true);
+  async function refresh(full = false) {
+    setRefreshing(full ? "full" : "inc");
     setError(null);
     setLastRefresh(null);
-    const r = await refreshGovTenders();
+    setTruncWarn(null);
+    const r = await refreshGovTenders(full);
     setRefreshing(false);
     if ("error" in r) {
       setError(r.error);
       return;
     }
+    const desglose = Object.entries(r.data.porTipo)
+      .map(([k, n]) => `${TIPO_SHORT[k] ?? k} ${n}`)
+      .join(" · ");
     setLastRefresh(
-      `${r.data.total} procesos · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados` +
+      `${r.data.total} procesos (${desglose}) · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados` +
         (r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos traídos` : "") +
         (r.data.pendientesPrecio > 0 ? ` · quedan ~${r.data.pendientesPrecio} sin monto (tocá Actualizar de nuevo)` : ""),
     );
+    if (r.data.truncados.length > 0) {
+      setTruncWarn(
+        `Hay más páginas en PanamaCompra para: ${r.data.truncados.map((k) => TIPO_SHORT[k] ?? k).join(", ")}. ` +
+          `Corré "Escaneo completo" otra vez para seguir trayendo.`,
+      );
+    }
     await load();
   }
 
@@ -389,12 +401,15 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, ssMin, ssMax]);
 
+  // Alcance actual (Relevantes = solo abiertas): base para conteos de chips.
+  const scopeRows = useMemo(
+    () => rows.filter((r) => !soloRelevantes || (r.relevante === true && estaAbierta(r))),
+    [rows, soloRelevantes],
+  );
+
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const list = rows.filter((r) => {
-      if (soloRelevantes && r.relevante !== true) return false;
-      // Relevantes = accionables: las ya cerradas solo se ven en "Todas".
-      if (soloRelevantes && !estaAbierta(r)) return false;
+    const list = scopeRows.filter((r) => {
       if (tipoFiltro !== "all" && r.tipo !== tipoFiltro) return false;
       if (soloSweet && !inSweet(r.precio_ref)) return false;
       if (needle && !`${r.num_proceso} ${r.titulo ?? ""} ${r.entidad ?? ""}`.toLowerCase().includes(needle)) return false;
@@ -411,19 +426,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
       return ra === 2 ? tb - ta : ta - tb;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, q, soloRelevantes, tipoFiltro, soloSweet, ssMin, ssMax]);
-
-  // Prioridad: relevantes que cierran en <5 días (todavía se puede participar).
-  const urgentes = useMemo(
-    () =>
-      shown.filter((r) => {
-        const d = diasParaCierre(r.fecha_cierre);
-        return r.relevante === true && d !== null && d >= 0 && d < 5;
-      }),
-    [shown],
-  );
-  const urgentIds = useMemo(() => new Set(urgentes.map((r) => r.id)), [urgentes]);
-  const resto = useMemo(() => shown.filter((r) => !urgentIds.has(r.id)), [shown, urgentIds]);
+  }, [scopeRows, q, tipoFiltro, soloSweet, ssMin, ssMax]);
 
   return (
     <div className="space-y-4">
@@ -463,16 +466,28 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
               {syncedAt ? <p className="text-[11px] text-slate-400">Actualizado {relTime(syncedAt)} · sync automático diario</p> : null}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={refreshing}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
-            title="Consulta PanamaCompra y guarda — abrir la página usa lo guardado"
-          >
-            {refreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-            {refreshing ? "Consultando…" : "Actualizar"}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => refresh(true)}
+              disabled={!!refreshing}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+              title="Recorre TODAS las páginas de PanamaCompra (tarda más). Usalo si sospechás que falta algo."
+            >
+              {refreshing === "full" ? <Loader2 className="size-3.5 animate-spin" /> : <ScanSearch className="size-3.5" />}
+              Escaneo completo
+            </button>
+            <button
+              type="button"
+              onClick={() => refresh(false)}
+              disabled={!!refreshing}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+              title="Trae lo nuevo de PanamaCompra y guarda — abrir la página usa lo guardado"
+            >
+              {refreshing === "inc" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+              {refreshing ? "Consultando…" : "Actualizar"}
+            </button>
+          </div>
         </header>
 
         <div className="px-4 py-3">
@@ -508,19 +523,22 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
               Todas <span className={cn("tabular-nums", !soloRelevantes ? "text-white/70" : "text-slate-400")}>{rows.length}</span>
             </button>
             <span className="mx-1 h-4 w-px bg-slate-200" />
-            {[{ k: "all", label: "Todos los tipos" }, ...Object.entries(TIPO_LABEL).map(([k, label]) => ({ k, label }))].map((t) => (
-              <button
-                key={t.k}
-                type="button"
-                onClick={() => setTipoFiltro(t.k)}
-                className={cn(
-                  "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-                  tipoFiltro === t.k ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
+            {[{ k: "all", label: "Todos los tipos" }, ...Object.entries(TIPO_LABEL).map(([k, label]) => ({ k, label }))].map((t) => {
+              const n = t.k === "all" ? scopeRows.length : scopeRows.filter((r) => r.tipo === t.k).length;
+              return (
+                <button
+                  key={t.k}
+                  type="button"
+                  onClick={() => setTipoFiltro(t.k)}
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                    tipoFiltro === t.k ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                  )}
+                >
+                  {t.label} <span className={cn("tabular-nums", tipoFiltro === t.k ? "text-white/70" : "text-slate-400")}>{n}</span>
+                </button>
+              );
+            })}
             <span className="mx-1 h-4 w-px bg-slate-200" />
             <button
               type="button"
@@ -545,6 +563,11 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
           {lastRefresh ? (
             <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700 ring-1 ring-inset ring-emerald-600/20">{lastRefresh}</p>
           ) : null}
+          {truncWarn ? (
+            <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {truncWarn}
+            </p>
+          ) : null}
           {error ? (
             <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-inset ring-red-600/20">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {error}
@@ -556,7 +579,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
           <div className="space-y-2 px-4 pb-6 pt-1">
             {[0, 1, 2].map((i) => (
               <div key={i} className="flex animate-pulse items-center gap-3 rounded-xl bg-slate-50 px-3 py-4">
-                <div className="size-9 rounded-xl bg-slate-100" />
+                <div className="size-8 rounded-lg bg-slate-100" />
                 <div className="flex-1 space-y-2">
                   <div className="h-3 w-2/3 rounded bg-slate-100" />
                   <div className="h-3 w-1/3 rounded bg-slate-100" />
@@ -569,8 +592,8 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
             <p className="text-sm text-slate-500">Todavía no trajiste licitaciones de PanamaCompra.</p>
             <button
               type="button"
-              onClick={refresh}
-              disabled={refreshing}
+              onClick={() => refresh(false)}
+              disabled={!!refreshing}
               className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
             >
               {refreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
@@ -578,52 +601,43 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
             </button>
           </div>
         ) : (
-          <div className="pb-2">
-            {urgentes.length > 0 ? (
-              <div className="mx-3 mb-2 rounded-xl border border-red-100 bg-red-50/60">
-                <div className="flex items-center gap-2 px-3 pb-1 pt-2.5">
-                  <AlarmClock className="size-4 text-red-600" />
-                  <p className="text-xs font-bold uppercase tracking-wide text-red-700">
-                    Cierran en menos de 5 días · {urgentes.length}
-                  </p>
-                  <p className="hidden text-[11px] text-red-400 sm:block">todavía estás a tiempo de participar</p>
-                </div>
-                <div className="space-y-1.5 p-2">
-                  {urgentes.map((r) => (
-                    <TenderRowItem
-                      key={r.id}
-                      r={r}
-                      sweet={inSweet(r.precio_ref)}
-                      busy={busy === r.id}
-                      onSeguir={() => seguir(r.id)}
-                      className="rounded-lg bg-white ring-1 ring-red-100"
-                    />
+          <>
+            <p className="px-4 pb-1 text-xs text-slate-400">
+              {shown.length} de {rows.length} procesos
+              {stats.urgentes > 0 && soloRelevantes ? <span className="text-red-500"> · las que cierran en menos de 5 días van arriba</span> : null}
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
+                    <th className="w-12 py-2.5 pl-3 pr-1 font-semibold" aria-label="Rubro" />
+                    <th className="px-2 py-2.5 font-semibold">Proceso</th>
+                    <th className="hidden px-2 py-2.5 font-semibold md:table-cell">Tipo</th>
+                    <th className="px-2 py-2.5 font-semibold">Presentar antes</th>
+                    <th className="px-2 py-2.5 text-right font-semibold">Precio ref.</th>
+                    <th className="w-28 py-2.5 pl-2 pr-3 font-semibold" aria-label="Acciones" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((r) => (
+                    <TenderTr key={r.id} r={r} sweet={inSweet(r.precio_ref)} busy={busy === r.id} onSeguir={() => seguir(r.id)} />
                   ))}
-                </div>
-              </div>
-            ) : null}
-
-            {urgentes.length > 0 && resto.length > 0 ? (
-              <p className="px-5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Demás procesos</p>
-            ) : null}
-            <ul className="divide-y divide-slate-50 px-2">
-              {resto.map((r) => (
-                <li key={r.id} className="rounded-lg transition-colors hover:bg-slate-50/60">
-                  <TenderRowItem r={r} sweet={inSweet(r.precio_ref)} busy={busy === r.id} onSeguir={() => seguir(r.id)} />
-                </li>
-              ))}
-              {shown.length === 0 ? (
-                <li className="px-2 py-6 text-center text-sm text-slate-400">
-                  Nada matchea ese filtro.
-                  {soloRelevantes && rows.length > 0 && stats.relevantes === 0 ? (
-                    <span className="mt-1 block text-xs">
-                      Todavía no hay clasificadas — tocá &ldquo;Actualizar&rdquo; para clasificar con IA, o mirá &ldquo;Todas&rdquo;.
-                    </span>
+                  {shown.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">
+                        Nada matchea ese filtro.
+                        {soloRelevantes && rows.length > 0 && stats.relevantes === 0 ? (
+                          <span className="mt-1 block text-xs">
+                            Todavía no hay clasificadas — tocá &ldquo;Actualizar&rdquo; para clasificar con IA, o mirá &ldquo;Todas&rdquo;.
+                          </span>
+                        ) : null}
+                      </td>
+                    </tr>
                   ) : null}
-                </li>
-              ) : null}
-            </ul>
-          </div>
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>

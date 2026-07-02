@@ -76,7 +76,8 @@ export type PcRegistro = {
 
 // Lista paginada de procesos. idEstado 36 = Vigente · idTipoProceso 7 =
 // Licitación Pública (los valores del tool original). Corta por seguridad
-// en maxPages para no colgar el serverless.
+// en maxPages para no colgar el serverless; `truncado` avisa si el corte fue
+// por tope (quedaban páginas) para poder auditar cobertura.
 export async function pcListProcesos(
   session: PcSession,
   opts: {
@@ -87,9 +88,10 @@ export async function pcListProcesos(
     // Incremental: si una página entera ya es conocida, corta (lo nuevo sale primero).
     shouldStop?: (pageNums: string[]) => boolean;
   },
-): Promise<PcRegistro[]> {
+): Promise<{ registros: PcRegistro[]; truncado: boolean }> {
   const out: PcRegistro[] = [];
   let valorSiguiente = "";
+  let truncado = false;
   const maxPages = opts.maxPages ?? 10;
   for (let page = 0; page < maxPages; page++) {
     const filtro: Record<string, number> = {
@@ -115,9 +117,10 @@ export async function pcListProcesos(
       const nums = regs.map((r) => (r.numProcesoOriginal || r.numProceso || "").trim()).filter(Boolean);
       if (nums.length > 0 && opts.shouldStop(nums)) break;
     }
+    if (page === maxPages - 1) truncado = true; // quedaban páginas después del tope
     valorSiguiente = next;
   }
-  return out;
+  return { registros: out, truncado };
 }
 
 // Detalle del pliego (componentes de página). Devuelve el JSON crudo; el

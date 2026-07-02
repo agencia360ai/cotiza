@@ -62,12 +62,21 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
 }
 
 // "Actualizar": delega al sync compartido (mismo código que el cron diario).
-export async function refreshGovTenders(): Promise<
-  Result<{ total: number; nuevos: number; relevantes: number; conPrecio: number; pendientesPrecio: number }>
+// full=true recorre todas las páginas (auditoría/recuperación de cobertura).
+export async function refreshGovTenders(full?: boolean): Promise<
+  Result<{
+    total: number;
+    nuevos: number;
+    relevantes: number;
+    conPrecio: number;
+    pendientesPrecio: number;
+    porTipo: Record<string, number>;
+    truncados: string[];
+  }>
 > {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const r = await syncGovTenders(c.supabase, c.orgId);
+  const r = await syncGovTenders(c.supabase, c.orgId, full ? { full: true } : undefined);
   if ("error" in r) return { error: r.error };
   revalidatePath("/potenciales");
   return { ok: true, data: r.data };
