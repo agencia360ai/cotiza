@@ -43,18 +43,31 @@ Reglas:
 - Si menciona un cliente de la LISTA DE CLIENTES, usá ese nombre exacto.
 - No inventes condiciones que el usuario no dio (validez default 30 días).`;
 
-export async function generateQuote(brief: string, clientNames: string[]): Promise<GeneratedQuote> {
+export type QuoteImage = { data: string; mime: "image/jpeg" | "image/png" | "image/webp" };
+
+export async function generateQuote(brief: string, clientNames: string[], image?: QuoteImage | null): Promise<GeneratedQuote> {
   const list = clientNames.slice(0, 250).join("\n");
+  const content: Array<
+    | { type: "image"; source: { type: "base64"; media_type: QuoteImage["mime"]; data: string } }
+    | { type: "text"; text: string }
+  > = [];
+  if (image) {
+    content.push({ type: "image", source: { type: "base64", media_type: image.mime, data: image.data } });
+  }
+  content.push({
+    type: "text",
+    text:
+      `LISTA DE CLIENTES:\n${list}\n\nPEDIDO:\n${brief || "(sin texto — usá la foto)"}\n\n` +
+      (image
+        ? "Hay una FOTO adjunta (notas manuscritas, placa de equipo, instalación, cotización previa...): extraé de ahí equipo, alcance, cantidades y precios que se vean. El texto complementa o corrige lo de la foto.\n\n"
+        : "") +
+      "Generá la cotización.",
+  });
   const response = await anthropic.messages.parse({
     model: pickModel("default"),
     max_tokens: 2000,
     system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
-    messages: [
-      {
-        role: "user",
-        content: `LISTA DE CLIENTES:\n${list}\n\nPEDIDO:\n${brief}\n\nGenerá la cotización.`,
-      },
-    ],
+    messages: [{ role: "user", content }],
     output_config: { format: zodOutputFormat(schema) },
   });
   if (!response.parsed_output) throw new Error("La IA no pudo generar la cotización");

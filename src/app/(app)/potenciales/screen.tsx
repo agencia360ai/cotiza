@@ -57,7 +57,7 @@ import {
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
 import { CotizadorDialog } from "./cotizador";
-import { publishQuote } from "./cotizador-actions";
+import { publishQuote, getQuoteLetter, type QuoteLetterBundle } from "./cotizador-actions";
 import { EngineerLinkDialog } from "./engineer-link";
 
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
@@ -204,6 +204,7 @@ function CotizacionesTab({
   const [showDropbox, setShowDropbox] = useState(false);
   const [showCotizador, setShowCotizador] = useState(false);
   const [showEngineerLink, setShowEngineerLink] = useState(false);
+  const [editingLetter, setEditingLetter] = useState<QuoteLetterBundle | null>(null);
 
   // Agrupar revisiones: solo la vigente cuenta; las anteriores van colapsadas.
   const groups = useMemo(() => groupRevisions(quotes), [quotes]);
@@ -579,6 +580,10 @@ function CotizacionesTab({
         <QuoteDrawer
           quote={editing}
           clients={clients}
+          onEditLetter={(b) => {
+            setEditing(null);
+            setEditingLetter(b);
+          }}
           onClose={() => setEditing(null)}
           onSaved={(u) => {
             applyLocal(u);
@@ -642,6 +647,15 @@ function CotizacionesTab({
       ) : null}
 
       {showEngineerLink ? <EngineerLinkDialog onClose={() => setShowEngineerLink(false)} /> : null}
+
+      {editingLetter ? (
+        <CotizadorDialog
+          initial={editingLetter}
+          onClose={() => setEditingLetter(null)}
+          onCreated={(row) => setQuotes((prev) => [row, ...prev])}
+          onUpdated={(row) => setQuotes((prev) => prev.map((x) => (x.id === row.id ? row : x)))}
+        />
+      ) : null}
     </>
   );
 }
@@ -653,6 +667,7 @@ function QuoteDrawer({
   onSaved,
   onDeleted,
   onConvert,
+  onEditLetter,
 }: {
   quote: QuoteRow;
   clients: ClientOpt[];
@@ -660,6 +675,7 @@ function QuoteDrawer({
   onSaved: (q: QuoteRow) => void;
   onDeleted: (id: string) => void;
   onConvert: () => void;
+  onEditLetter?: (b: QuoteLetterBundle) => void;
 }) {
   const [f, setF] = useState<QuoteRow>(quote);
   const [saving, setSaving] = useState(false);
@@ -682,6 +698,18 @@ function QuoteDrawer({
       return;
     }
     onSaved({ ...f, status: "enviada", dropbox_shared_url: r.data.url });
+  }
+
+  async function editarCarta() {
+    setPubBusy(true);
+    setPubErr(null);
+    const r = await getQuoteLetter(quote.id);
+    setPubBusy(false);
+    if ("error" in r) {
+      setPubErr(r.error);
+      return;
+    }
+    onEditLetter?.(r.data);
   }
 
   async function save() {
@@ -727,16 +755,27 @@ function QuoteDrawer({
             <ExternalLink className="size-3.5" /> Ver carta
           </a>
           {f.status === "borrador" ? (
-            <button
-              type="button"
-              onClick={publicar}
-              disabled={pubBusy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-              title="Genera el PDF con membrete y lo sube a la carpeta de cartas en Dropbox"
-            >
-              {pubBusy ? <Loader2 className="size-3.5 animate-spin" /> : <CloudUpload className="size-3.5" />}
-              Publicar PDF a Dropbox
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={editarCarta}
+                disabled={pubBusy}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                title="Abrir la carta en el cotizador para terminarla (renglones, precios, condiciones)"
+              >
+                <Sparkles className="size-3.5" /> Editar carta
+              </button>
+              <button
+                type="button"
+                onClick={publicar}
+                disabled={pubBusy}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                title="Genera el PDF con membrete y lo sube a la carpeta de cartas en Dropbox"
+              >
+                {pubBusy ? <Loader2 className="size-3.5 animate-spin" /> : <CloudUpload className="size-3.5" />}
+                Publicar PDF a Dropbox
+              </button>
+            </>
           ) : null}
           {f.dropbox_shared_url ? (
             <>

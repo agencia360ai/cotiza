@@ -9,13 +9,16 @@ import { getActiveOrgId } from "@/lib/org-context";
 import {
   buildQuoteDraft,
   insertQuote,
+  updateQuoteLetter,
   publishQuote as publishQuoteCore,
   type DraftBundle,
   type SaveQuoteInput,
   type PublishOut,
   type Db,
 } from "@/lib/quotes/store";
-import type { QuoteRow } from "@/lib/pipeline/types";
+import type { QuoteImage } from "@/lib/ai/generate-quote";
+import type { LetterData } from "@/lib/quotes/letter";
+import type { QuoteRow, Rubro } from "@/lib/pipeline/types";
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
@@ -31,15 +34,87 @@ async function ctx() {
 export type CotizadorDraft = DraftBundle;
 export type SaveCotizacionInput = SaveQuoteInput;
 
-export async function generateQuoteDraft(brief: string): Promise<Result<CotizadorDraft>> {
+export async function generateQuoteDraft(brief: string, image?: QuoteImage | null): Promise<Result<CotizadorDraft>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!brief.trim()) return { error: "Contame qué hay que cotizar" };
+  if (!brief.trim() && !image) return { error: "Contame qué hay que cotizar (o subí una foto)" };
   try {
-    return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim()) };
+    return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim(), image ?? null) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
   }
+}
+
+// Carta guardada de una cotización (para que un admin termine un borrador).
+export type QuoteLetterBundle = {
+  id: string;
+  quote_number: string;
+  client_name: string;
+  client_std_name: string | null;
+  rubro: Rubro;
+  descripcion_corta: string;
+  letter: LetterData;
+};
+
+export async function getQuoteLetter(quoteId: string): Promise<Result<QuoteLetterBundle>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  type Row = {
+    id: string;
+    quote_number: string;
+    sent_date: string | null;
+    client_name: string | null;
+    description: string | null;
+    amount_usd: number | null;
+    rubro: Rubro | null;
+    letter: LetterData | null;
+    client: { name: string } | null;
+    location: { name: string } | null;
+  };
+  const run = (cols: string) => c.supabase.from("sales_quotes").select(cols).eq("id", quoteId).eq("org_id", c.orgId).maybeSingle();
+  let res = (await run(
+    "id, quote_number, sent_date, client_name, description, amount_usd, rubro, letter, client:clients(name), location:client_locations(name)",
+  )) as { data: Row | null; error: { message: string } | null };
+  if (res.error) {
+    res = (await run(
+      "id, quote_number, sent_date, client_name, description, amount_usd, rubro, client:clients(name), location:client_locations(name)",
+    )) as { data: Row | null; error: { message: string } | null };
+  }
+  const q = res.data;
+  if (!q) return { error: "Cotización no encontrada" };
+  const letter: LetterData =
+    q.letter ?? {
+      fecha: q.sent_date ?? new Date().toISOString().slice(0, 10),
+      ubicacion: q.location?.name ?? null,
+      tipo: "realizar",
+      items: [{ cant: 1, desc: q.description ?? "", precio: q.amount_usd ?? 0 }],
+      aplica_itbms: false,
+      tasa: 7,
+      validez: 30,
+      condiciones: null,
+      elaborado: null,
+    };
+  return {
+    ok: true,
+    data: {
+      id: q.id,
+      quote_number: q.quote_number,
+      client_name: q.client_name ?? q.client?.name ?? "",
+      client_std_name: q.client?.name ?? null,
+      rubro: q.rubro ?? "DS",
+      descripcion_corta: q.description ?? "",
+      letter,
+    },
+  };
+}
+
+export async function updateGeneratedQuote(quoteId: string, input: SaveCotizacionInput): Promise<Result<QuoteRow>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const r = await updateQuoteLetter(c.supabase, c.orgId, quoteId, input);
+  if ("error" in r) return { error: r.error };
+  revalidatePath("/potenciales");
+  return { ok: true, data: r.row };
 }
 
 export async function saveGeneratedQuote(input: SaveCotizacionInput): Promise<Result<QuoteRow>> {
