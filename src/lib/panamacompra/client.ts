@@ -79,20 +79,21 @@ export type PcRegistro = {
 // en maxPages para no colgar el serverless.
 export async function pcListProcesos(
   session: PcSession,
-  opts: { idEstado: string; idTipoProceso: string; maxPages?: number },
+  opts: { idEstado: string; idTipoProceso: string; enviada?: string; maxPages?: number },
 ): Promise<PcRegistro[]> {
   const out: PcRegistro[] = [];
   let valorSiguiente = "";
   const maxPages = opts.maxPages ?? 10;
   for (let page = 0; page < maxPages; page++) {
+    const filtro: Record<string, number> = {
+      idEstado: Number(opts.idEstado),
+      idTipoProceso: Number(opts.idTipoProceso),
+    };
+    if (opts.enviada !== undefined) filtro.enviada = Number(opts.enviada);
     const res = await fetch(`${BASE}/busqueda/proceso-lista`, {
       method: "POST",
       headers: baseHeaders(session),
-      body: JSON.stringify({
-        registrosPorPagina: 50,
-        valorSiguiente,
-        filtro: { idEstado: Number(opts.idEstado), idTipoProceso: Number(opts.idTipoProceso) },
-      }),
+      body: JSON.stringify({ registrosPorPagina: 50, valorSiguiente, filtro }),
       cache: "no-store",
     });
     if (!res.ok) throw new Error(`PanamaCompra lista ${res.status}`);
