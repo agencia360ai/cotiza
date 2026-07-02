@@ -56,6 +56,7 @@ import {
   updateTender,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
+import { GovTendersBoard } from "./gov-tenders";
 import { CotizadorDialog } from "./cotizador";
 import { publishQuote, getQuoteLetter, createQuoteSharedLink, type QuoteLetterBundle } from "./cotizador-actions";
 import { EngineerLinkDialog } from "./engineer-link";
@@ -1359,6 +1360,7 @@ function LicitacionesTab({
   setTenders: React.Dispatch<React.SetStateAction<TenderRow[]>>;
   clients: ClientOpt[];
 }) {
+  const [vista, setVista] = useState<"mias" | "gobierno">("mias");
   const [estatus, setEstatus] = useState<TenderStatus | "all">("all");
   const [modalidad, setModalidad] = useState<Modalidad | "all">("all");
   const [q, setQ] = useState("");
@@ -1395,8 +1397,33 @@ function LicitacionesTab({
     return { vivas, ganadas, montoGanadas, montoRef };
   }, [filtered]);
 
+  const toggle = (
+    <div className="mb-4 inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white text-sm font-semibold">
+      {([["mias", "Mis licitaciones"], ["gobierno", "Potenciales del gobierno"]] as const).map(([k, label]) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => setVista(k)}
+          className={cn("px-3.5 py-2 transition-colors", vista === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (vista === "gobierno") {
+    return (
+      <>
+        {toggle}
+        <GovTendersBoard />
+      </>
+    );
+  }
+
   return (
     <>
+      {toggle}
       <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Vivas" value={String(kpis.vivas)} sub="presentadas / en revisión" icon={Clock} accent="#2563EB" />
         <Kpi label="Ganadas" value={String(kpis.ganadas)} sub={formatMoney(kpis.montoGanadas)} icon={CheckCircle2} accent="#10B981" />
