@@ -145,14 +145,16 @@ export async function refreshGovTenders(): Promise<Result<{ total: number; nuevo
       .select("id, titulo")
       .eq("org_id", c.orgId)
       .is("relevante", null)
-      .limit(160)) as { data: { id: string; titulo: string | null }[] | null };
+      .limit(600)) as { data: { id: string; titulo: string | null }[] | null };
     const pending = pend ?? [];
     if (pending.length > 0) {
       const updates: { id: string; relevante: boolean; motivo: string | null }[] = [];
       const paraIA: { i: number; titulo: string }[] = [];
       pending.forEach((p, i) => {
         const kws = matchKeywords(p.titulo);
-        if (kws.length > 0) updates.push({ id: p.id, relevante: true, motivo: kws.slice(0, 3).join(", ") });
+        // Fuertes (inequívocos HVAC) → relevante directo. Ambiguos (bomba,
+        // ducto...) o sin match → decide la IA con la taxonomía del tool viejo.
+        if (kws.strong.length > 0) updates.push({ id: p.id, relevante: true, motivo: kws.strong.slice(0, 3).join(", ") });
         else if (p.titulo) paraIA.push({ i, titulo: p.titulo });
         else updates.push({ id: p.id, relevante: false, motivo: null });
       });
