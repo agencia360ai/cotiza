@@ -126,6 +126,36 @@ export async function saveGeneratedQuote(input: SaveCotizacionInput): Promise<Re
   return { ok: true, data: r.row };
 }
 
+// El PDF ya está en Dropbox pero sin link (ej. el scope sharing.write se
+// habilitó después de publicar): crea el link y lo guarda.
+export async function createQuoteSharedLink(quoteId: string): Promise<Result<{ url: string }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { data } = (await c.supabase
+    .from("sales_quotes")
+    .select("dropbox_path")
+    .eq("id", quoteId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { dropbox_path: string | null } | null };
+  if (!data?.dropbox_path) return { error: "Esta cotización no tiene PDF en Dropbox" };
+  try {
+    const { getSharedLink } = await import("@/lib/dropbox/client");
+    const url = await getSharedLink(data.dropbox_path);
+    await c.supabase.from("sales_quotes").update({ dropbox_shared_url: url }).eq("id", quoteId).eq("org_id", c.orgId);
+    revalidatePath("/potenciales");
+    return { ok: true, data: { url } };
+  } catch (e) {
+    return {
+      error:
+        e instanceof Error && /scope|permission/i.test(e.message)
+          ? "Falta el scope sharing.write en la app de Dropbox (tildá el permiso y regenerá el refresh token)."
+          : e instanceof Error
+            ? e.message
+            : "No se pudo crear el link",
+    };
+  }
+}
+
 export async function publishQuote(quoteId: string): Promise<Result<PublishOut>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };

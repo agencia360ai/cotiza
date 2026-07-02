@@ -269,7 +269,7 @@ export function CotizadorDialog({
       return;
     }
     setPub({ state: "ok", result: r.data, error: null });
-    const updated: QuoteRow = { ...savedRow, status: "enviada", dropbox_shared_url: r.data.url };
+    const updated: QuoteRow = { ...savedRow, status: "enviada", dropbox_shared_url: r.data.url, dropbox_path: r.data.path };
     setSavedRow(updated);
     onUpdated?.(updated);
   }
