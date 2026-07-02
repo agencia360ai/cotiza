@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/api/cron/gov-tenders", "schedule": "23 11 * * *" }
+  ]
+}
