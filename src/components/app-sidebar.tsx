@@ -16,7 +16,7 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: "/inicio", label: "Inicio", icon: Home, exact: true },
-  { href: "/potenciales", label: "Potenciales", icon: TrendingUp },
+  { href: "/potenciales", label: "Cotizaciones y Licitaciones", icon: TrendingUp },
   { href: "/proyectos", label: "Proyectos", icon: Hammer },
   {
     href: "/mantenimiento",

@@ -240,10 +240,10 @@ function PotencialesBand({ data }: { data: PipelineData }) {
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Gavel className="size-4 text-slate-400" />
-          <h2 className="text-sm font-semibold text-slate-700">Potenciales · pipeline comercial</h2>
+          <h2 className="text-sm font-semibold text-slate-700">Cotizaciones y Licitaciones · pipeline comercial</h2>
         </div>
         <Link href="/potenciales" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
-          Ver potenciales
+          Ver todas
           <ArrowRight className="size-3.5" />
         </Link>
       </div>
