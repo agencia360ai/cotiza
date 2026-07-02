@@ -1,21 +1,72 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Loader2, AlertTriangle, Building2, TrendingUp, Lock, LockOpen } from "lucide-react";
+import {
+  RefreshCw,
+  Loader2,
+  AlertTriangle,
+  Building2,
+  TrendingUp,
+  Lock,
+  LockOpen,
+  FileSignature,
+  Wrench,
+  Hammer,
+  Package,
+  Briefcase,
+  Check,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectClosed, type QboProjectsResult } from "./qbo-actions";
+import { getQboProjects, setProjectClosed, setProjectProgress, type QboProjectsResult } from "./qbo-actions";
 import type { QboProject } from "@/lib/quickbooks/projects";
 
-const RUBRO_LABEL: Record<string, string> = { DC: "Contratos", DM: "Mantenimiento", DS: "Servicio", DV: "Ventas" };
-const RUBRO_CHIP: Record<string, string> = {
-  DC: "bg-indigo-50 text-indigo-700 ring-indigo-600/20",
-  DM: "bg-sky-50 text-sky-700 ring-sky-600/20",
-  DS: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
-  DV: "bg-amber-50 text-amber-700 ring-amber-600/20",
+// Identidad visual por rubro (misma paleta que el donut del Inicio):
+// DC índigo · DM sky · DS esmeralda · DV ámbar. Ícono + color, nunca solo color.
+type RubroMeta = { label: string; icon: LucideIcon; chip: string; solid: string; tinted: string };
+const RUBRO_META: Record<string, RubroMeta> = {
+  DC: {
+    label: "Contratos",
+    icon: FileSignature,
+    chip: "bg-indigo-50 text-indigo-600",
+    solid: "bg-indigo-600 text-white",
+    tinted: "bg-indigo-50 text-indigo-700 hover:bg-indigo-100",
+  },
+  DM: {
+    label: "Mantenimiento",
+    icon: Wrench,
+    chip: "bg-sky-50 text-sky-600",
+    solid: "bg-sky-600 text-white",
+    tinted: "bg-sky-50 text-sky-700 hover:bg-sky-100",
+  },
+  DS: {
+    label: "Servicio",
+    icon: Hammer,
+    chip: "bg-emerald-50 text-emerald-600",
+    solid: "bg-emerald-600 text-white",
+    tinted: "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+  },
+  DV: {
+    label: "Ventas",
+    icon: Package,
+    chip: "bg-amber-50 text-amber-600",
+    solid: "bg-amber-500 text-white",
+    tinted: "bg-amber-50 text-amber-700 hover:bg-amber-100",
+  },
+};
+const RUBRO_FALLBACK: RubroMeta = {
+  label: "Proyecto",
+  icon: Briefcase,
+  chip: "bg-slate-100 text-slate-500",
+  solid: "bg-slate-900 text-white",
+  tinted: "bg-slate-100 text-slate-600 hover:bg-slate-200",
 };
 
 function bal(n: number): string {
   return "B/. " + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function balCompact(n: number): string {
+  return "B/. " + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 function relTime(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -26,10 +77,10 @@ function relTime(ts: number): string {
   if (h < 24) return `hace ${h} h`;
   return `hace ${Math.round(h / 24)} d`;
 }
-function marginColor(m: number): string {
-  if (m >= 0.4) return "bg-emerald-500";
-  if (m >= 0.2) return "bg-amber-500";
-  return "bg-rose-500";
+function marginTextColor(m: number): string {
+  if (m >= 0.4) return "text-emerald-600";
+  if (m >= 0.2) return "text-amber-600";
+  return "text-rose-600";
 }
 
 export function QboProjectsBoard() {
@@ -37,19 +88,33 @@ export function QboProjectsBoard() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<string>("all");
   const [override, setOverride] = useState<Map<string, boolean>>(new Map());
+  const [progressOv, setProgressOv] = useState<Map<string, number>>(new Map());
+  const [editingProgress, setEditingProgress] = useState<string | null>(null);
+  const [progressError, setProgressError] = useState<string | null>(null);
 
   async function load(force = false) {
     setLoading(true);
     const r = await getQboProjects(force ? { force: true } : undefined);
     setRes(r);
     setOverride(new Map());
+    setProgressOv(new Map());
     setLoading(false);
   }
   const isClosed = (p: QboProject) => (override.has(p.id) ? override.get(p.id)! : p.closed);
+  const progressOf = (p: QboProject) => progressOv.get(p.id) ?? p.progress ?? 0;
   async function toggleClosed(p: QboProject) {
     const next = !isClosed(p);
     setOverride((m) => new Map(m).set(p.id, next));
     await setProjectClosed(p.id, next);
+  }
+  function changeProgress(p: QboProject, v: number) {
+    setProgressOv((m) => new Map(m).set(p.id, v));
+  }
+  async function saveProgress(p: QboProject) {
+    const v = progressOf(p);
+    const r = await setProjectProgress(p.id, v);
+    if (!r.ok) setProgressError(r.error);
+    else setProgressError(null);
   }
   useEffect(() => {
     void load(); // lee de la base: abrir la página NO consulta QBO
@@ -62,6 +127,7 @@ export function QboProjectsBoard() {
     .slice()
     .sort((a, b) => Number(isClosed(a)) - Number(isClosed(b))); // abiertos primero
   const closedCount = projects.filter(isClosed).length;
+  const facturadoVista = shown.reduce((acc, p) => acc + (p.income ?? 0), 0);
 
   return (
     <section className="mb-8 rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -114,22 +180,28 @@ export function QboProjectsBoard() {
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-1.5 px-4 pt-3">
-            {[{ k: "all", label: "Todos" }, ...rubros.map((r) => ({ k: r, label: RUBRO_LABEL[r] ?? r }))].map((t) => (
-              <button
-                key={t.k}
-                type="button"
-                onClick={() => setTab(t.k)}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium",
-                  tab === t.k ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-                )}
-              >
-                {t.label}
-                <span className={cn("ml-1 tabular-nums", tab === t.k ? "text-white/70" : "text-slate-400")}>
-                  {t.k === "all" ? projects.length : projects.filter((p) => p.rubro === t.k).length}
-                </span>
-              </button>
-            ))}
+            {[{ k: "all", label: "Todos" }, ...rubros.map((r) => ({ k: r, label: RUBRO_META[r]?.label ?? r }))].map((t) => {
+              const meta = t.k === "all" ? RUBRO_FALLBACK : (RUBRO_META[t.k] ?? RUBRO_FALLBACK);
+              const active = tab === t.k;
+              return (
+                <button
+                  key={t.k}
+                  type="button"
+                  onClick={() => setTab(t.k)}
+                  className={cn("rounded-full px-3 py-1 text-xs font-semibold transition-colors", active ? meta.solid : meta.tinted)}
+                >
+                  {t.label}
+                  <span className={cn("ml-1 tabular-nums", active ? "text-white/70" : "opacity-60")}>
+                    {t.k === "all" ? projects.length : projects.filter((p) => p.rubro === t.k).length}
+                  </span>
+                </button>
+              );
+            })}
+            {facturadoVista > 0 ? (
+              <span className="ml-auto text-xs text-slate-500">
+                Facturado en vista: <span className="font-bold tabular-nums text-slate-900">{balCompact(facturadoVista)}</span>
+              </span>
+            ) : null}
           </div>
 
           {res?.ok && !res.financialsOk ? (
@@ -137,10 +209,26 @@ export function QboProjectsBoard() {
               Rentabilidad pendiente — no se pudo leer el reporte de QBO todavía. La lista igual está; afinamos el margen al validar el reporte.
             </p>
           ) : null}
+          {progressError ? (
+            <p className="mx-4 mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] text-red-700 ring-1 ring-inset ring-red-600/20">{progressError}</p>
+          ) : null}
 
           <ul className="divide-y divide-slate-50 px-2 py-2">
             {shown.map((p) => (
-              <ProjectRow key={p.id} p={p} closed={isClosed(p)} onToggle={() => toggleClosed(p)} />
+              <ProjectRow
+                key={p.id}
+                p={p}
+                closed={isClosed(p)}
+                progress={progressOf(p)}
+                editing={editingProgress === p.id}
+                onStartEdit={() => setEditingProgress(p.id)}
+                onChangeProgress={(v) => changeProgress(p, v)}
+                onDoneProgress={() => {
+                  setEditingProgress(null);
+                  void saveProgress(p);
+                }}
+                onToggle={() => toggleClosed(p)}
+              />
             ))}
           </ul>
           {closedCount > 0 ? (
@@ -154,44 +242,96 @@ export function QboProjectsBoard() {
   );
 }
 
-function ProjectRow({ p, closed, onToggle }: { p: QboProject; closed: boolean; onToggle: () => void }) {
+function ProjectRow({
+  p,
+  closed,
+  progress,
+  editing,
+  onStartEdit,
+  onChangeProgress,
+  onDoneProgress,
+  onToggle,
+}: {
+  p: QboProject;
+  closed: boolean;
+  progress: number;
+  editing: boolean;
+  onStartEdit: () => void;
+  onChangeProgress: (v: number) => void;
+  onDoneProgress: () => void;
+  onToggle: () => void;
+}) {
+  const meta = (p.rubro && RUBRO_META[p.rubro]) || RUBRO_FALLBACK;
+  const RubroIcon = meta.icon;
   return (
-    <li className={cn("flex items-center gap-3 rounded-lg px-2 py-2.5 hover:bg-slate-50/60", closed && "opacity-60")}>
+    <li className={cn("flex items-center gap-3 rounded-lg px-2 py-3 hover:bg-slate-50/60", closed && "opacity-60")}>
+      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", meta.chip)} title={meta.label}>
+        <RubroIcon className="size-4" />
+      </span>
+
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
-          {p.rubro ? (
-            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset", RUBRO_CHIP[p.rubro] ?? "bg-slate-100 text-slate-600")}>
-              {p.rubro}
-            </span>
-          ) : null}
-          <p className="truncate text-sm font-medium text-slate-900">{p.name}</p>
+          <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
           {closed ? <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">cerrado</span> : null}
         </div>
-        {p.clientName ? (
-          <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">
-            <Building2 className="size-3 text-slate-400" />
-            {p.clientName}
-          </p>
-        ) : null}
+        <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">
+          <Building2 className="size-3 shrink-0 text-slate-400" />
+          {p.clientName || meta.label}
+        </p>
       </div>
 
-      <div className="w-40 shrink-0">
-        {p.margin !== null ? (
-          <>
+      {/* Avance manual — click para actualizar */}
+      <div className="w-28 shrink-0 sm:w-36">
+        {editing ? (
+          <div>
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-900">{Math.round(p.margin * 100)}%</span>
-              <span className="text-[10px] text-slate-400">{closed ? "último" : "margen"}</span>
+              <span className="font-bold tabular-nums text-blue-700">{progress}%</span>
+              <button
+                type="button"
+                onClick={onDoneProgress}
+                className="inline-flex items-center gap-0.5 rounded-md bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-blue-700"
+              >
+                <Check className="size-3" /> Listo
+              </button>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={progress}
+              onChange={(e) => onChangeProgress(Number(e.target.value))}
+              className="mt-1.5 w-full accent-blue-600"
+              aria-label={`Avance de ${p.name}`}
+            />
+          </div>
+        ) : (
+          <button type="button" onClick={onStartEdit} className="group w-full text-left" title="Click para actualizar el avance">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold tabular-nums text-slate-900">{progress}%</span>
+              <span className="text-[10px] text-slate-400 transition-colors group-hover:text-blue-600">avance ✎</span>
             </div>
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-              <div className={cn("h-full rounded-full", marginColor(p.margin))} style={{ width: `${Math.max(4, Math.min(100, p.margin * 100))}%` }} />
+              <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
             </div>
-            <div className="mt-1 flex justify-between text-[10px] tabular-nums text-slate-400">
-              <span>{p.income !== null ? bal(p.income) : "—"}</span>
-              <span>{p.cost !== null ? bal(p.cost) : "—"}</span>
-            </div>
+          </button>
+        )}
+      </div>
+
+      {/* Monto del proyecto — protagonista; el margen queda secundario */}
+      <div className="w-28 shrink-0 text-right sm:w-36">
+        {p.income !== null ? (
+          <>
+            <p className="text-base font-bold tabular-nums tracking-tight text-slate-900 sm:text-lg">{bal(p.income)}</p>
+            <p className="text-[10px] text-slate-400">
+              facturado
+              {p.margin !== null ? (
+                <span className={cn("ml-1.5 font-semibold", marginTextColor(p.margin))}>{Math.round(p.margin * 100)}% margen</span>
+              ) : null}
+            </p>
           </>
         ) : (
-          <p className="text-right text-[11px] text-slate-400">{closed ? "—" : "sin datos de QBO"}</p>
+          <p className="text-[11px] italic text-slate-300">{closed ? "—" : "sin datos de QBO"}</p>
         )}
       </div>
 

@@ -14,6 +14,7 @@ export type QboProject = {
   cost: number | null;
   margin: number | null; // 0..1
   closed: boolean; // marcado cerrado en Reportme → no se re-consulta a QBO
+  progress: number | null; // avance manual 0-100 (lo setea el equipo, no QBO)
 };
 
 // "DC25-02", "DC-2501", "DS25-27" → { rubro, year(20YY) }
@@ -50,6 +51,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         cost: null,
         margin: null,
         closed: false,
+        progress: null,
       };
     });
 

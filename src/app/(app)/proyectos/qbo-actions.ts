@@ -16,27 +16,33 @@ const inflight = new Map<string, Promise<QboProjectsResult>>();
 
 // ── Abrir la página: leer SOLO de la base. Cero llamadas a QBO. ───────────────
 async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<QboProjectsResult> {
-  const { data } = (await supabase
-    .from("qbo_project_state")
-    .select("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at")
-    .eq("org_id", orgId)
-    .eq("year", year)) as {
-    data:
-      | {
-          qb_job_id: string;
-          name: string | null;
-          full_name: string | null;
-          rubro: string | null;
-          year: number | null;
-          client_name: string | null;
-          closed: boolean;
-          income: number | null;
-          cost: number | null;
-          synced_at: string | null;
-        }[]
-      | null;
+  type Row = {
+    qb_job_id: string;
+    name: string | null;
+    full_name: string | null;
+    rubro: string | null;
+    year: number | null;
+    client_name: string | null;
+    closed: boolean;
+    income: number | null;
+    cost: number | null;
+    synced_at: string | null;
+    progress?: number | null;
   };
-  const rows = data ?? [];
+  const run = (cols: string) =>
+    supabase.from("qbo_project_state").select(cols).eq("org_id", orgId).eq("year", year);
+  let res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at, progress")) as {
+    data: Row[] | null;
+    error: { message: string } | null;
+  };
+  if (res.error) {
+    // migración 0012 pendiente: sin columna progress
+    res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at")) as {
+      data: Row[] | null;
+      error: { message: string } | null;
+    };
+  }
+  const rows = res.data ?? [];
   let syncedAt: number | null = null;
   const projects: QboProject[] = rows
     .map((r) => {
@@ -54,6 +60,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
         cost,
         margin: marginOf(income, cost),
         closed: r.closed,
+        progress: r.progress ?? null,
       };
     })
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -64,16 +71,24 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
 async function refresh(supabase: DB, orgId: string, year: number): Promise<QboProjectsResult> {
   const list = await fetchQboProjectsList({ year });
 
-  // Estado guardado (cerrado + financials previos).
-  const { data: stRows } = (await supabase
-    .from("qbo_project_state")
-    .select("qb_job_id, closed, income, cost")
-    .eq("org_id", orgId)) as { data: { qb_job_id: string; closed: boolean; income: number | null; cost: number | null }[] | null };
-  const state = new Map((stRows ?? []).map((r) => [r.qb_job_id, r]));
+  // Estado guardado (cerrado + avance manual + financials previos).
+  type StRow = { qb_job_id: string; closed: boolean; income: number | null; cost: number | null; progress?: number | null };
+  let st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost, progress").eq("org_id", orgId)) as {
+    data: StRow[] | null;
+    error: { message: string } | null;
+  };
+  if (st.error) {
+    st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost").eq("org_id", orgId)) as {
+      data: StRow[] | null;
+      error: { message: string } | null;
+    };
+  }
+  const state = new Map((st.data ?? []).map((r) => [r.qb_job_id, r]));
   for (const p of list) {
     const s = state.get(p.id);
     if (s) {
       p.closed = s.closed;
+      p.progress = s.progress ?? null;
       p.income = s.income === null ? null : Number(s.income);
       p.cost = s.cost === null ? null : Number(s.cost);
       p.margin = marginOf(p.income, p.cost);
@@ -156,5 +171,20 @@ export async function setProjectClosed(qbJobId: string, closed: boolean): Promis
     .from("qbo_project_state")
     .upsert({ org_id: orgId, qb_job_id: qbJobId, closed }, { onConflict: "org_id,qb_job_id" });
   if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+// Avance manual (0-100). Lo pone el equipo; no viene de QBO.
+export async function setProjectProgress(qbJobId: string, progress: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Sesión expirada" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { ok: false, error: "Sin organización" };
+  const p = Math.max(0, Math.min(100, Math.round(progress)));
+  const { error } = await supabase
+    .from("qbo_project_state")
+    .upsert({ org_id: orgId, qb_job_id: qbJobId, progress: p }, { onConflict: "org_id,qb_job_id" });
+  if (error) return { ok: false, error: "Falta la migración 0012 (progress) — corré el SQL y reintentá" };
   return { ok: true };
 }
