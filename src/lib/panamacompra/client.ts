@@ -136,12 +136,26 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
   return res.json().catch(() => null);
 }
 
-// Busca recursivamente un valor numérico cuya clave matchee /precio.*ref/i.
-export function extractPrecioRef(node: unknown, depth = 0): number | null {
+// ── Precio de referencia del proceso ──────────────────────────────────────────
+// El pliego trae DOS niveles de precio: el "precio estimado" del proceso (el
+// total correcto) y un "precio referencia" POR RENGLÓN. Buscar la primera clave
+// que suene a precio devuelve el primer renglón (ej: $90.00 de una bomba en un
+// proceso de B/. 244.70). Orden correcto:
+//   1. (precio|monto)estimado a nivel proceso → ese es el total.
+//   2. Sin estimado: sumar los precio*ref de los renglones (la columna del
+//      pliego suma exactamente el total del proceso).
+//   3. Último recurso: el primer precio*ref suelto.
+
+function parseNum(v: unknown): number | null {
+  const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.]/g, ""));
+  return !Number.isNaN(n) && n > 0 ? n : null;
+}
+
+function findFirstByKey(node: unknown, keyRe: RegExp, depth = 0): number | null {
   if (node == null || depth > 8) return null;
   if (Array.isArray(node)) {
     for (const it of node) {
-      const v = extractPrecioRef(it, depth + 1);
+      const v = findFirstByKey(it, keyRe, depth + 1);
       if (v !== null) return v;
     }
     return null;
@@ -149,15 +163,50 @@ export function extractPrecioRef(node: unknown, depth = 0): number | null {
   if (typeof node === "object") {
     const o = node as Record<string, unknown>;
     for (const [k, v] of Object.entries(o)) {
-      if (/precio.*ref|montoestimado|precioestimado/i.test(k.replace(/[_\s]/g, ""))) {
-        const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.]/g, ""));
-        if (!Number.isNaN(n) && n > 0) return n;
+      if (keyRe.test(k.replace(/[_\s]/g, ""))) {
+        const n = parseNum(v);
+        if (n !== null) return n;
       }
     }
     for (const v of Object.values(o)) {
-      const r = extractPrecioRef(v, depth + 1);
+      const r = findFirstByKey(v, keyRe, depth + 1);
       if (r !== null) return r;
     }
   }
   return null;
+}
+
+const RE_ESTIMADO = /(precio|monto)estimado/i;
+const RE_PRECIO_REF = /precio.*ref/i;
+
+// Primer array cuyos elementos (objetos) traen su propio precio*ref = renglones.
+function findItemsArray(node: unknown, depth = 0): Record<string, unknown>[] | null {
+  if (node == null || depth > 8) return null;
+  if (Array.isArray(node)) {
+    const objs = node.filter((it): it is Record<string, unknown> => !!it && typeof it === "object" && !Array.isArray(it));
+    if (objs.length > 0 && objs.some((it) => findFirstByKey(it, RE_PRECIO_REF, 6) !== null)) return objs;
+    for (const it of node) {
+      const r = findItemsArray(it, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof node === "object") {
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      const r = findItemsArray(v, depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+export function extractPrecioRef(node: unknown): number | null {
+  const estimado = findFirstByKey(node, RE_ESTIMADO);
+  if (estimado !== null) return estimado;
+  const items = findItemsArray(node);
+  if (items) {
+    const sum = items.reduce((acc, it) => acc + (findFirstByKey(it, RE_PRECIO_REF, 6) ?? 0), 0);
+    if (sum > 0) return Math.round(sum * 100) / 100;
+  }
+  return findFirstByKey(node, RE_PRECIO_REF);
 }
