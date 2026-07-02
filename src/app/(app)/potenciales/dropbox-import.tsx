@@ -5,8 +5,9 @@ import { X, Loader2, FolderOpen, RefreshCw, CheckCircle2, AlertTriangle, FileTex
 import { cn } from "@/lib/utils";
 import { formatMoneyExact, type QuoteRow } from "@/lib/pipeline/types";
 import { listDropboxFolder, importDropboxFile, type DropboxFileItem } from "./dropbox-actions";
+import { quotesFolder } from "@/lib/dropbox/folders";
 
-const DEFAULT_FOLDER = "/Dicec/Proyectos/01 Cotizaciones/01 Cartas de Cotizaciones/2026";
+const DEFAULT_FOLDER = quotesFolder();
 
 type RowResult = { name: string; ok: boolean; msg: string };
 

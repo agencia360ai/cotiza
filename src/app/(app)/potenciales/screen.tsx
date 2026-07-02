@@ -96,8 +96,12 @@ type QuoteGroup = { main: QuoteRow; older: QuoteRow[]; dupCount: number };
 
 function parseRev(qn: string): { base: string; rev: number } {
   const s = qn.replace(/\s+/g, " ").trim();
-  const m = s.match(/^(.*?)[\s.-]*(?:rev\.?\s*|r)(\d+(?:\.\d+)?)$/i);
+  let m = s.match(/^(.*?)[\s.-]*(?:rev\.?\s*|r)(\d+(?:\.\d+)?)$/i);
   if (m && m[1].trim().length >= 4) return { base: m[1].trim().toUpperCase(), rev: parseFloat(m[2]) };
+  // "R" / "REV" suelto al final (sin dígitos) = primera revisión. Requiere
+  // separador antes para no comerse palabras que terminan en R (COMPRESOR).
+  m = s.match(/^(.*?)[\s.-]+(?:rev\.?|r)$/i);
+  if (m && m[1].trim().length >= 4) return { base: m[1].trim().toUpperCase(), rev: 1 };
   return { base: s.toUpperCase(), rev: 0 };
 }
 
