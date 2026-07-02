@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { generateQuote, type GeneratedQuote } from "@/lib/ai/generate-quote";
 import { matchClientByName } from "@/lib/clients/match";
+import { hasDropboxConfig, listFolder } from "@/lib/dropbox/client";
+import { quotesFolder } from "@/lib/dropbox/folders";
 import type { LetterData } from "@/lib/quotes/letter";
 import { letterTotals } from "@/lib/quotes/letter";
 import type { QuoteRow } from "@/lib/pipeline/types";
@@ -20,22 +22,38 @@ async function ctx() {
   return { ok: true as const, supabase, orgId };
 }
 
-// Próximo número para el rubro/año: max(NNN de "COT DC 26-NNN") + 1.
-async function nextNumber(supabase: Awaited<ReturnType<typeof createClient>>, orgId: string, rubro: string): Promise<string> {
+// Próximo número de la serie anual (todas las cartas usan "COT DC YY-NNN";
+// el rubro es clasificación aparte). Toma el máximo entre la BD y la carpeta
+// de cartas en Dropbox — la carpeta es la fuente real del correlativo.
+async function nextNumber(supabase: Awaited<ReturnType<typeof createClient>>, orgId: string): Promise<string> {
   const yy = String(new Date().getFullYear()).slice(2);
-  const prefix = `COT ${rubro} ${yy}-`;
+  const re = new RegExp(`COT\\s+[A-Z]{1,3}\\s+${yy}-(\\d+)`, "i");
+  let max = 0;
+
   const { data } = (await supabase
     .from("sales_quotes")
     .select("quote_number")
     .eq("org_id", orgId)
-    .ilike("quote_number", `${prefix}%`)) as { data: { quote_number: string }[] | null };
-  let max = 0;
-  const re = new RegExp(`^COT\\s+${rubro}\\s+${yy}-(\\d+)`, "i");
+    .ilike("quote_number", `%${yy}-%`)) as { data: { quote_number: string }[] | null };
   for (const r of data ?? []) {
     const m = r.quote_number.match(re);
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }
-  return `${prefix}${String(max + 1).padStart(3, "0")}`;
+
+  if (hasDropboxConfig()) {
+    try {
+      const entries = await listFolder(quotesFolder());
+      for (const e of entries) {
+        if (e.tag !== "file") continue;
+        const m = e.name.match(re);
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+      }
+    } catch {
+      /* sin Dropbox accesible: la BD alcanza */
+    }
+  }
+
+  return `COT DC ${yy}-${String(max + 1).padStart(3, "0")}`;
 }
 
 export type CotizadorDraft = {
@@ -55,7 +73,7 @@ export async function generateQuoteDraft(brief: string): Promise<Result<Cotizado
     };
     const generated = await generateQuote(brief.trim(), (clients ?? []).map((r) => r.name));
     const [suggestedNumber, matched] = await Promise.all([
-      nextNumber(c.supabase, c.orgId, generated.rubro),
+      nextNumber(c.supabase, c.orgId),
       matchClientByName(c.supabase, c.orgId, generated.client_name),
     ]);
     return {
