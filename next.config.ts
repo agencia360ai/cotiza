@@ -3,6 +3,10 @@ import type { NextConfig } from "next";
 // Punto E: rutas limpias. Redirige los links viejos /maintenance/* a las nuevas
 // (bookmarks / links compartidos del equipo siguen funcionando).
 const nextConfig: NextConfig = {
+  // Fotos del cotizador (base64) en server actions.
+  experimental: {
+    serverActions: { bodySizeLimit: "8mb" },
+  },
   // El renderer del PDF (pdf-lib) lee el membrete del filesystem en runtime;
   // hay que incluirlo explícitamente en el bundle serverless de esas rutas.
   outputFileTracingIncludes: {

@@ -10,6 +10,7 @@ import {
   type PublishOut,
   type Db,
 } from "@/lib/quotes/store";
+import type { QuoteImage } from "@/lib/ai/generate-quote";
 import type { QuoteRow } from "@/lib/pipeline/types";
 
 type Result<T> = { error: string } | { ok: true; data: T };
@@ -28,12 +29,12 @@ async function orgFromToken(token: string): Promise<{ ok: true; db: Db; orgId: s
   return { ok: true, db: admin, orgId: data.id };
 }
 
-export async function portalGenerate(token: string, brief: string): Promise<Result<DraftBundle>> {
+export async function portalGenerate(token: string, brief: string, image?: QuoteImage | null): Promise<Result<DraftBundle>> {
   const c = await orgFromToken(token);
   if (!c.ok) return { error: c.error };
-  if (!brief.trim()) return { error: "Contame qué hay que cotizar" };
+  if (!brief.trim() && !image) return { error: "Contame qué hay que cotizar (o subí una foto)" };
   try {
-    return { ok: true, data: await buildQuoteDraft(c.db, c.orgId, brief.trim()) };
+    return { ok: true, data: await buildQuoteDraft(c.db, c.orgId, brief.trim(), image ?? null) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
   }

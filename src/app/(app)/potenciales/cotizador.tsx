@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useEffect, useRef } from "react";
 import {
   X,
   Loader2,
@@ -14,22 +15,61 @@ import {
   MessageCircle,
   Mail,
   AlertTriangle,
+  Mic,
+  Camera,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { letterTotals, fmtBal, type LetterData, type LetterItem } from "@/lib/quotes/letter";
-import { generateQuoteDraft, saveGeneratedQuote, publishQuote, type CotizadorDraft, type SaveCotizacionInput } from "./cotizador-actions";
+import {
+  generateQuoteDraft,
+  saveGeneratedQuote,
+  updateGeneratedQuote,
+  publishQuote,
+  type CotizadorDraft,
+  type SaveCotizacionInput,
+  type QuoteLetterBundle,
+} from "./cotizador-actions";
+import type { QuoteImage } from "@/lib/ai/generate-quote";
 import type { PublishOut } from "@/lib/quotes/store";
 import type { QuoteRow } from "@/lib/pipeline/types";
 import { RUBROS, type Rubro } from "@/lib/pipeline/types";
 
 type ApiResult<T> = { error: string } | { ok: true; data: T };
 export type CotizadorApi = {
-  generate: (brief: string) => Promise<ApiResult<CotizadorDraft>>;
+  generate: (brief: string, image?: QuoteImage | null) => Promise<ApiResult<CotizadorDraft>>;
   save: (input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
   publish: (quoteId: string) => Promise<ApiResult<PublishOut>>;
+  update?: (quoteId: string, input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
 };
 
-const APP_API: CotizadorApi = { generate: generateQuoteDraft, save: saveGeneratedQuote, publish: publishQuote };
+const APP_API: CotizadorApi = {
+  generate: generateQuoteDraft,
+  save: saveGeneratedQuote,
+  publish: publishQuote,
+  update: updateGeneratedQuote,
+};
+
+// Foto → JPEG achicado (máx 1600px) para mandarlo a la IA sin pasarse del body.
+async function downscaleImage(file: File, maxDim = 1600): Promise<{ img: QuoteImage; preview: string }> {
+  const url = URL.createObjectURL(file);
+  try {
+    const el = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+    const scale = Math.min(1, maxDim / Math.max(el.width, el.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(el.width * scale));
+    canvas.height = Math.max(1, Math.round(el.height * scale));
+    canvas.getContext("2d")!.drawImage(el, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    return { img: { data: dataUrl.split(",")[1], mime: "image/jpeg" }, preview: dataUrl };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 const inputCls =
   "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none disabled:bg-slate-50";
@@ -45,14 +85,17 @@ export function CotizadorDialog({
   onUpdated,
   api = APP_API,
   embedded = false,
+  initial,
 }: {
   onClose: () => void;
   onCreated: (row: QuoteRow) => void;
   onUpdated?: (row: QuoteRow) => void;
   api?: CotizadorApi;
   embedded?: boolean;
+  // Editar un borrador existente: arranca en review con la carta cargada.
+  initial?: QuoteLetterBundle;
 }) {
-  const [phase, setPhase] = useState<Phase>("brief");
+  const [phase, setPhase] = useState<Phase>(initial ? "review" : "brief");
   const [brief, setBrief] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +117,83 @@ export function CotizadorDialog({
     elaborado: null,
   });
   const [savedRow, setSavedRow] = useState<QuoteRow | null>(null);
+  const [image, setImage] = useState<{ img: QuoteImage; preview: string } | null>(null);
+  const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(true);
+  const recRef = useRef<{ start: () => void; stop: () => void } | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  // Sembrar desde un borrador existente (modo edición).
+  useEffect(() => {
+    if (!initial) return;
+    setNumero(initial.quote_number);
+    setCliente(initial.client_name);
+    setClienteExistente(initial.client_std_name);
+    setRubro(initial.rubro);
+    setDescCorta(initial.descripcion_corta);
+    setLetter(initial.letter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Dictado de voz (mismo patrón que las capturas de reportes: es-PA, continuo).
+  useEffect(() => {
+    type SR = new () => {
+      continuous: boolean;
+      interimResults: boolean;
+      lang: string;
+      onresult: ((e: { resultIndex: number; results: ArrayLike<{ isFinal?: boolean; 0: { transcript: string } }> }) => void) | null;
+      onend: (() => void) | null;
+      onerror: ((e: unknown) => void) | null;
+      start: () => void;
+      stop: () => void;
+    };
+    const win = window as unknown as { SpeechRecognition?: SR; webkitSpeechRecognition?: SR };
+    const Ctor = win.SpeechRecognition ?? win.webkitSpeechRecognition;
+    if (!Ctor) {
+      setVoiceSupported(false);
+      return;
+    }
+    const rec = new Ctor();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = "es-PA";
+    rec.onresult = (e) => {
+      let chunk = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i] as { isFinal?: boolean; 0: { transcript: string } };
+        if (r.isFinal === false) continue;
+        chunk += r[0].transcript;
+      }
+      if (chunk) setBrief((prev) => (prev ? prev + " " : "") + chunk.trim());
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recRef.current = rec;
+    return () => {
+      try {
+        rec.stop();
+      } catch {}
+    };
+  }, []);
+
+  function toggleVoice() {
+    const rec = recRef.current;
+    if (!rec) return;
+    if (listening) rec.stop();
+    else {
+      rec.start();
+      setListening(true);
+    }
+  }
+
+  async function pickPhoto(file: File | null) {
+    if (!file) return;
+    try {
+      setImage(await downscaleImage(file));
+    } catch {
+      setError("No se pudo leer la foto");
+    }
+  }
   const [pub, setPub] = useState<{ state: "idle" | "working" | "ok"; result: PublishOut | null; error: string | null }>({
     state: "idle",
     result: null,
@@ -92,7 +212,7 @@ export function CotizadorDialog({
   async function generar() {
     setPhase("generating");
     setError(null);
-    const r = await api.generate(brief);
+    const r = await api.generate(brief, image?.img ?? null);
     if ("error" in r) {
       setError(r.error);
       setPhase("brief");
@@ -121,19 +241,21 @@ export function CotizadorDialog({
   async function guardar() {
     setPhase("saving");
     setError(null);
-    const r = await api.save({
+    const payload = {
       quote_number: numero,
       client_name: cliente,
       rubro,
       descripcion_corta: descCorta,
       letter,
-    });
+    };
+    const r = initial && api.update ? await api.update(initial.id, payload) : await api.save(payload);
     if ("error" in r) {
       setError(r.error);
       setPhase("review");
       return;
     }
-    onCreated(r.data);
+    if (initial) onUpdated?.(r.data);
+    else onCreated(r.data);
     setSavedRow(r.data);
     setPhase("done");
   }
@@ -194,11 +316,58 @@ export function CotizadorDialog({
                 className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm focus:border-violet-400 focus:outline-none"
                 disabled={phase === "generating"}
               />
+
+              {/* Voz + foto — cotizar on the go */}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {voiceSupported ? (
+                  <button
+                    type="button"
+                    onClick={toggleVoice}
+                    disabled={phase === "generating"}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors",
+                      listening
+                        ? "bg-red-500 text-white ring-4 ring-red-500/20"
+                        : "border border-slate-200 text-slate-700 hover:bg-slate-50",
+                    )}
+                  >
+                    <Mic className="size-4" />
+                    {listening ? "Escuchando… tocá para parar" : "Dictar por voz"}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={phase === "generating"}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Camera className="size-4" />
+                  {image ? "Cambiar foto" : "Foto (notas, placa, equipo)"}
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => void pickPhoto(e.target.files?.[0] ?? null)}
+                />
+              </div>
+              {image ? (
+                <div className="mt-2 flex items-center gap-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={image.preview} alt="Foto adjunta" className="h-16 w-16 rounded-lg object-cover ring-1 ring-slate-200" />
+                  <button type="button" onClick={() => setImage(null)} className="text-xs font-semibold text-red-500 hover:underline">
+                    Quitar foto
+                  </button>
+                </div>
+              ) : null}
+
               {error ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
               <button
                 type="button"
                 onClick={generar}
-                disabled={phase === "generating" || !brief.trim()}
+                disabled={phase === "generating" || (!brief.trim() && !image)}
                 className="mt-3 inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
               >
                 {phase === "generating" ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
@@ -477,32 +646,40 @@ export function CotizadorDialog({
 
         {phase === "review" || phase === "saving" ? (
           <footer className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
-            <button
-              type="button"
-              onClick={() => setPhase("brief")}
-              disabled={phase === "saving"}
-              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-            >
-              <ArrowLeft className="size-4" /> Volver
-            </button>
-            <button
-              type="button"
-              onClick={guardar}
-              disabled={phase === "saving" || letter.items.length === 0 || !numero.trim() || !cliente.trim()}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-            >
-              {phase === "saving" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-              Guardar cotización
-            </button>
+            {!initial ? (
+              <button
+                type="button"
+                onClick={() => setPhase("brief")}
+                disabled={phase === "saving"}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                <ArrowLeft className="size-4" /> Volver
+              </button>
+            ) : (
+              <span className="text-xs text-slate-400">Editando borrador — al guardar sigue como borrador hasta publicar.</span>
+            )}
+            <div className="flex items-center gap-3">
+              {!initial ? (
+                <span className="hidden text-[11px] text-slate-400 sm:block">
+                  Queda como borrador — cualquier admin puede terminarla y publicarla.
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={guardar}
+                disabled={phase === "saving" || letter.items.length === 0 || !numero.trim() || !cliente.trim()}
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {phase === "saving" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                {initial ? "Guardar cambios" : "Guardar borrador"}
+              </button>
+            </div>
           </footer>
         ) : null}
       </div>
   );
 
   if (embedded) return card;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      {card}
-    </div>
-  );
+  // Sin cierre al clickear afuera: solo la X (evita perder una cotización a medias).
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">{card}</div>;
 }

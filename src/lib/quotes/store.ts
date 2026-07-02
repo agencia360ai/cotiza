@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { generateQuote, type GeneratedQuote } from "@/lib/ai/generate-quote";
+import { generateQuote, type GeneratedQuote, type QuoteImage } from "@/lib/ai/generate-quote";
 import { matchClientByName } from "@/lib/clients/match";
 import { hasDropboxConfig, listFolder, uploadFile, getSharedLink } from "@/lib/dropbox/client";
 import { quotesFolder } from "@/lib/dropbox/folders";
@@ -53,11 +53,11 @@ export type DraftBundle = {
   matchedClientName: string | null;
 };
 
-export async function buildQuoteDraft(db: Db, orgId: string, brief: string): Promise<DraftBundle> {
+export async function buildQuoteDraft(db: Db, orgId: string, brief: string, image?: QuoteImage | null): Promise<DraftBundle> {
   const { data: clients } = (await db.from("clients").select("name").eq("org_id", orgId).order("name")) as {
     data: { name: string }[] | null;
   };
-  const generated = await generateQuote(brief, (clients ?? []).map((r) => r.name));
+  const generated = await generateQuote(brief, (clients ?? []).map((r) => r.name), image);
   const [suggestedNumber, matched] = await Promise.all([
     nextQuoteNumber(db, orgId),
     matchClientByName(asMatchDb(db), orgId, generated.client_name),
@@ -151,6 +151,84 @@ export async function insertQuote(db: Db, orgId: string, input: SaveQuoteInput):
       rubro: input.rubro,
       progress: 0,
       follow_up_date: null,
+      rejection_reason: null,
+      converted_project_id: null,
+    },
+  };
+}
+
+// Actualiza una cotización existente (terminar un borrador): campos + carta.
+// No toca el estado; publicar es el paso siguiente.
+export async function updateQuoteLetter(
+  db: Db,
+  orgId: string,
+  quoteId: string,
+  input: SaveQuoteInput,
+): Promise<{ error: string } | { ok: true; row: QuoteRow }> {
+  if (!input.quote_number.trim()) return { error: "Número requerido" };
+  if (input.letter.items.length === 0) return { error: "Agregá al menos un renglón" };
+
+  const { data: cur } = (await db
+    .from("sales_quotes")
+    .select("status, dropbox_shared_url, contact_name, contact_phone, contact_email, notes, follow_up_date")
+    .eq("id", quoteId)
+    .eq("org_id", orgId)
+    .maybeSingle()) as {
+    data: {
+      status: QuoteRow["status"];
+      dropbox_shared_url?: string | null;
+      contact_name: string | null;
+      contact_phone: string | null;
+      contact_email: string | null;
+      notes: string | null;
+      follow_up_date: string | null;
+    } | null;
+  };
+  if (!cur) return { error: "Cotización no encontrada" };
+
+  const { total } = letterTotals(input.letter);
+  const matched = await matchClientByName(asMatchDb(db), orgId, input.client_name);
+  const year = Number(input.letter.fecha.slice(0, 4)) || new Date().getFullYear();
+
+  const patch = {
+    quote_number: input.quote_number.trim().toUpperCase(),
+    year,
+    sent_date: input.letter.fecha,
+    amount_usd: Math.round(total * 100) / 100,
+    client_name: input.client_name,
+    client_id: matched?.id ?? null,
+    description: input.descripcion_corta,
+    rubro: input.rubro,
+  };
+  let upd = await db.from("sales_quotes").update({ ...patch, letter: input.letter }).eq("id", quoteId).eq("org_id", orgId);
+  if (upd.error) upd = await db.from("sales_quotes").update(patch).eq("id", quoteId).eq("org_id", orgId);
+  if (upd.error) return { error: upd.error.message };
+
+  return {
+    ok: true,
+    row: {
+      id: quoteId,
+      quote_number: patch.quote_number,
+      year,
+      sent_date: patch.sent_date,
+      amount_usd: patch.amount_usd,
+      status: cur.status,
+      payment_status: null,
+      invoice_status: null,
+      client_name: patch.client_name,
+      client_id: matched?.id ?? null,
+      client_std_name: matched?.name ?? null,
+      location_id: matched?.location_id ?? null,
+      location_name: matched?.location_name ?? null,
+      dropbox_shared_url: cur.dropbox_shared_url ?? null,
+      contact_name: cur.contact_name,
+      contact_phone: cur.contact_phone,
+      contact_email: cur.contact_email,
+      description: patch.description,
+      notes: cur.notes,
+      rubro: input.rubro,
+      progress: 0,
+      follow_up_date: cur.follow_up_date,
       rejection_reason: null,
       converted_project_id: null,
     },
