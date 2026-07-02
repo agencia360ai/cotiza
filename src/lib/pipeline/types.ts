@@ -229,11 +229,15 @@ export function pipelineDerived(data: PipelineData) {
   return {
     enJuegoMonto,
     enJuegoCount: c.porEstado.enviada.count + licitacionesVivas,
+    // Cotizaciones solas (sin licitaciones) — lo mismo que muestra la página de Cotizaciones.
+    enviadaMonto: c.porEstado.enviada.monto,
+    enviadaCount: c.porEstado.enviada.count,
     aprobadoMonto: c.porEstado.aprobada.monto,
     aprobadoCount: c.porEstado.aprobada.count,
     porCobrar: c.facturacion.porCobrar,
     tasaCierre,
     licitacionesVivas,
+    licitacionesVivasMonto: montoLicitacionesVivas,
     licitacionesGanadas: l.porEstatus.ganada.count,
   };
 }

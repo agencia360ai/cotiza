@@ -59,6 +59,7 @@ import {
 import { DropboxImportDialog } from "./dropbox-import";
 import { GovTendersBoard } from "./gov-tenders";
 import { listGovTenders } from "./gov-actions";
+import { groupRevisions, parseRev } from "@/lib/pipeline/revisions";
 import { CotizadorDialog } from "./cotizador";
 import { publishQuote, getQuoteLetter, createQuoteSharedLink, type QuoteLetterBundle } from "./cotizador-actions";
 import { EngineerLinkDialog } from "./engineer-link";
@@ -96,45 +97,9 @@ function waLink(phone: string | null): string | null {
   return digits ? `https://wa.me/${digits}` : null;
 }
 
-// ── Revisiones: "COT DC 26-020 REV. 2" → base "COT DC 26-020" + rev 2 ─────────
-// La última revisión es la vigente (cuenta en KPIs); las anteriores quedan como
-// historial colapsado. Misma base + misma rev = posible duplicado real.
+// Revisiones: lógica compartida con Inicio (una sola fuente de verdad para que
+// los KPIs de ambas pantallas cuadren). Ver src/lib/pipeline/revisions.ts.
 type QuoteGroup = { main: QuoteRow; older: QuoteRow[]; dupCount: number };
-
-function parseRev(qn: string): { base: string; rev: number } {
-  const s = qn.replace(/\s+/g, " ").trim();
-  let m = s.match(/^(.*?)[\s.-]*(?:rev\.?\s*|r)(\d+(?:\.\d+)?)$/i);
-  if (m && m[1].trim().length >= 4) return { base: m[1].trim().toUpperCase(), rev: parseFloat(m[2]) };
-  // "R" / "REV" suelto al final (sin dígitos) = primera revisión. Requiere
-  // separador antes para no comerse palabras que terminan en R (COMPRESOR).
-  m = s.match(/^(.*?)[\s.-]+(?:rev\.?|r)$/i);
-  if (m && m[1].trim().length >= 4) return { base: m[1].trim().toUpperCase(), rev: 1 };
-  return { base: s.toUpperCase(), rev: 0 };
-}
-
-function groupRevisions(rows: QuoteRow[]): QuoteGroup[] {
-  const byBase = new Map<string, QuoteRow[]>();
-  for (const r of rows) {
-    const { base } = parseRev(r.quote_number);
-    const arr = byBase.get(base) ?? [];
-    arr.push(r);
-    byBase.set(base, arr);
-  }
-  const out: QuoteGroup[] = [];
-  for (const arr of byBase.values()) {
-    const sortedArr = [...arr].sort((a, b) => {
-      const ra = parseRev(a.quote_number).rev;
-      const rb = parseRev(b.quote_number).rev;
-      if (ra !== rb) return rb - ra;
-      return (b.sent_date ?? "").localeCompare(a.sent_date ?? "");
-    });
-    const main = sortedArr[0];
-    const maxRev = parseRev(main.quote_number).rev;
-    const dupCount = sortedArr.filter((r) => parseRev(r.quote_number).rev === maxRev).length - 1;
-    out.push({ main, older: sortedArr.slice(1), dupCount });
-  }
-  return out;
-}
 
 type Tab = "cotizaciones" | "licitaciones";
 
@@ -335,28 +300,30 @@ function CotizacionesTab({
         </button>
         <button
           type="button"
-          onClick={() => setShowCotizador(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700"
-          title="Generar una cotización con IA a partir de una línea"
-        >
-          <Sparkles className="size-4" />
-          <span className="hidden sm:inline">Cotizador IA</span>
-        </button>
-        <button
-          type="button"
           onClick={() => setShowEngineerLink(true)}
           className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-white px-2.5 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50"
           title="Link del cotizador para ingenieros (sin login)"
         >
           <Link2 className="size-4" />
+          <span className="hidden lg:inline">Link ingenieros</span>
         </button>
         <button
           type="button"
           onClick={() => setCreating(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          title="Crear una cotización manualmente (formulario)"
         >
           <Plus className="size-4" />
-          <span className="hidden sm:inline">Nueva</span>
+          <span className="hidden sm:inline">Manual</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowCotizador(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-md shadow-violet-600/25 transition-all hover:from-violet-700 hover:to-indigo-700 hover:shadow-lg"
+          title="Generar una cotización con IA: texto, voz o foto"
+        >
+          <Sparkles className="size-4" />
+          Crear cotización
         </button>
       </div>
 

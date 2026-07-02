@@ -196,3 +196,26 @@ export async function regenerateEngineerLink(): Promise<Result<{ url: string }>>
   if (error) return { error: error.message };
   return { ok: true, data: { url: await portalUrl(token) } };
 }
+
+// Código corto memorizable (/q/dicec en vez de /q/8f3a…): mismo mecanismo, el
+// token pasa a ser el código elegido. Fácil de dictar por WhatsApp/teléfono.
+export async function setEngineerLinkCode(codeRaw: string): Promise<Result<{ url: string }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasAdminCredentials()) return { error: "SUPABASE_SERVICE_ROLE_KEY no está configurada" };
+  const code = codeRaw.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{2,29}$/.test(code)) {
+    return { error: "Usá 3–30 caracteres: letras minúsculas, números o guiones (ej: dicec-cotiza)." };
+  }
+  const admin = createAdminClient() as unknown as Db;
+  const { data: taken } = (await admin
+    .from("organizations")
+    .select("id")
+    .eq("cotizador_token", code)
+    .neq("id", c.orgId)
+    .maybeSingle()) as { data: { id: string } | null };
+  if (taken) return { error: "Ese código ya está en uso, probá otro." };
+  const { error } = await admin.from("organizations").update({ cotizador_token: code }).eq("id", c.orgId);
+  if (error) return { error: error.message };
+  return { ok: true, data: { url: await portalUrl(code) } };
+}

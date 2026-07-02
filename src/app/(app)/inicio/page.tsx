@@ -15,6 +15,7 @@ import { getActiveOrgContext } from "@/lib/org-context";
 import { projectImageUrl, PROJECT_STATUS_COLOR, PROJECT_STATUS_LABEL } from "@/lib/projects/types";
 import { pipelineDerived, formatMoney, type PipelineData } from "@/lib/pipeline/types";
 import { getPipelineData } from "@/lib/pipeline/queries";
+import { groupRevisions } from "@/lib/pipeline/revisions";
 import { getMaintenanceSummary, colorForScore, one, type Maybe } from "@/lib/maintenance/summary";
 import { MonthlyBarChart, RubroDonut, type MonthPoint, type DonutSlice } from "@/components/inicio/charts";
 import { cn } from "@/lib/utils";
@@ -58,7 +59,7 @@ export default async function InicioDashboard() {
   const isProjects = focus === "projects";
   const year = new Date().getFullYear();
 
-  const [{ data: projectsData }, pipeline, maint, { data: quotesYear }] = await Promise.all([
+  const [{ data: projectsData }, pipeline, maint, { data: quotesYear }, { data: qboState }] = await Promise.all([
     supabase
       .from("client_projects")
       .select(
@@ -67,22 +68,27 @@ export default async function InicioDashboard() {
       .eq("org_id", orgId)
       .order("updated_at", { ascending: false })
       .limit(50) as unknown as Promise<{ data: ProjectRow[] | null }>,
-    isProjects ? Promise.resolve<PipelineData | null>(null) : getPipelineData(orgId),
+    isProjects ? Promise.resolve<PipelineData | null>(null) : getPipelineData(orgId, year),
     isProjects ? Promise.resolve(null) : getMaintenanceSummary(orgId),
     supabase
       .from("sales_quotes")
-      .select("sent_date, amount_usd, rubro, status")
+      .select("quote_number, sent_date, amount_usd, rubro, status")
       .eq("org_id", orgId)
       .eq("year", year) as unknown as Promise<{
-      data: { sent_date: string | null; amount_usd: number | null; rubro: string | null; status: string }[] | null;
+      data: { quote_number: string; sent_date: string | null; amount_usd: number | null; rubro: string | null; status: string }[] | null;
+    }>,
+    supabase.from("qbo_project_state").select("closed").eq("org_id", orgId).eq("year", year) as unknown as Promise<{
+      data: { closed: boolean }[] | null;
     }>,
   ]);
   const allProjects = (projectsData ?? []) as ProjectRow[];
 
-  // Series de los charts (borradores fuera: aún no son cotizaciones reales).
+  // Series de los charts: solo revisiones vigentes (misma lógica que la página
+  // de Cotizaciones) y sin borradores (aún no son cotizaciones reales).
+  const vigentesYear = groupRevisions(quotesYear ?? []).map((g) => g.main);
   const months: MonthPoint[] = Array.from({ length: 12 }, (_, m) => ({ month: m, monto: 0, count: 0 }));
   const rubroCount = new Map<string, number>();
-  for (const q of quotesYear ?? []) {
+  for (const q of vigentesYear) {
     if (q.status === "borrador") continue;
     if (q.sent_date) {
       const m = Number(q.sent_date.slice(5, 7)) - 1;
@@ -102,6 +108,10 @@ export default async function InicioDashboard() {
 
   const activeProjects = allProjects.filter((p) => p.status !== "aceptado");
   const inProgress = allProjects.filter((p) => p.status === "en_progreso");
+  // Proyectos totales del año (QBO, abiertos), no solo los del tracking detallado
+  // (que es opcional). Si no hay data de QBO, caemos a los del tracking.
+  const qboOpen = (qboState ?? []).filter((r) => !r.closed).length;
+  const proyectosActivos = qboOpen > 0 ? qboOpen : activeProjects.length;
   const d = pipeline ? pipelineDerived(pipeline) : null;
   const alertas = maint ? maint.globalCounts.atencion + maint.globalCounts.critico : 0;
 
@@ -118,17 +128,21 @@ export default async function InicioDashboard() {
           {d ? (
             <>
               <KpiTile
-                label="En juego"
-                value={formatMoney(d.enJuegoMonto)}
-                sub={`${d.enJuegoCount} enviadas sin cerrar`}
+                label={`En juego · ${year}`}
+                value={formatMoney(d.enviadaMonto)}
+                sub={
+                  d.licitacionesVivasMonto > 0
+                    ? `${d.enviadaCount} enviadas · ${formatMoney(d.licitacionesVivasMonto)} en licitaciones`
+                    : `${d.enviadaCount} enviadas sin cerrar`
+                }
                 icon={Clock}
                 accent="#F59E0B"
                 href="/potenciales"
               />
               <KpiTile
-                label="Aprobado"
+                label={`Aprobado · ${year}`}
                 value={formatMoney(d.aprobadoMonto)}
-                sub={`${d.aprobadoCount} cotizaciones`}
+                sub={`${d.aprobadoCount} cotizaciones vigentes`}
                 icon={CheckCircle2}
                 accent="#10B981"
                 href="/potenciales"
@@ -137,8 +151,8 @@ export default async function InicioDashboard() {
           ) : null}
           <KpiTile
             label="Proyectos activos"
-            value={String(activeProjects.length)}
-            sub={`${inProgress.length} en progreso`}
+            value={String(proyectosActivos)}
+            sub={qboOpen > 0 ? `${inProgress.length} con tracking detallado` : `${inProgress.length} en progreso`}
             icon={Hammer}
             accent="#2563EB"
             href="/proyectos"

@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
+import { groupRevisions } from "./revisions";
 import {
   snapshotPipelineData,
   type PipelineData,
@@ -88,7 +89,13 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["ganada", "no_ganada", "presentada", "en_revision", "por_partir"];
 
-type QuoteAggRow = { status: string; amount_usd: number | null; invoice_status: string | null };
+type QuoteAggRow = {
+  quote_number: string;
+  sent_date: string | null;
+  status: string;
+  amount_usd: number | null;
+  invoice_status: string | null;
+};
 type TenderAggRow = { status: string; amount_ref_usd: number | null; modalidad: string | null };
 
 function emptyByStatus<T extends string>(keys: T[]): Record<T, { count: number; monto: number }> {
@@ -110,17 +117,21 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
 
     const { data: quotes, error: qErr } = (await supabase
       .from("sales_quotes")
-      .select("status, amount_usd, invoice_status")
+      .select("quote_number, sent_date, status, amount_usd, invoice_status")
       .eq("org_id", orgId)
       .eq("year", year)) as { data: QuoteAggRow[] | null; error: { message: string } | null };
     if (qErr) throw new Error(qErr.message);
     if (!quotes || quotes.length === 0) return snapshotPipelineData();
 
+    // Solo la revisión vigente de cada cotización cuenta — misma lógica que la
+    // página de Cotizaciones, para que los números cuadren entre pantallas.
+    const vigentes = groupRevisions(quotes).map((g) => g.main);
+
     const porEstado = emptyByStatus(QUOTE_STATUSES);
     const facturacion = { cobrada: 0, porCobrar: 0, sinEstado: 0 };
     let cTotalCount = 0;
     let cTotalMonto = 0;
-    for (const q of quotes) {
+    for (const q of vigentes) {
       if (q.status === "borrador") continue; // sin PDF publicado: no cuenta
       const monto = Number(q.amount_usd) || 0;
       cTotalCount += 1;
