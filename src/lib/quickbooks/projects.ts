@@ -17,9 +17,12 @@ export type QboProject = {
   progress: number | null; // avance manual 0-100 (lo setea el equipo, no QBO)
 };
 
-// "DC25-02", "DC-2501", "DS25-27" → { rubro, year(20YY) }
+// "DC25-02", "DC-2501", "DC2601", "DS25-27", "DM 26" → { rubro, year(20YY) }.
+// Sin \b final: pegado a más dígitos ("DC-2501") el límite de palabra caía
+// entre dos dígitos y no matcheaba. Los primeros 2 dígitos tras el prefijo
+// (con separador opcional) son el año.
 function parseRubroYear(name: string): { rubro: string; year: number } | null {
-  const m = name.match(/\b(D[CMSV])\s*-?\s*(\d{2})\b/i);
+  const m = name.match(/\b(D[CMSV])\s*-?\s*(\d{2})/i);
   if (!m) return null;
   return { rubro: m[1].toUpperCase(), year: 2000 + Number(m[2]) };
 }
@@ -129,8 +132,12 @@ function parsePnl(result: QboToolResult): { income: number; cost: number } | nul
   const total = (r: PnlRow): number => {
     const cd = r.Summary?.ColData ?? [];
     for (let i = cd.length - 1; i >= 0; i--) {
-      const v = Number((cd[i].value ?? "").replace(/[^0-9.-]/g, ""));
-      if (cd[i].value && !Number.isNaN(v)) return v;
+      const raw = cd[i].value ?? "";
+      if (!raw) continue;
+      // Formato contable "(62.00)" = negativo; el replace pelón perdía el signo.
+      const neg = /^\s*\(.*\)\s*$/.test(raw);
+      const v = Number(raw.replace(/[^0-9.-]/g, ""));
+      if (!Number.isNaN(v)) return neg ? -Math.abs(v) : v;
     }
     return 0;
   };

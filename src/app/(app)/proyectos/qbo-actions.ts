@@ -11,6 +11,14 @@ export type QboProjectsResult =
 
 type DB = Awaited<ReturnType<typeof createClient>>;
 
+// Distingue "la columna todavía no existe" (migración pendiente → fallback OK)
+// de un error real (RLS, conexión), que NO se debe tragar.
+function isMissingColumn(error: { message?: string; code?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42703") return true;
+  return /column .* does not exist|does not exist/i.test(error.message ?? "");
+}
+
 // Dedupe de "Actualizar" concurrentes (un solo pull a QBO a la vez por org).
 const inflight = new Map<string, Promise<QboProjectsResult>>();
 
@@ -33,15 +41,17 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
     supabase.from("qbo_project_state").select(cols).eq("org_id", orgId).eq("year", year);
   let res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at, progress")) as {
     data: Row[] | null;
-    error: { message: string } | null;
+    error: ({ message: string; code?: string }) | null;
   };
-  if (res.error) {
+  if (isMissingColumn(res.error)) {
     // migración 0012 pendiente: sin columna progress
     res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at")) as {
       data: Row[] | null;
-      error: { message: string } | null;
+      error: ({ message: string; code?: string }) | null;
     };
   }
+  // Un error real (RLS/conexión) NO se traga como "no hay proyectos".
+  if (res.error) return { ok: false, error: res.error.message };
   const rows = res.data ?? [];
   let syncedAt: number | null = null;
   const projects: QboProject[] = rows
@@ -75,14 +85,17 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   type StRow = { qb_job_id: string; closed: boolean; income: number | null; cost: number | null; progress?: number | null };
   let st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost, progress").eq("org_id", orgId)) as {
     data: StRow[] | null;
-    error: { message: string } | null;
+    error: ({ message: string; code?: string }) | null;
   };
-  if (st.error) {
+  if (isMissingColumn(st.error)) {
     st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost").eq("org_id", orgId)) as {
       data: StRow[] | null;
-      error: { message: string } | null;
+      error: ({ message: string; code?: string }) | null;
     };
   }
+  // Si el estado no se pudo leer por un error real, abortar antes de pisar los
+  // números congelados de los cerrados con data fresca de QBO.
+  if (st.error) return { ok: false, error: st.error.message };
   const state = new Map((st.data ?? []).map((r) => [r.qb_job_id, r]));
   for (const p of list) {
     const s = state.get(p.id);
@@ -129,7 +142,21 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     cost: p.cost,
     synced_at: nowIso,
   }));
-  if (rows.length) await supabase.from("qbo_project_state").upsert(rows, { onConflict: "org_id,qb_job_id" });
+  if (rows.length) {
+    const { error: upErr } = await supabase.from("qbo_project_state").upsert(rows, { onConflict: "org_id,qb_job_id" });
+    if (upErr) return { ok: false, error: upErr.message };
+
+    // Reconciliar: borrar filas del año que ya NO vinieron de QBO (proyecto
+    // borrado/renombrado) para que no queden huérfanas inflando conteos.
+    // Solo si el pull trajo lista (guarda contra un fetch vacío por error).
+    const ids = rows.map((r) => r.qb_job_id);
+    await supabase
+      .from("qbo_project_state")
+      .delete()
+      .eq("org_id", orgId)
+      .eq("year", year)
+      .not("qb_job_id", "in", `(${ids.map((i) => `"${i}"`).join(",")})`);
+  }
 
   return { ok: true, projects: list.sort((a, b) => a.fullName.localeCompare(b.fullName)), financialsOk, year, syncedAt: Date.now() };
 }

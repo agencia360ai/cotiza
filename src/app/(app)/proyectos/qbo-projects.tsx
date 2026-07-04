@@ -92,10 +92,18 @@ export function QboProjectsBoard() {
   const [editingProgress, setEditingProgress] = useState<string | null>(null);
   const [progressError, setProgressError] = useState<string | null>(null);
 
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   async function load(force = false) {
     setLoading(true);
+    setRefreshError(null);
     const r = await getQboProjects(force ? { force: true } : undefined);
-    setRes(r);
+    // Un "Actualizar" fallido no borra lo que ya está en pantalla: si ya
+    // teníamos proyectos, mantenemos la vista y mostramos el error aparte.
+    if (!r.ok && res?.ok && res.projects.length > 0) {
+      setRefreshError(r.error);
+    } else {
+      setRes(r);
+    }
     setOverride(new Map());
     setProgressOv(new Map());
     setLoading(false);
@@ -152,6 +160,13 @@ export function QboProjectsBoard() {
           Actualizar
         </button>
       </header>
+
+      {refreshError ? (
+        <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span>No se pudo actualizar desde QuickBooks ({refreshError}). Se muestran los últimos datos guardados.</span>
+        </div>
+      ) : null}
 
       {loading && !res ? (
         <p className="px-4 py-10 text-center text-sm text-slate-500">Trayendo proyectos de QuickBooks…</p>
