@@ -3,8 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
-import { syncGovTenders } from "@/lib/panamacompra/sync";
+import { syncGovTenders, TIPO_TO_ID } from "@/lib/panamacompra/sync";
 import { evaluateTender } from "@/lib/panamacompra/evaluate";
+import {
+  hasPanamaCompraConfig,
+  pcLogin,
+  pcPliegoRaw,
+  extractDetalle,
+  extractPrecioRef,
+  type GovDetalle,
+} from "@/lib/panamacompra/client";
 import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
 
 type Result<T> = { error: string } | { ok: true; data: T };
@@ -38,6 +46,7 @@ export type GovTenderRow = {
   relevancia_motivo: string | null;
   converted_tender_id: string | null;
   eval: GovTenderEval | null;
+  detalle: GovDetalle | null;
 };
 
 // Abrir la vista lee SOLO de la base (cero llamadas al gobierno).
@@ -48,8 +57,14 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
   const run = (cols: string) =>
     c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).order("fecha_cierre", { ascending: true, nullsFirst: false });
   let res = (await run(
-    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval",
+    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
   )) as Res;
+  if (isMissingColumn(res.error)) {
+    // migración 0015 pendiente: sin columna detalle
+    res = (await run(
+      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval",
+    )) as Res;
+  }
   if (isMissingColumn(res.error)) {
     // migración 0013 pendiente: sin columna eval
     res = (await run(
@@ -73,6 +88,7 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
       relevante: r.relevante ?? null,
       relevancia_motivo: r.relevancia_motivo ?? null,
       eval: r.eval ?? null,
+      detalle: r.detalle ?? null,
     };
   });
   return { ok: true, data: { rows, syncedAt } };
@@ -105,6 +121,41 @@ export async function evaluateGovTender(govId: string): Promise<Result<{ eval: G
     return { ok: true, data: { eval: ev } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo evaluar" };
+  }
+}
+
+// Detalle completo del pliego bajo demanda (procesos de alto puntaje): renglones,
+// contacto, entidad, forma de pago/entrega — para decidir si podemos licitar.
+// Consulta PanamaCompra y guarda; si de paso encuentra un precio y no había, lo completa.
+export async function enrichGovTender(govId: string): Promise<Result<{ detalle: GovDetalle }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("tipo, precio_ref, raw")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { tipo: string | null; precio_ref: number | null; raw: unknown } | null };
+  if (!g) return { error: "No encontrada" };
+  const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
+  const idFlujos = rw?.idProcesosContratacionFlujos;
+  const idTipo = g.tipo ? TIPO_TO_ID[g.tipo] : undefined;
+  if (!idFlujos || !idTipo) return { error: "Este proceso no tiene pliego consultable." };
+  try {
+    const session = await pcLogin();
+    const pliego = await pcPliegoRaw(session, idTipo, String(idFlujos));
+    if (!pliego) return { error: "PanamaCompra no devolvió el pliego (puede no estar publicado)." };
+    const detalle = extractDetalle(pliego, new Date().toISOString());
+    const precio = g.precio_ref === null ? extractPrecioRef(pliego) : null;
+    const patch: Record<string, unknown> = { detalle };
+    if (precio !== null) patch.precio_ref = precio;
+    const { error } = await c.supabase.from("gov_tenders").update(patch).eq("id", govId).eq("org_id", c.orgId);
+    if (error) return { error: "Falta la migración 0015 (detalle) — corré el SQL y reintentá" };
+    revalidatePath("/potenciales");
+    return { ok: true, data: { detalle } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo traer el detalle" };
   }
 }
 

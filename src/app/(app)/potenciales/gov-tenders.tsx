@@ -13,8 +13,11 @@ import {
   Droplets,
   ExternalLink,
   Fan,
+  FileText,
   Landmark,
   Loader2,
+  Mail,
+  Phone,
   Plus,
   RefreshCw,
   ScanSearch,
@@ -22,6 +25,7 @@ import {
   Snowflake,
   Sparkles,
   Target,
+  User,
   Wind,
   XCircle,
 } from "lucide-react";
@@ -31,7 +35,14 @@ import { formatMoney, formatMoneyExact } from "@/lib/pipeline/types";
 import { norm } from "@/lib/clients/normalize";
 import { tamizScore, BANDA_META, BANDAS_ORDEN, type TamizBanda, type TamizResult } from "@/lib/panamacompra/tamiz";
 import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
-import { listGovTenders, refreshGovTenders, followGovTender, evaluateGovTender, type GovTenderRow } from "./gov-actions";
+import {
+  listGovTenders,
+  refreshGovTenders,
+  followGovTender,
+  evaluateGovTender,
+  enrichGovTender,
+  type GovTenderRow,
+} from "./gov-actions";
 
 function relTime(ts: number): string {
   const m = Math.round((Date.now() - ts) / 60000);
@@ -179,6 +190,137 @@ function MiniKpi({
   );
 }
 
+// Detalle del pliego (renglones + contacto + entidad) para evaluar si podemos
+// licitar. Se muestra en procesos de alto puntaje; se carga bajo demanda.
+function DetallePliego({ r, busy, onCargar }: { r: GovTenderRow; busy: boolean; onCargar: () => void }) {
+  const d = r.detalle;
+  if (!d) {
+    return (
+      <div className="rounded-xl border border-slate-100 bg-white p-3.5">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego · ¿podemos licitar?</p>
+        <p className="mt-2 text-xs text-slate-500">
+          Trae del pliego los renglones que hay que suministrar, el contacto de la unidad de compra y la forma de pago/entrega
+          — lo que necesitás para decidir si participar y armar el precio.
+        </p>
+        <button
+          type="button"
+          onClick={onCargar}
+          disabled={busy}
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FileText className="size-3.5" />}
+          {busy ? "Trayendo del pliego…" : "Cargar detalle del pliego"}
+        </button>
+      </div>
+    );
+  }
+  const cont = d.contacto;
+  const hayContacto = cont.nombre || cont.correo || cont.telefono || cont.cargo;
+  const ent = d.entidad;
+  const hayEntidad = ent.dependencia || ent.unidadCompra || ent.provincia || ent.direccion;
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego</p>
+        <button
+          type="button"
+          onClick={onCargar}
+          disabled={busy}
+          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-slate-100 disabled:opacity-50"
+          title="Volver a traer del pliego"
+        >
+          {busy ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+          Refrescar
+        </button>
+      </div>
+
+      {(d.objeto || d.formaPago || d.formaEntrega) ? (
+        <div className="grid gap-2 sm:grid-cols-3">
+          {d.objeto ? <Campo label="Objeto">{d.objeto}</Campo> : null}
+          {d.formaPago ? <Campo label="Forma de pago">{d.formaPago}</Campo> : null}
+          {d.formaEntrega ? <Campo label="Forma de entrega">{d.formaEntrega}</Campo> : null}
+        </div>
+      ) : null}
+
+      {hayContacto ? (
+        <div className="rounded-lg bg-slate-50 p-2.5">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Contacto de la unidad de compra</p>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-700">
+            {cont.nombre ? (
+              <span className="inline-flex items-center gap-1 font-medium">
+                <User className="size-3.5 text-slate-400" /> {cont.nombre}
+                {cont.cargo ? <span className="font-normal text-slate-400">· {cont.cargo}</span> : null}
+              </span>
+            ) : null}
+            {cont.telefono ? (
+              <a href={`tel:${cont.telefono}`} className="inline-flex items-center gap-1 hover:text-slate-900">
+                <Phone className="size-3.5 text-slate-400" /> {cont.telefono}
+              </a>
+            ) : null}
+            {cont.correo ? (
+              <a href={`mailto:${cont.correo}`} className="inline-flex items-center gap-1 hover:text-slate-900">
+                <Mail className="size-3.5 text-slate-400" /> {cont.correo}
+              </a>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {hayEntidad ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {ent.dependencia ? <Campo label="Dependencia">{ent.dependencia}</Campo> : null}
+          {ent.unidadCompra ? <Campo label="Unidad de compra">{ent.unidadCompra}</Campo> : null}
+          {ent.provincia ? <Campo label="Provincia">{ent.provincia}</Campo> : null}
+          {ent.direccion ? <Campo label="Dirección">{ent.direccion}</Campo> : null}
+        </div>
+      ) : null}
+
+      {d.items.length > 0 ? (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Renglones a suministrar · {d.items.length}
+          </p>
+          <div className="overflow-x-auto rounded-lg ring-1 ring-slate-100">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50 text-left text-[10px] uppercase tracking-wide text-slate-400">
+                  <th className="px-2 py-1.5 font-semibold">Descripción</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">Cant.</th>
+                  <th className="px-2 py-1.5 font-semibold">Unidad</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">Precio ref.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.items.map((it, i) => (
+                  <tr key={i} className="border-b border-slate-50 last:border-0">
+                    <td className="px-2 py-1.5 text-slate-700">{it.descripcion}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">{it.cantidad ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-slate-500">{it.unidad ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">
+                      {it.precioRef !== null ? formatMoneyExact(it.precioRef) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <p className="text-[11px] italic text-slate-400">El pliego no trajo renglones detallados.</p>
+      )}
+    </div>
+  );
+}
+
+function Campo({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="text-xs text-slate-700">{children}</p>
+    </div>
+  );
+}
+
 function CumpleBadge({ v }: { v: "si" | "parcial" | "no" }) {
   if (v === "si")
     return (
@@ -212,9 +354,11 @@ function TenderTr({
   busy,
   expanded,
   evalBusy,
+  enrichBusy,
   onSeguir,
   onToggleExpand,
   onEvaluar,
+  onEnrich,
 }: {
   r: GovTenderRow;
   tamiz: TamizResult;
@@ -222,9 +366,11 @@ function TenderTr({
   busy: boolean;
   expanded: boolean;
   evalBusy: boolean;
+  enrichBusy: boolean;
   onSeguir: () => void;
   onToggleExpand: () => void;
   onEvaluar: () => void;
+  onEnrich: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
   const cerrada = dias !== null && dias < 0;
@@ -495,6 +641,14 @@ function TenderTr({
                 )}
               </div>
             </div>
+
+            {/* Detalle del pliego para procesos de alto puntaje (>60): lo que
+                necesitás para decidir si licitar. */}
+            {tamiz.score > 60 || r.detalle ? (
+              <div className="mt-3">
+                <DetallePliego r={r} busy={enrichBusy} onCargar={onEnrich} />
+              </div>
+            ) : null}
           </td>
         </tr>
       ) : null}
@@ -516,6 +670,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [sort, setSort] = useState<SortState<GovSortKey>>({ key: "score", dir: "desc" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [evalBusy, setEvalBusy] = useState<string | null>(null);
+  const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
@@ -618,6 +773,18 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     }
     setError(null);
     setRows((prev) => prev.map((x) => (x.id === id ? { ...x, eval: r.data.eval } : x)));
+  }
+
+  async function enrich(id: string) {
+    setEnrichBusy(id);
+    const r = await enrichGovTender(id);
+    setEnrichBusy(null);
+    if ("error" in r) {
+      setError(r.error);
+      return;
+    }
+    setError(null);
+    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, detalle: r.data.detalle } : x)));
   }
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
@@ -917,9 +1084,11 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       busy={busy === r.id}
                       expanded={expandedId === r.id}
                       evalBusy={evalBusy === r.id}
+                      enrichBusy={enrichBusy === r.id}
                       onSeguir={() => seguir(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEvaluar={() => evaluar(r.id)}
+                      onEnrich={() => enrich(r.id)}
                     />
                   ))}
                   {shown.length === 0 ? (
