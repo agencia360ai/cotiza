@@ -126,13 +126,19 @@ export async function pcListProcesos(
 // Detalle del pliego (componentes de página). Devuelve el JSON crudo; el
 // precio de referencia se extrae buscando la clave recursivamente (el shape
 // exacto varía por tipo de proceso — patrón adaptativo, se valida en vivo).
+// LANZA en errores transitorios (401 token vencido / 5xx / rate-limit) para no
+// confundirlos con "el pliego no existe"; devuelve null solo en 404/respuesta
+// vacía. Así el backfill reintenta lo transitorio en vez de marcarlo "sin precio".
 export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idFlujos: string): Promise<unknown | null> {
   const res = await fetch(`${BASE}/procesos-configuracion/pagina-componentes/${idTipoProceso}/procesoVistaPliego/${idFlujos}`, {
     method: "GET",
     headers: baseHeaders(session),
     cache: "no-store",
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    if (res.status === 404) return null; // el pliego genuinamente no está
+    throw new Error(`PanamaCompra pliego HTTP ${res.status}`); // transitorio → reintentar
+  }
   return res.json().catch(() => null);
 }
 
@@ -176,8 +182,47 @@ function findFirstByKey(node: unknown, keyRe: RegExp, depth = 0): number | null 
   return null;
 }
 
-const RE_ESTIMADO = /(precio|monto)estimado/i;
+// Todos los valores numéricos cuya clave matchee (recursivo). Para el estimado
+// del proceso tomamos el MÁXIMO: el total del proceso es ≥ el estimado de
+// cualquier renglón, así evitamos devolver el estimado de un solo renglón.
+function findAllByKey(node: unknown, keyRe: RegExp, out: number[] = [], depth = 0): number[] {
+  if (node == null || depth > 8) return out;
+  if (Array.isArray(node)) {
+    for (const it of node) findAllByKey(it, keyRe, out, depth + 1);
+    return out;
+  }
+  if (typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (keyRe.test(k.replace(/[_\s]/g, ""))) {
+        const n = parseNum(v);
+        if (n !== null) out.push(n);
+      }
+      findAllByKey(v, keyRe, out, depth + 1);
+    }
+  }
+  return out;
+}
+
+// Amplio: montoTotalEstimado, valorEstimado, presupuestoEstimado, precioEstimado…
+const RE_ESTIMADO = /(monto|precio|valor|presupuesto).*estimad/i;
 const RE_PRECIO_REF = /precio.*ref/i;
+const RE_PRECIO_REF_TOTAL = /precio.*ref.*(total|reng|linea|item)/i;
+const RE_UNITARIO = /unitari/i;
+
+// precio de referencia de UN renglón: preferí el total del renglón; nunca el
+// unitario suelto (subvaluaría cuando cantidad>1).
+function precioDeRenglon(it: Record<string, unknown>): number | null {
+  const total = findFirstByKey(it, RE_PRECIO_REF_TOTAL, 6);
+  if (total !== null) return total;
+  for (const [k, v] of Object.entries(it)) {
+    const nk = k.replace(/[_\s]/g, "");
+    if (RE_PRECIO_REF.test(nk) && !RE_UNITARIO.test(nk)) {
+      const n = parseNum(v);
+      if (n !== null) return n;
+    }
+  }
+  return null;
+}
 
 // Primer array cuyos elementos (objetos) traen su propio precio*ref = renglones.
 function findItemsArray(node: unknown, depth = 0): Record<string, unknown>[] | null {
@@ -200,14 +245,26 @@ function findItemsArray(node: unknown, depth = 0): Record<string, unknown>[] | n
   return null;
 }
 
+// ¿La descripción del renglón es una fila "TOTAL" resumen (no un ítem real)?
+function esFilaTotal(it: Record<string, unknown>): boolean {
+  for (const [k, v] of Object.entries(it)) {
+    if (/descripcion|nombre|detalle/i.test(k) && typeof v === "string" && /^\s*(sub)?total\b/i.test(v)) return true;
+  }
+  return false;
+}
+
 export function extractPrecioRef(node: unknown): number | null {
-  const estimado = findFirstByKey(node, RE_ESTIMADO);
-  if (estimado !== null) return estimado;
+  // 1) Estimado del proceso = el máximo de los estimados (el total del proceso).
+  const estimados = findAllByKey(node, RE_ESTIMADO);
+  if (estimados.length > 0) return Math.max(...estimados);
+  // 2) Sin estimado: sumar el precio de referencia de cada renglón (excluyendo
+  //    filas TOTAL para no doble-contar, y usando el total del renglón, no el unitario).
   const items = findItemsArray(node);
   if (items) {
-    const sum = items.reduce((acc, it) => acc + (findFirstByKey(it, RE_PRECIO_REF, 6) ?? 0), 0);
+    const sum = items.filter((it) => !esFilaTotal(it)).reduce((acc, it) => acc + (precioDeRenglon(it) ?? 0), 0);
     if (sum > 0) return Math.round(sum * 100) / 100;
   }
+  // 3) Último recurso.
   return findFirstByKey(node, RE_PRECIO_REF);
 }
 

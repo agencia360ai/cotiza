@@ -54,12 +54,15 @@ const TIERS = [
 // Combo del documento: "MANTENIMIENTO A/A" puntúa 85 aunque "aire acondicionado"
 // solo valga 65.
 const MANTENIMIENTO = ["mantenimiento", "preventivo", "correctivo"].map(toRegex);
-const AA_CONTEXT = ["aire acondicionado", "clima", "climatizacion", "a a"].map(toRegex);
+// Sin "a a" (matcheaba frases como "compra a a granel"); los términos reales cubren el caso.
+const AA_CONTEXT = ["aire acondicionado", "acondicionador", "clima", "climatizacion"].map(toRegex);
 
-// Penalización −30 si predomina obra civil o eléctrica.
+// Penalización −30 si predomina obra civil o eléctrica. Sin "techo" (las
+// unidades tipo techo/rooftop son HVAC) ni "electrico" suelto (una acometida
+// eléctrica de un A/A es legítima); nos quedamos con lo inequívocamente civil.
 const CIVIL = [
-  "obra civil", "construccion", "electrico", "electrica", "electricidad", "pintura", "impermeabilizacion",
-  "techo", "plomeria", "viaducto", "pluvial", "alcantarillado",
+  "obra civil", "construccion", "pintura", "impermeabilizacion",
+  "plomeria", "viaducto", "pluvial", "alcantarillado", "sistema electrico", "red electrica", "subestacion",
 ].map((k) => ({ k, re: toRegex(k) }));
 
 export function tamizScore(

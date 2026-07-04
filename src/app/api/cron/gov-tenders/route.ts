@@ -19,9 +19,12 @@ export async function GET(req: Request) {
   const { data: orgs } = (await admin.from("gov_tenders").select("org_id")) as { data: { org_id: string }[] | null };
   const orgIds = Array.from(new Set((orgs ?? []).map((r) => r.org_id)));
 
+  // full=true: escaneo completo diario. El corte incremental asume que lo nuevo
+  // sale primero en PanamaCompra; el escaneo completo garantiza cobertura aunque
+  // ese orden no se cumpla (el interactivo "Actualizar" sigue siendo incremental).
   const results: Record<string, unknown> = {};
   for (const orgId of orgIds) {
-    const r = await syncGovTenders(admin, orgId);
+    const r = await syncGovTenders(admin, orgId, { full: true });
     results[orgId] = "error" in r ? { error: r.error } : r.data;
   }
   return NextResponse.json({ ok: true, orgs: orgIds.length, results });

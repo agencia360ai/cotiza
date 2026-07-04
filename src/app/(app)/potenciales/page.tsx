@@ -4,6 +4,9 @@ import { listQuotes, listTenders } from "@/lib/pipeline/queries";
 import { PotencialesScreen } from "./screen";
 
 export const dynamic = "force-dynamic";
+// Las server actions de esta ruta (Actualizar / Escaneo completo de PanamaCompra,
+// clasificación IA, backfill de precios) pueden tardar; subimos el límite.
+export const maxDuration = 300;
 
 export default async function PotencialesPage() {
   const orgId = (await getActiveOrgId()) ?? "";
