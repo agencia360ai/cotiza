@@ -176,7 +176,14 @@ function CotizacionesTab({
   const [editingLetter, setEditingLetter] = useState<QuoteLetterBundle | null>(null);
 
   // Agrupar revisiones: solo la vigente cuenta; las anteriores van colapsadas.
-  const groups = useMemo(() => groupRevisions(quotes), [quotes]);
+  // Los borradores se agrupan aparte (cada uno su propio grupo) para que un
+  // borrador con nº de revisión no gane como "vigente" y esconda —de la tabla y
+  // de los KPIs— la revisión publicada real que va debajo.
+  const groups = useMemo(() => {
+    const publicadas = quotes.filter((x) => x.status !== "borrador");
+    const borradores = quotes.filter((x) => x.status === "borrador");
+    return [...groupRevisions(publicadas), ...borradores.map((main) => ({ main, older: [], dupCount: 0 }))];
+  }, [quotes]);
 
   const passesFilters = useMemo(() => {
     const needle = q.trim().toLowerCase();

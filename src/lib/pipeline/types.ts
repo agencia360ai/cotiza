@@ -183,6 +183,31 @@ export type PipelineData = {
   };
 };
 
+// Pipeline vacío (org sin cotizaciones en el año). Se usa en vez del snapshot
+// demo para no mostrar cifras fabricadas de DICEC en una org nueva o en un año
+// sin data.
+export function emptyPipelineData(year: number): PipelineData {
+  const cero = () => ({ count: 0, monto: 0 });
+  return {
+    year,
+    live: true,
+    cotizaciones: {
+      total: cero(),
+      porEstado: { borrador: cero(), enviada: cero(), aprobada: cero(), rechazada: cero() },
+      facturacion: { cobrada: 0, porCobrar: 0, sinEstado: 0 },
+    },
+    licitaciones: {
+      total: cero(),
+      porEstatus: { ganada: cero(), no_ganada: cero(), presentada: cero(), en_revision: cero(), por_partir: cero() },
+      porModalidad: {
+        publica: { label: "Licitación Pública", count: 0 },
+        compraMenor: { label: "Compra Menor", count: 0 },
+        contratacionMenor: { label: "Contratación Menor", count: 0 },
+      },
+    },
+  };
+}
+
 export function snapshotPipelineData(): PipelineData {
   return {
     year: PIPELINE_SNAPSHOT.year,

@@ -2,13 +2,21 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { groupRevisions } from "./revisions";
 import {
-  snapshotPipelineData,
+  emptyPipelineData,
   type PipelineData,
   type QuoteRow,
   type QuoteStatus,
   type TenderRow,
   type TenderStatus,
 } from "./types";
+
+// "la columna no existe" (migración pendiente → fallback OK) vs error real
+// (RLS/conexión), que NO se debe degradar a lista vacía en silencio.
+function isMissingColumn(error: { message?: string; code?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42703") return true;
+  return /does not exist|could not find|schema cache/i.test(error.message ?? "");
+}
 
 const QUOTE_JOIN = "client_id, client:clients(name)";
 const LOC_JOIN = "location_id, location:client_locations(name)";
@@ -37,12 +45,14 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
     dropbox_shared_url?: string | null;
     dropbox_path?: string | null;
   };
-  type Res = { data: Raw[] | null; error: { message: string } | null };
+  type Res = { data: Raw[] | null; error: ({ message: string; code?: string }) | null };
   let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url, dropbox_path`)) as Res;
-  if (res.error) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_path`)) as Res; // sin shared_url (0009 pendiente)
-  if (res.error) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res; // sin dropbox_path (0003 pendiente)
-  if (res.error) res = (await run(QUOTE_COLS)) as Res; // sin location (migración 0005 pendiente)
-  if (res.error) res = (await run(QUOTE_COLS_BASE)) as Res; // sin contacto (0002 pendiente)
+  if (isMissingColumn(res.error)) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_path`)) as Res; // sin shared_url (0009 pendiente)
+  if (isMissingColumn(res.error)) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res; // sin dropbox_path (0003 pendiente)
+  if (isMissingColumn(res.error)) res = (await run(QUOTE_COLS)) as Res; // sin location (migración 0005 pendiente)
+  if (isMissingColumn(res.error)) res = (await run(QUOTE_COLS_BASE)) as Res; // sin contacto (0002 pendiente)
+  // Un error real (no de columna faltante) no debe verse como "sin cotizaciones".
+  if (res.error) throw new Error(`No se pudieron cargar las cotizaciones: ${res.error.message}`);
   return (res.data ?? []).map(({ client, location, ...q }) => ({
     ...q,
     client_id: q.client_id ?? null,
@@ -106,12 +116,12 @@ function emptyByStatus<T extends string>(keys: T[]): Record<T, { count: number; 
 }
 
 /**
- * Agregados del pipeline para una org. Lee de `sales_quotes` / `tenders` y, si
- * las tablas están vacías o todavía no existen (Fase C sin aplicar), cae al
- * snapshot del Excel. La UI no cambia: misma forma de datos.
+ * Agregados del pipeline para una org. Lee de `sales_quotes` / `tenders`. Si la
+ * org no tiene cotizaciones en el año, devuelve un pipeline vacío (ceros) — NO
+ * el snapshot demo, para no mostrar cifras fabricadas. Misma forma de datos.
  */
 export async function getPipelineData(orgId: string, year = 2026): Promise<PipelineData> {
-  if (!orgId) return snapshotPipelineData();
+  if (!orgId) return emptyPipelineData(year);
   try {
     const supabase = await createClient();
 
@@ -121,18 +131,19 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
       .eq("org_id", orgId)
       .eq("year", year)) as { data: QuoteAggRow[] | null; error: { message: string } | null };
     if (qErr) throw new Error(qErr.message);
-    if (!quotes || quotes.length === 0) return snapshotPipelineData();
+    if (!quotes || quotes.length === 0) return emptyPipelineData(year);
 
-    // Solo la revisión vigente de cada cotización cuenta — misma lógica que la
-    // página de Cotizaciones, para que los números cuadren entre pantallas.
-    const vigentes = groupRevisions(quotes).map((g) => g.main);
+    // Borradores fuera ANTES de agrupar: un borrador con nº de revisión no debe
+    // ganar como "vigente" y esconder la rev publicada real. Luego, solo la rev
+    // vigente de cada base cuenta — misma lógica que la página de Cotizaciones.
+    const publicadas = quotes.filter((q) => q.status !== "borrador");
+    const vigentes = groupRevisions(publicadas).map((g) => g.main);
 
     const porEstado = emptyByStatus(QUOTE_STATUSES);
     const facturacion = { cobrada: 0, porCobrar: 0, sinEstado: 0 };
     let cTotalCount = 0;
     let cTotalMonto = 0;
     for (const q of vigentes) {
-      if (q.status === "borrador") continue; // sin PDF publicado: no cuenta
       const monto = Number(q.amount_usd) || 0;
       cTotalCount += 1;
       cTotalMonto += monto;
@@ -191,6 +202,8 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
       },
     };
   } catch {
-    return snapshotPipelineData();
+    // Ante un error, ceros (no cifras demo). La UI muestra un tablero vacío,
+    // que es honesto, en vez de datos fabricados.
+    return emptyPipelineData(year);
   }
 }

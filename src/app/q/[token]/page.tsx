@@ -6,8 +6,10 @@ export const dynamic = "force-dynamic";
 export default async function PortalPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
 
+  // El token puede ser el random de 48 hex o un código corto memorizable
+  // (3–30 chars). Sanity check laxo; el match exacto en la base es lo que valida.
   let orgName: string | null = null;
-  if (hasAdminCredentials() && token && token.length >= 16) {
+  if (hasAdminCredentials() && token && token.length >= 3 && token.length <= 64) {
     const admin = createAdminClient();
     const { data } = (await admin.from("organizations").select("name").eq("cotizador_token", token).maybeSingle()) as {
       data: { name: string } | null;
