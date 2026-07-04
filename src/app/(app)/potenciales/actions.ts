@@ -148,6 +148,17 @@ export async function convertQuoteToProject(
   if (!c.ok) return { error: c.error };
   if (!opts.name.trim()) return { error: "Nombre del proyecto requerido" };
 
+  // Chequear ANTES de crear nada: cotización existe y no fue ya convertida.
+  // (Antes se creaba el cliente nuevo primero → cliente huérfano al reconvertir.)
+  const { data: quote } = (await c.supabase
+    .from("sales_quotes")
+    .select("description, converted_project_id")
+    .eq("id", quoteId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { description: string | null; converted_project_id: string | null } | null };
+  if (!quote) return { error: "No se encontró la cotización" };
+  if (quote.converted_project_id) return { error: "Esta cotización ya fue convertida a proyecto" };
+
   // Resolver cliente: existente o crear uno nuevo desde el nombre.
   let clientId = opts.clientId;
   if (!clientId) {
@@ -160,16 +171,6 @@ export async function convertQuoteToProject(
       .single()) as { data: { id: string } | null; error: { message: string } | null };
     if (ce || !nc) return { error: ce?.message ?? "No se pudo crear el cliente" };
     clientId = nc.id;
-  }
-
-  const { data: quote } = (await c.supabase
-    .from("sales_quotes")
-    .select("description, converted_project_id")
-    .eq("id", quoteId)
-    .eq("org_id", c.orgId)
-    .maybeSingle()) as { data: { description: string | null; converted_project_id: string | null } | null };
-  if (quote?.converted_project_id) {
-    return { error: "Esta cotización ya fue convertida a proyecto" };
   }
 
   const { data: project, error: pe } = (await c.supabase
@@ -188,11 +189,18 @@ export async function convertQuoteToProject(
     .single()) as { data: { id: string } | null; error: { message: string } | null };
   if (pe || !project) return { error: pe?.message ?? "No se pudo crear el proyecto" };
 
-  await c.supabase
+  // Backlink: si falla, borrar el proyecto recién creado para no dejar el par
+  // desincronizado (cotización sin vincular → doble conversión al reintentar).
+  const { error: linkErr } = await c.supabase
     .from("sales_quotes")
     .update({ converted_project_id: project.id })
     .eq("id", quoteId)
-    .eq("org_id", c.orgId);
+    .eq("org_id", c.orgId)
+    .is("converted_project_id", null);
+  if (linkErr) {
+    await c.supabase.from("client_projects").delete().eq("id", project.id).eq("org_id", c.orgId);
+    return { error: "No se pudo vincular la cotización al proyecto; reintentá" };
+  }
 
   revalidatePath(REVALIDATE);
   revalidatePath("/proyectos");

@@ -83,13 +83,13 @@ export default async function InicioDashboard() {
   ]);
   const allProjects = (projectsData ?? []) as ProjectRow[];
 
-  // Series de los charts: solo revisiones vigentes (misma lógica que la página
-  // de Cotizaciones) y sin borradores (aún no son cotizaciones reales).
-  const vigentesYear = groupRevisions(quotesYear ?? []).map((g) => g.main);
+  // Series de los charts: borradores fuera ANTES de agrupar (un borrador con nº
+  // de revisión no debe esconder la rev publicada), luego solo la vigente de
+  // cada base — misma lógica que la página de Cotizaciones.
+  const vigentesYear = groupRevisions((quotesYear ?? []).filter((q) => q.status !== "borrador")).map((g) => g.main);
   const months: MonthPoint[] = Array.from({ length: 12 }, (_, m) => ({ month: m, monto: 0, count: 0 }));
   const rubroCount = new Map<string, number>();
   for (const q of vigentesYear) {
-    if (q.status === "borrador") continue;
     if (q.sent_date) {
       const m = Number(q.sent_date.slice(5, 7)) - 1;
       if (m >= 0 && m < 12) {
