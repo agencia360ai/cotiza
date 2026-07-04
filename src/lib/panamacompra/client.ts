@@ -307,3 +307,47 @@ export function extractItems(node: unknown): PliegoItem[] {
     }))
     .filter((i) => i.descripcion.length > 1);
 }
+
+// ── Detalle completo del pliego (para evaluar si podemos licitar) ─────────────
+// Extracción best-effort por patrones de clave (el pliego es un árbol de
+// componentes con nombres etiquetados). Devuelve lo que encuentra; los campos
+// que no matcheen quedan null y la UI los omite.
+export type GovDetalle = {
+  objeto: string | null;
+  descripcion: string | null;
+  modalidadAdjudicacion: string | null;
+  formaEntrega: string | null;
+  formaPago: string | null;
+  provinciaEntrega: string | null;
+  fechaPublicacion: string | null;
+  contacto: { nombre: string | null; cargo: string | null; telefono: string | null; correo: string | null };
+  entidad: { dependencia: string | null; unidadCompra: string | null; provincia: string | null; direccion: string | null };
+  items: PliegoItem[];
+  at: string;
+};
+
+export function extractDetalle(node: unknown, nowIso: string): GovDetalle {
+  return {
+    objeto: findFirstString(node, /objetocontratacion|objetodecontratacion|^objeto/i),
+    descripcion: findFirstString(node, /^descripcion$|descripciongeneral|descripcionproceso/i),
+    modalidadAdjudicacion: findFirstString(node, /modalidadadjudicacion|modalidaddeadjudicacion/i),
+    formaEntrega: findFirstString(node, /formaentrega|formadeentrega/i),
+    formaPago: findFirstString(node, /formapago|formadepago/i),
+    provinciaEntrega: findFirstString(node, /provinciaentrega|provinciadeentrega/i),
+    fechaPublicacion: findFirstString(node, /fechapublicacion|fechadepublicacion/i),
+    contacto: {
+      nombre: findFirstString(node, /nombrecontacto|contactonombre|nombreunidad/i),
+      cargo: findFirstString(node, /^cargo$|cargocontacto/i),
+      telefono: findFirstString(node, /telefono|celular/i),
+      correo: findFirstString(node, /correo|email|^mail/i),
+    },
+    entidad: {
+      dependencia: findFirstString(node, /dependencia/i),
+      unidadCompra: findFirstString(node, /unidadcompra|unidaddecompra/i),
+      provincia: findFirstString(node, /^provincia$/i),
+      direccion: findFirstString(node, /direccion/i),
+    },
+    items: extractItems(node),
+    at: nowIso,
+  };
+}
