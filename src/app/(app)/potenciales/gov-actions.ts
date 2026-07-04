@@ -9,6 +9,12 @@ import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
+function isMissingColumn(error: { message?: string; code?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === "42703") return true;
+  return /does not exist|could not find|schema cache/i.test(error.message ?? "");
+}
+
 async function ctx() {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
@@ -38,25 +44,26 @@ export type GovTenderRow = {
 export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; syncedAt: number | null }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
+  type Res = { data: GovTenderRow[] | null; error: ({ message: string; code?: string }) | null };
   const run = (cols: string) =>
     c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).order("fecha_cierre", { ascending: true, nullsFirst: false });
   let res = (await run(
     "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval",
-  )) as { data: GovTenderRow[] | null; error: { message: string } | null };
-  if (res.error) {
+  )) as Res;
+  if (isMissingColumn(res.error)) {
     // migración 0013 pendiente: sin columna eval
     res = (await run(
       "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id",
-    )) as { data: GovTenderRow[] | null; error: { message: string } | null };
+    )) as Res;
   }
-  if (res.error) {
+  if (isMissingColumn(res.error)) {
     // migración 0011 pendiente: sin columnas de relevancia
-    res = (await run("id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, converted_tender_id")) as {
-      data: GovTenderRow[] | null;
-      error: { message: string } | null;
-    };
+    res = (await run("id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, converted_tender_id")) as Res;
   }
-  if (res.error) return { error: "Falta la migración 0010 (gov_tenders)" };
+  // Error de esquema base → probablemente falta 0010; error real se reporta tal cual.
+  if (res.error) {
+    return { error: isMissingColumn(res.error) ? "Falta la migración 0010 (gov_tenders)" : res.error.message };
+  }
   let syncedAt: number | null = null;
   const rows = (res.data ?? []).map((r) => {
     if (r.seen_at) syncedAt = Math.max(syncedAt ?? 0, +new Date(r.seen_at));
@@ -169,7 +176,20 @@ export async function followGovTender(govId: string): Promise<Result<{ tenderId:
     .single()) as { data: { id: string } | null; error: { message: string } | null };
   if (error || !t) return { error: error?.message ?? "No se pudo crear" };
 
-  await c.supabase.from("gov_tenders").update({ converted_tender_id: t.id }).eq("id", govId).eq("org_id", c.orgId);
+  // Backlink con guarda: solo si sigue sin vincular (evita doble-follow por
+  // dos clicks concurrentes). Si falla o ya lo tomó otro, borrar el tender
+  // recién creado para no dejar duplicados huérfanos.
+  const { data: linked, error: linkErr } = (await c.supabase
+    .from("gov_tenders")
+    .update({ converted_tender_id: t.id })
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .is("converted_tender_id", null)
+    .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
+  if (linkErr || !linked || linked.length === 0) {
+    await c.supabase.from("tenders").delete().eq("id", t.id).eq("org_id", c.orgId);
+    return { error: linkErr ? linkErr.message : "Ya la estás siguiendo" };
+  }
   revalidatePath("/potenciales");
   return { ok: true, data: { tenderId: t.id } };
 }

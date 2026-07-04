@@ -21,6 +21,20 @@ const TIPOS: { idEstado: string; idTipoProceso: string; enviada?: string; key: s
 // tipo guardado → idTipoProceso de la API (lo usan el backfill y la evaluación).
 export const TIPO_TO_ID: Record<string, string> = Object.fromEntries(TIPOS.map((t) => [t.key, t.idTipoProceso]));
 
+// "la columna no existe" (migración pendiente → fallback) vs error real.
+function isMissingColumn(error: { message?: string; code?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === "42703") return true;
+  return /does not exist|could not find|schema cache/i.test(error.message ?? "");
+}
+
+// Fecha del gobierno → ISO, sin romper el sync si viene malformada (poison pill).
+function safeIso(v: unknown): string | null {
+  if (!v) return null;
+  const d = new Date(v as string);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 export type SyncStats = {
   total: number;
   nuevos: number;
@@ -82,7 +96,7 @@ export async function syncGovTenders(
       num_proceso: num,
       titulo: v.r.titulo ?? null,
       entidad: v.r.nombre ?? null,
-      fecha_cierre: v.r.fechaCierre ? new Date(v.r.fechaCierre).toISOString() : null,
+      fecha_cierre: safeIso(v.r.fechaCierre),
       tipo: v.tipo,
       url: `https://www.panamacompra.gob.pa/Inicio/#!/vistaPreviaCP?NumLc=${encodeURIComponent(num)}&esap=1&nnc=0&it=1`,
       raw: v.r as unknown,
@@ -101,6 +115,7 @@ export async function syncGovTenders(
       .select("id, titulo")
       .eq("org_id", orgId)
       .is("relevante", null)
+      .order("fecha_cierre", { ascending: true, nullsFirst: false })
       .limit(600)) as { data: { id: string; titulo: string | null }[] | null };
     const pending = pend ?? [];
     if (pending.length > 0) {
@@ -134,30 +149,50 @@ export async function syncGovTenders(
     //    Los que el gobierno no publica quedan marcados para no reintentarlos.
     let conPrecio = 0;
     let pendientesPrecio = 0;
-    const { data: sinPrecio } = (await db
-      .from("gov_tenders")
-      .select("id, tipo, raw")
-      .eq("org_id", orgId)
-      .is("precio_ref", null)
-      .is("raw->>_precio_checked", null)
-      .or(`fecha_cierre.is.null,fecha_cierre.gte.${nowIso}`)
-      .order("relevante", { ascending: false, nullsFirst: false })
-      .order("fecha_cierre", { ascending: true, nullsFirst: false })
-      .limit(400)) as { data: { id: string; tipo: string | null; raw: unknown }[] | null };
+    // precio_checked: columna (migración 0014). El backfill solo mira lo abierto,
+    // sin precio, no chequeado, y que NO sea explícitamente irrelevante (ahorra
+    // presupuesto). Relevantes y cierres próximos primero.
+    const backfillCols = "id, tipo, raw";
+    const runSinPrecio = (useCol: boolean) => {
+      let qy = db
+        .from("gov_tenders")
+        .select(backfillCols)
+        .eq("org_id", orgId)
+        .is("precio_ref", null)
+        .or("relevante.is.null,relevante.is.true")
+        .or(`fecha_cierre.is.null,fecha_cierre.gte.${nowIso}`);
+      qy = useCol ? qy.eq("precio_checked", false) : qy.is("raw->>_precio_checked", null);
+      return qy
+        .order("relevante", { ascending: false, nullsFirst: false })
+        .order("fecha_cierre", { ascending: true, nullsFirst: false })
+        .limit(400);
+    };
+    let spRes = (await runSinPrecio(true)) as {
+      data: { id: string; tipo: string | null; raw: unknown }[] | null;
+      error: ({ message: string; code?: string }) | null;
+    };
+    if (isMissingColumn(spRes.error)) spRes = (await runSinPrecio(false)) as typeof spRes; // 0014 pendiente
+    const sinPrecio = spRes.data ?? [];
 
     const setPrecio = (id: string, precio: number) =>
       db.from("gov_tenders").update({ precio_ref: precio }).eq("id", id).eq("org_id", orgId);
-    const marcarSinPrecio = (id: string, raw: unknown) =>
-      db
-        .from("gov_tenders")
-        .update({ raw: { ...(raw as Record<string, unknown>), _precio_checked: true } })
-        .eq("id", id)
-        .eq("org_id", orgId);
+    // Marca "el gobierno no publica precio" en la columna (no pisa raw). Fallback
+    // al marcador viejo dentro de raw si la migración 0014 no corrió.
+    const marcarSinPrecio = async (id: string, raw: unknown) => {
+      const { error } = await db.from("gov_tenders").update({ precio_checked: true }).eq("id", id).eq("org_id", orgId);
+      if (isMissingColumn(error)) {
+        await db
+          .from("gov_tenders")
+          .update({ raw: { ...(raw as Record<string, unknown>), _precio_checked: true } })
+          .eq("id", id)
+          .eq("org_id", orgId);
+      }
+    };
 
     // 4a) Del registro ya guardado, sin tocar la API.
     const paraPliego: { id: string; tipo: string | null; raw: unknown }[] = [];
     const locales: { id: string; precio: number }[] = [];
-    for (const p of sinPrecio ?? []) {
+    for (const p of sinPrecio) {
       const local = extractPrecioRef(p.raw);
       if (local !== null) locales.push({ id: p.id, precio: local });
       else paraPliego.push(p);
@@ -187,11 +222,11 @@ export async function syncGovTenders(
               await setPrecio(p.id, precio);
               conPrecio++;
             } else {
-              // El pliego respondió pero no publica precio: no reintentar.
+              // El pliego respondió y no publica precio: no reintentar.
               await marcarSinPrecio(p.id, p.raw);
             }
           } catch {
-            /* error de red: se reintenta en la próxima corrida */
+            /* error de red/auth: se reintenta en la próxima corrida (no se marca) */
           }
         }),
       );
