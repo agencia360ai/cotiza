@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Calendar, Wrench, PackagePlus, ClipboardList, Check, ChevronRight, AlertOctagon } from "lucide-react";
+import { useMemo, useState, useTransition } from "react";
+import { Calendar, Wrench, PackagePlus, ClipboardList, Check, ChevronRight, AlertOctagon, Search, HeartPulse } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   REPORT_TYPE_LABEL,
@@ -11,7 +11,7 @@ import {
 } from "@/lib/maintenance/types";
 import { createInternalReport } from "../actions";
 
-type Client = { id: string; name: string; brand_color: string | null; locations: { id: string; name: string }[] };
+type Client = { id: string; name: string; brand_color: string | null; locations: { id: string; name: string }[]; dmActivo: boolean };
 type Tech = { id: string; name: string };
 
 const TYPE_OPTIONS: { type: ReportType; label: string; hint: string; icon: typeof Calendar }[] = [
@@ -38,6 +38,10 @@ function initials(name: string): string {
 }
 
 export function NewReportWizard({ clients, technicians }: { clients: Client[]; technicians: Tech[] }) {
+  const dmCount = useMemo(() => clients.filter((c) => c.dmActivo).length, [clients]);
+  // Depuración de la lista: por defecto solo los de mantenimiento activo (si hay).
+  const [soloDm, setSoloDm] = useState(dmCount > 0);
+  const [search, setSearch] = useState("");
   const [clientId, setClientId] = useState<string | null>(null);
   const [locationId, setLocationId] = useState<string | null>(null);
   const [reportType, setReportType] = useState<ReportType | null>(null);
@@ -50,6 +54,15 @@ export function NewReportWizard({ clients, technicians }: { clients: Client[]; t
   const selectedClient = clients.find((c) => c.id === clientId);
   const locations = selectedClient?.locations ?? [];
   const canSubmit = clientId && locationId && reportType;
+
+  const shownClients = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return clients.filter((c) => {
+      if (soloDm && !c.dmActivo) return false;
+      if (needle && !c.name.toLowerCase().includes(needle)) return false;
+      return true;
+    });
+  }, [clients, soloDm, search]);
 
   function submit() {
     if (!canSubmit) return;
@@ -88,38 +101,89 @@ export function NewReportWizard({ clients, technicians }: { clients: Client[]; t
     <div className="space-y-8">
       {/* Step 1: client */}
       <Section step={1} title="Cliente" done={!!clientId}>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {clients.map((c) => (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white text-xs font-semibold">
             <button
-              key={c.id}
               type="button"
-              onClick={() => {
-                setClientId(c.id);
-                setLocationId(null);
-              }}
-              className={cn(
-                "flex items-center gap-3 rounded-xl border bg-white px-3 py-3 text-left transition-all",
-                clientId === c.id
-                  ? "border-slate-900 ring-2 ring-slate-900/10"
-                  : "border-slate-200 hover:border-slate-300",
-              )}
+              onClick={() => setSoloDm(true)}
+              className={cn("inline-flex items-center gap-1.5 px-3 py-1.5 transition-colors", soloDm ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")}
+              title="Solo clientes con un mantenimiento programado activo"
             >
-              <div
-                className="flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white"
-                style={{ backgroundColor: c.brand_color ?? "#0EA5E9" }}
-              >
-                {initials(c.name)}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-slate-900">{c.name}</p>
-                <p className="text-xs text-slate-500">
-                  {c.locations.length} sucursal{c.locations.length === 1 ? "" : "es"}
-                </p>
-              </div>
-              {clientId === c.id ? <Check className="size-5 text-emerald-600" /> : null}
+              <HeartPulse className="size-3.5" /> Mantenimiento activo
+              <span className={cn("tabular-nums", soloDm ? "text-white/70" : "text-slate-400")}>{dmCount}</span>
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => setSoloDm(false)}
+              className={cn("px-3 py-1.5 transition-colors", !soloDm ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50")}
+            >
+              Todos <span className={cn("tabular-nums", !soloDm ? "text-white/70" : "text-slate-400")}>{clients.length}</span>
+            </button>
+          </div>
+          <div className="relative min-w-[180px] flex-1">
+            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar cliente…"
+              className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-3 text-sm focus:border-slate-400 focus:outline-none"
+            />
+          </div>
         </div>
+        {shownClients.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">
+            {soloDm ? (
+              <>
+                Ningún cliente con mantenimiento activo matchea.{" "}
+                <button type="button" onClick={() => setSoloDm(false)} className="font-semibold text-blue-600 hover:underline">
+                  Ver todos
+                </button>
+              </>
+            ) : (
+              "Ningún cliente matchea la búsqueda."
+            )}
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {shownClients.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => {
+                  setClientId(c.id);
+                  setLocationId(null);
+                }}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl border bg-white px-3 py-3 text-left transition-all",
+                  clientId === c.id
+                    ? "border-slate-900 ring-2 ring-slate-900/10"
+                    : "border-slate-200 hover:border-slate-300",
+                )}
+              >
+                <div
+                  className="flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white"
+                  style={{ backgroundColor: c.brand_color ?? "#0EA5E9" }}
+                >
+                  {initials(c.name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <p className="truncate text-sm font-semibold text-slate-900">{c.name}</p>
+                    {c.dmActivo ? (
+                      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-bold text-sky-700 ring-1 ring-inset ring-sky-600/20" title="Mantenimiento activo">
+                        <HeartPulse className="size-2.5" /> DM
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {c.locations.length} sucursal{c.locations.length === 1 ? "" : "es"}
+                  </p>
+                </div>
+                {clientId === c.id ? <Check className="size-5 text-emerald-600" /> : null}
+              </button>
+            ))}
+          </div>
+        )}
       </Section>
 
       {/* Step 2: location */}
