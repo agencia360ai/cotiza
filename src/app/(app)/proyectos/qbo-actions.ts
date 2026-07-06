@@ -71,6 +71,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
         id: r.qb_job_id,
         name: r.name ?? r.qb_job_id,
         fullName: r.full_name ?? r.name ?? r.qb_job_id,
+        parentId: null, // no se persiste; solo se usa durante el refresh desde QBO
         rubro: r.rubro,
         year: r.year,
         clientName: r.client_name ?? "",
@@ -128,15 +129,25 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // Financials SOLO de los abiertos.
   let financialsOk = false;
   try {
-    const fin = await fetchProjectFinancials(list.filter((p) => !p.closed).map((p) => p.id));
+    const fin = await fetchProjectFinancials(
+      list.filter((p) => !p.closed).map((p) => ({ id: p.id, parentId: p.parentId })),
+    );
     if (fin.size > 0) {
       financialsOk = true;
       for (const p of list) {
+        if (p.closed) continue; // cerrados: números congelados, no se tocan
         const f = fin.get(p.id);
         if (f) {
           p.income = f.income;
           p.cost = f.cost;
           p.margin = marginOf(f.income, f.cost);
+        } else {
+          // Abierto pero no se pudo aislar su P&L (el gateway devolvió un rollup
+          // del padre/empresa que descartamos) → sin datos, en vez de conservar
+          // un valor viejo contaminado.
+          p.income = null;
+          p.cost = null;
+          p.margin = null;
         }
       }
     }

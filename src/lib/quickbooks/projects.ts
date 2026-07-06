@@ -7,6 +7,7 @@ export type QboProject = {
   id: string;
   name: string; // nombre limpio (hoja, sin "Padre:")
   fullName: string; // displayName completo
+  parentId: string | null; // customer padre en QBO (para detectar rollups)
   rubro: string | null; // DC | DM | DS | DV
   year: number | null;
   clientName: string;
@@ -50,6 +51,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         id: p.id,
         name: leafName(p.fullyQualifiedName, p.displayName),
         fullName: p.displayName,
+        parentId: p.parentId ?? null,
         rubro: ry?.rubro ?? null,
         year: ry?.year ?? null,
         clientName: parent?.displayName ?? "",
@@ -75,9 +77,15 @@ export function marginOf(income: number | null, cost: number | null): number | n
 // QBO calcula el Income vs Cost por project. Lo sacamos con get_profit_and_loss
 // FILTRADO por customer = el project (cada project es un customer). Una llamada
 // por proyecto (chunked); el reporte es el formato estándar de Intuit.
-export async function fetchProjectFinancials(ids: string[]): Promise<Map<string, { income: number; cost: number }>> {
-  const out = new Map<string, { income: number; cost: number }>();
-  if (ids.length === 0) return out;
+type Pnl = { income: number; cost: number };
+const samePnl = (a: Pnl | null, b: Pnl | null) =>
+  !!a && !!b && Math.abs(a.income - b.income) < 0.5 && Math.abs(a.cost - b.cost) < 0.5;
+
+export async function fetchProjectFinancials(
+  projects: { id: string; parentId: string | null }[],
+): Promise<Map<string, Pnl>> {
+  const out = new Map<string, Pnl>();
+  if (projects.length === 0) return out;
   const tools = await listQboTools();
   const tool = tools.find((t) => /profit.*loss|profit_loss|\bp_l\b|pnl/i.test(t.name));
   if (!tool) return out;
@@ -85,51 +93,62 @@ export async function fetchProjectFinancials(ids: string[]): Promise<Map<string,
   const year = new Date().getFullYear();
   const start = `${year}-01-01`;
   const end = new Date().toISOString().slice(0, 10);
+  const pnlBy = async (extra: Record<string, unknown>): Promise<Pnl | null> => {
+    try {
+      return parsePnl(await callQboTool(tool.name, { params: { start_date: start, end_date: end, ...extra } }));
+    } catch {
+      return null;
+    }
+  };
 
-  // Baseline de TODA la empresa (P&L sin filtro por customer). Sirve de guardia:
-  // si el gateway ignora el filtro por customer (nombre de parámetro que no
-  // reconoce), devuelve este mismo reporte company-wide. Un proyecto vacío daría
-  // entonces los totales de la empresa (bug: $657k en un proyecto sin gastos).
-  // Cualquier resultado por-proyecto igual al baseline se descarta.
-  let company: { income: number; cost: number } | null = null;
-  try {
-    company = parsePnl(await callQboTool(tool.name, { params: { start_date: start, end_date: end } }));
-  } catch {
-    /* sin baseline: caemos a modo conservador (solo la 1ª variante) */
+  // Guardias de contaminación. El gateway, cuando NO puede aislar un proyecto
+  // (vacío, o nombre de parámetro que no reconoce), devuelve un rollup mayor:
+  //   - el P&L de TODA la empresa (bug: $657k en un proyecto sin gastos), o
+  //   - el P&L del CLIENTE PADRE agrupando sus sub-proyectos ($3,038 de Cirion).
+  // Precalculamos ambos baselines; cualquier resultado por-proyecto igual a uno
+  // de ellos se descarta. La guardia del padre SOLO aplica si el cliente tiene
+  // >1 proyecto (con un solo proyecto, proyecto==cliente es legítimo).
+  const company = await pnlBy({});
+  const parentCount = new Map<string, number>();
+  for (const p of projects) if (p.parentId) parentCount.set(p.parentId, (parentCount.get(p.parentId) ?? 0) + 1);
+  const guardedParents = Array.from(parentCount.entries()).filter(([, n]) => n > 1).map(([pid]) => pid);
+  const parentPnl = new Map<string, Pnl | null>();
+  for (let i = 0; i < guardedParents.length; i += 3) {
+    await Promise.all(guardedParents.slice(i, i + 3).map(async (pid) => parentPnl.set(pid, await pnlBy({ customer: pid }))));
+    if (i + 3 < guardedParents.length) await new Promise((r) => setTimeout(r, 200));
   }
-  const equalsCompany = (f: { income: number; cost: number }) =>
-    !!company && Math.abs(f.income - company.income) < 0.5 && Math.abs(f.cost - company.cost) < 0.5;
 
-  const one = async (id: string): Promise<void> => {
+  const one = async (p: { id: string; parentId: string | null }): Promise<void> => {
+    const parentTotal = p.parentId ? parentPnl.get(p.parentId) ?? null : null;
     const variants: Record<string, unknown>[] = [
-      { params: { start_date: start, end_date: end, customer: id } },
-      { params: { start_date: start, end_date: end, customer_id: id } },
-      { start_date: start, end_date: end, customer: id },
+      { params: { start_date: start, end_date: end, customer: p.id } },
+      { params: { start_date: start, end_date: end, customer_id: p.id } },
+      { start_date: start, end_date: end, customer: p.id },
     ];
     for (let vi = 0; vi < variants.length; vi++) {
-      let fin: { income: number; cost: number } | null;
+      let fin: Pnl | null;
       try {
         fin = parsePnl(await callQboTool(tool.name, variants[vi]));
       } catch {
         continue; // esta variante falló: probar la siguiente
       }
       if (!fin) continue;
-      // El filtro se ignoró (devolvió el total de la empresa) → NO son de este
-      // proyecto. Descartar y seguir probando otro nombre de parámetro.
-      if (equalsCompany(fin)) continue;
-      // Sin baseline no podemos detectar la contaminación: confiamos solo en la
-      // 1ª variante (customer) para no estampar company-wide desde las demás.
+      // Igual al total de la empresa o del cliente padre → el filtro no aisló
+      // este proyecto. Descartar y probar otra variante.
+      if (samePnl(fin, company) || samePnl(fin, parentTotal)) continue;
+      // Sin baseline de empresa no podemos detectar contaminación company-wide:
+      // confiamos solo en la 1ª variante para no estampar rollups desde las demás.
       if (!company && vi > 0) continue;
       // Resultado filtrado real — incluye {0,0} = proyecto sin actividad (correcto).
-      out.set(id, fin);
+      out.set(p.id, fin);
       return;
     }
   };
 
   // Concurrencia baja para no saturar el server: de a 3, con respiro entre tandas.
-  for (let i = 0; i < ids.length; i += 3) {
-    await Promise.all(ids.slice(i, i + 3).map(one));
-    if (i + 3 < ids.length) await new Promise((r) => setTimeout(r, 250));
+  for (let i = 0; i < projects.length; i += 3) {
+    await Promise.all(projects.slice(i, i + 3).map(one));
+    if (i + 3 < projects.length) await new Promise((r) => setTimeout(r, 250));
   }
   return out;
 }
