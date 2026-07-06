@@ -86,22 +86,43 @@ export async function fetchProjectFinancials(ids: string[]): Promise<Map<string,
   const start = `${year}-01-01`;
   const end = new Date().toISOString().slice(0, 10);
 
+  // Baseline de TODA la empresa (P&L sin filtro por customer). Sirve de guardia:
+  // si el gateway ignora el filtro por customer (nombre de parámetro que no
+  // reconoce), devuelve este mismo reporte company-wide. Un proyecto vacío daría
+  // entonces los totales de la empresa (bug: $657k en un proyecto sin gastos).
+  // Cualquier resultado por-proyecto igual al baseline se descarta.
+  let company: { income: number; cost: number } | null = null;
+  try {
+    company = parsePnl(await callQboTool(tool.name, { params: { start_date: start, end_date: end } }));
+  } catch {
+    /* sin baseline: caemos a modo conservador (solo la 1ª variante) */
+  }
+  const equalsCompany = (f: { income: number; cost: number }) =>
+    !!company && Math.abs(f.income - company.income) < 0.5 && Math.abs(f.cost - company.cost) < 0.5;
+
   const one = async (id: string): Promise<void> => {
     const variants: Record<string, unknown>[] = [
       { params: { start_date: start, end_date: end, customer: id } },
       { params: { start_date: start, end_date: end, customer_id: id } },
       { start_date: start, end_date: end, customer: id },
     ];
-    for (const args of variants) {
+    for (let vi = 0; vi < variants.length; vi++) {
+      let fin: { income: number; cost: number } | null;
       try {
-        const fin = parsePnl(await callQboTool(tool.name, args));
-        if (fin && (fin.income !== 0 || fin.cost !== 0)) {
-          out.set(id, fin);
-          return;
-        }
+        fin = parsePnl(await callQboTool(tool.name, variants[vi]));
       } catch {
-        /* siguiente variante */
+        continue; // esta variante falló: probar la siguiente
       }
+      if (!fin) continue;
+      // El filtro se ignoró (devolvió el total de la empresa) → NO son de este
+      // proyecto. Descartar y seguir probando otro nombre de parámetro.
+      if (equalsCompany(fin)) continue;
+      // Sin baseline no podemos detectar la contaminación: confiamos solo en la
+      // 1ª variante (customer) para no estampar company-wide desde las demás.
+      if (!company && vi > 0) continue;
+      // Resultado filtrado real — incluye {0,0} = proyecto sin actividad (correcto).
+      out.set(id, fin);
+      return;
     }
   };
 
