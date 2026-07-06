@@ -13,9 +13,12 @@ export type QboProject = {
   income: number | null;
   cost: number | null;
   margin: number | null; // 0..1
-  closed: boolean; // marcado cerrado en Reportme → no se re-consulta a QBO
+  closed: boolean; // derivado: status === 'cerrado' → no se re-consulta a QBO
+  status: ProjectBizStatus; // status de negocio editable en Reportme
   progress: number | null; // avance manual 0-100 (lo setea el equipo, no QBO)
 };
+
+export type ProjectBizStatus = "activo" | "por_cobrar" | "cerrado";
 
 // "DC25-02", "DC-2501", "DC2601", "DS25-27", "DM 26" → { rubro, year(20YY) }.
 // Sin \b final: pegado a más dígitos ("DC-2501") el límite de palabra caía
@@ -54,6 +57,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         cost: null,
         margin: null,
         closed: false,
+        status: "activo" as ProjectBizStatus,
         progress: null,
       };
     });

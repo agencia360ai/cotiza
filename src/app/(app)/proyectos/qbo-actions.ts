@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { hasQboConfig } from "@/lib/quickbooks/mcp";
-import { fetchQboProjectsList, fetchProjectFinancials, marginOf, type QboProject } from "@/lib/quickbooks/projects";
+import { fetchQboProjectsList, fetchProjectFinancials, marginOf, type QboProject, type ProjectBizStatus } from "@/lib/quickbooks/projects";
 
 export type QboProjectsResult =
   | { ok: true; projects: QboProject[]; financialsOk: boolean; year: number; syncedAt: number | null }
@@ -36,13 +36,21 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
     cost: number | null;
     synced_at: string | null;
     progress?: number | null;
+    status?: string | null;
   };
   const run = (cols: string) =>
     supabase.from("qbo_project_state").select(cols).eq("org_id", orgId).eq("year", year);
-  let res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at, progress")) as {
+  let res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at, progress, status")) as {
     data: Row[] | null;
     error: ({ message: string; code?: string }) | null;
   };
+  if (isMissingColumn(res.error)) {
+    // migración 0016 pendiente: sin columna status
+    res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at, progress")) as {
+      data: Row[] | null;
+      error: ({ message: string; code?: string }) | null;
+    };
+  }
   if (isMissingColumn(res.error)) {
     // migración 0012 pendiente: sin columna progress
     res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at")) as {
@@ -70,6 +78,8 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
         cost,
         margin: marginOf(income, cost),
         closed: r.closed,
+        // status derivado si la migración 0016 aún no corrió.
+        status: (r.status ?? (r.closed ? "cerrado" : "activo")) as ProjectBizStatus,
         progress: r.progress ?? null,
       };
     })
@@ -81,12 +91,18 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
 async function refresh(supabase: DB, orgId: string, year: number): Promise<QboProjectsResult> {
   const list = await fetchQboProjectsList({ year });
 
-  // Estado guardado (cerrado + avance manual + financials previos).
-  type StRow = { qb_job_id: string; closed: boolean; income: number | null; cost: number | null; progress?: number | null };
-  let st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost, progress").eq("org_id", orgId)) as {
+  // Estado guardado (cerrado + status + avance manual + financials previos).
+  type StRow = { qb_job_id: string; closed: boolean; income: number | null; cost: number | null; progress?: number | null; status?: string | null };
+  let st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost, progress, status").eq("org_id", orgId)) as {
     data: StRow[] | null;
     error: ({ message: string; code?: string }) | null;
   };
+  if (isMissingColumn(st.error)) {
+    st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost, progress").eq("org_id", orgId)) as {
+      data: StRow[] | null;
+      error: ({ message: string; code?: string }) | null;
+    };
+  }
   if (isMissingColumn(st.error)) {
     st = (await supabase.from("qbo_project_state").select("qb_job_id, closed, income, cost").eq("org_id", orgId)) as {
       data: StRow[] | null;
@@ -101,6 +117,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     const s = state.get(p.id);
     if (s) {
       p.closed = s.closed;
+      p.status = (s.status ?? (s.closed ? "cerrado" : "activo")) as ProjectBizStatus;
       p.progress = s.progress ?? null;
       p.income = s.income === null ? null : Number(s.income);
       p.cost = s.cost === null ? null : Number(s.cost);
@@ -187,16 +204,29 @@ export async function getQboProjects(opts?: { force?: boolean }): Promise<QboPro
   return p;
 }
 
-// Marcar un proyecto cerrado/abierto. Cerrado = no se re-consulta a QBO.
-export async function setProjectClosed(qbJobId: string, closed: boolean): Promise<{ ok: true } | { ok: false; error: string }> {
+// Cambiar el status de negocio. 'cerrado' congela los números (no se re-consulta
+// a QBO); 'activo'/'por_cobrar' siguen refrescando. `closed` se mantiene en sync.
+export async function setProjectStatus(
+  qbJobId: string,
+  status: ProjectBizStatus,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return { ok: false, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false, error: "Sin organización" };
-  const { error } = await supabase
+  const closed = status === "cerrado";
+  let { error } = await supabase
     .from("qbo_project_state")
-    .upsert({ org_id: orgId, qb_job_id: qbJobId, closed }, { onConflict: "org_id,qb_job_id" });
+    .upsert({ org_id: orgId, qb_job_id: qbJobId, status, closed }, { onConflict: "org_id,qb_job_id" });
+  // Fallback si la migración 0016 (status) aún no corrió: al menos preservar closed.
+  if (isMissingColumn(error)) {
+    ({ error } = await supabase
+      .from("qbo_project_state")
+      .upsert({ org_id: orgId, qb_job_id: qbJobId, closed }, { onConflict: "org_id,qb_job_id" }));
+    if (error) return { ok: false, error: error.message };
+    return { ok: false, error: "Falta la migración 0016 (status) — corré el SQL para guardar el estado completo." };
+  }
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
