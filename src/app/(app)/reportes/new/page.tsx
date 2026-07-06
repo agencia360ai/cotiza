@@ -12,6 +12,7 @@ type ClientWithLocations = {
   name: string;
   brand_color: string | null;
   locations: { id: string; name: string }[];
+  dmActivo: boolean;
 };
 
 type Tech = { id: string; name: string };
@@ -23,11 +24,20 @@ export default async function NewReportPage() {
   const orgId = await getActiveOrgId();
   if (!orgId) redirect("/onboarding");
 
-  const { data: clients } = (await supabase
-    .from("clients")
-    .select("id, name, brand_color, locations:client_locations(id, name)")
-    .eq("org_id", orgId)
-    .order("name", { ascending: true })) as { data: ClientWithLocations[] | null };
+  const [{ data: clientsRaw }, { data: activeScheds }] = await Promise.all([
+    supabase
+      .from("clients")
+      .select("id, name, brand_color, locations:client_locations(id, name)")
+      .eq("org_id", orgId)
+      .order("name", { ascending: true }) as unknown as Promise<{ data: Omit<ClientWithLocations, "dmActivo">[] | null }>,
+    // "DM activo" = cliente con al menos un mantenimiento programado activo.
+    // (Cuando QBO esté conectado, se cruzará con los contratos DM vigentes.)
+    supabase.from("maintenance_schedules").select("client_id").eq("org_id", orgId).eq("active", true) as unknown as Promise<{
+      data: { client_id: string }[] | null;
+    }>,
+  ]);
+  const dmSet = new Set((activeScheds ?? []).map((s) => s.client_id));
+  const clients: ClientWithLocations[] = (clientsRaw ?? []).map((c) => ({ ...c, dmActivo: dmSet.has(c.id) }));
 
   const { data: technicians } = (await supabase
     .from("technicians")
@@ -58,7 +68,7 @@ export default async function NewReportPage() {
         </div>
       </header>
 
-      <NewReportWizard clients={clients ?? []} technicians={technicians ?? []} />
+      <NewReportWizard clients={clients} technicians={technicians ?? []} />
     </div>
   );
 }
