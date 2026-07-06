@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, hasAdminCredentials } from "@/lib/supabase/admin";
 import type {
   CaptureItem,
   ReportType,
@@ -186,15 +187,23 @@ export async function generateWithAI(token: string, reportId: string): Promise<R
     return { error: e instanceof Error ? e.message : "Falló la generación con IA" };
   }
 
-  // Process new_equipment: insert any equipment the AI detected as new into client_equipment
-  // and remap equipment_id so save_technician_report_items has a valid FK.
+  // Process new_equipment: insert any equipment the AI detected as new into
+  // client_equipment y remapea equipment_id para que save_technician_report_items
+  // tenga un FK válido. El portal corre sin login (rol anon, sin permiso de
+  // INSERT en client_equipment) → usamos el admin client. El token ya quedó
+  // validado por loadReport arriba, y location_id sale del reporte validado.
+  const needsEquipment = result.items.some((it) => !it.equipment_id && it.new_equipment);
+  if (needsEquipment && !hasAdminCredentials()) {
+    return { error: "El portal no está configurado para registrar equipos nuevos (falta SUPABASE_SERVICE_ROLE_KEY)." };
+  }
+  const admin = needsEquipment ? (createAdminClient() as unknown as typeof supabase) : supabase;
   for (const it of result.items) {
     if (!it.equipment_id && it.new_equipment) {
       const ne = it.new_equipment;
       const customName =
         `${ne.brand ?? ""} ${ne.model ?? ""}`.trim() ||
         (ne.category ? ne.category.replace(/_/g, " ") : "Equipo nuevo");
-      const { data: inserted, error: eqErr } = (await supabase
+      const { data: inserted, error: eqErr } = (await admin
         .from("client_equipment")
         .insert({
           location_id: report.report.location_id,
