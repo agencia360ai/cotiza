@@ -1,5 +1,5 @@
 {
   "crons": [
-    { "path": "/api/cron/gov-tenders", "schedule": "23 11 * * *" }
+    { "path": "/api/cron/gov-tenders", "schedule": "30 0 * * *" }
   ]
 }
