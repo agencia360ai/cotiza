@@ -12,6 +12,7 @@ import {
   Droplets,
   ExternalLink,
   Fan,
+  FileSearch,
   FileText,
   FolderOpen,
   FolderPlus,
@@ -40,6 +41,7 @@ import {
   followGovTender,
   enrichGovTender,
   createGovTenderFolder,
+  analyzeGovTenderDocs,
   type GovTenderRow,
 } from "./gov-actions";
 
@@ -191,6 +193,89 @@ function MiniKpi({
 
 // Detalle del pliego (renglones + contacto + entidad) para evaluar si podemos
 // licitar. Se muestra en procesos de alto puntaje; se carga bajo demanda.
+function CumpleBadge({ v }: { v: "si" | "parcial" | "no" }) {
+  const meta =
+    v === "si"
+      ? { icon: CheckCircle2, cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", label: "Cumplimos" }
+      : v === "parcial"
+        ? { icon: AlertTriangle, cls: "bg-amber-50 text-amber-700 ring-amber-600/20", label: "Parcial" }
+        : { icon: AlertTriangle, cls: "bg-rose-50 text-rose-700 ring-rose-600/20", label: "No cumplimos" };
+  const Icon = meta.icon;
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset", meta.cls)}>
+      <Icon className="size-3" /> {meta.label}
+    </span>
+  );
+}
+
+// Análisis IA de los DOCUMENTOS reales del pliego (PDFs en la carpeta de Dropbox).
+function DocAnalisisCard({ r, busy, onAnalizar }: { r: GovTenderRow; busy: boolean; onAnalizar: () => void }) {
+  const a = r.doc_analisis;
+  return (
+    <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-violet-700">
+          <FileSearch className="size-3.5" /> Análisis de documentos (IA)
+        </p>
+        <div className="flex items-center gap-2">
+          {a ? <CumpleBadge v={a.cumplimos} /> : null}
+          <button
+            type="button"
+            onClick={onAnalizar}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FileSearch className="size-3.5" />}
+            {busy ? "Leyendo PDFs…" : a ? "Re-analizar" : "Analizar documentos"}
+          </button>
+        </div>
+      </div>
+      {a ? (
+        <div className="mt-2.5 space-y-2 text-sm">
+          <p className="text-xs leading-relaxed text-slate-700">{a.resumen}</p>
+          {a.requisitos.length > 0 ? (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Requisitos clave</p>
+              <ul className="mt-1 space-y-0.5">
+                {a.requisitos.map((req, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-slate-600">
+                    <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-slate-300" /> {req}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <div className="grid gap-2 sm:grid-cols-3">
+            {a.plazo ? <Campo label="Plazo">{a.plazo}</Campo> : null}
+            {a.garantias ? <Campo label="Garantías">{a.garantias}</Campo> : null}
+            {a.criterios ? <Campo label="Evaluación">{a.criterios}</Campo> : null}
+          </div>
+          <p className="text-xs leading-relaxed text-slate-600">
+            <span className="font-semibold text-slate-700">Veredicto:</span> {a.motivo}
+          </p>
+          {a.banderas.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {a.banderas.map((b, i) => (
+                <span key={i} className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                  {b}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <p className="text-[10px] text-slate-400">
+            {a.docsLeidos} documento{a.docsLeidos === 1 ? "" : "s"} leído{a.docsLeidos === 1 ? "" : "s"} · {relTime(+new Date(a.at))}
+          </p>
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-slate-500">
+          Subí los PDFs del pliego a la carpeta de Dropbox y la IA (Sonnet) los lee para extraer requisitos, plazos, garantías y
+          si DICEC puede cumplir — con la data real, no solo el título.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // Carpeta de Dropbox de la licitación: crear (una vez) y abrir para juntar los
 // documentos del pliego.
 function DropboxBand({ r, busy, onCrear }: { r: GovTenderRow; busy: boolean; onCrear: () => void }) {
@@ -240,18 +325,23 @@ function DetallePliego({
   onCargar,
   folderBusy,
   onCrearCarpeta,
+  analyzeBusy,
+  onAnalizar,
 }: {
   r: GovTenderRow;
   busy: boolean;
   onCargar: () => void;
   folderBusy: boolean;
   onCrearCarpeta: () => void;
+  analyzeBusy: boolean;
+  onAnalizar: () => void;
 }) {
   const d = r.detalle;
   if (!d) {
     return (
       <div className="space-y-3">
         <DropboxBand r={r} busy={folderBusy} onCrear={onCrearCarpeta} />
+        {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
         <div className="rounded-xl border border-slate-100 bg-white p-3.5">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego · ¿podemos licitar?</p>
           <p className="mt-2 text-xs text-slate-500">
@@ -278,6 +368,7 @@ function DetallePliego({
   return (
     <div className="space-y-3">
       <DropboxBand r={r} busy={folderBusy} onCrear={onCrearCarpeta} />
+      {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
       <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego</p>
@@ -389,10 +480,12 @@ function TenderTr({
   expanded,
   enrichBusy,
   folderBusy,
+  analyzeBusy,
   onSeguir,
   onToggleExpand,
   onEnrich,
   onCrearCarpeta,
+  onAnalizar,
 }: {
   r: GovTenderRow;
   tamiz: TamizResult;
@@ -401,10 +494,12 @@ function TenderTr({
   expanded: boolean;
   enrichBusy: boolean;
   folderBusy: boolean;
+  analyzeBusy: boolean;
   onSeguir: () => void;
   onToggleExpand: () => void;
   onEnrich: () => void;
   onCrearCarpeta: () => void;
+  onAnalizar: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
   const cerrada = dias !== null && dias < 0;
@@ -561,8 +656,16 @@ function TenderTr({
       {expanded ? (
         <tr className={cn("border-b border-slate-100", urgente ? "bg-red-50/30" : "bg-slate-50/50")}>
           <td colSpan={7} className="px-4 pb-4 pt-2">
-            {/* Detalle del pliego: renglones, contacto, entidad — la data real. */}
-            <DetallePliego r={r} busy={enrichBusy} onCargar={onEnrich} folderBusy={folderBusy} onCrearCarpeta={onCrearCarpeta} />
+            {/* Detalle del pliego + documentos: la data real. */}
+            <DetallePliego
+              r={r}
+              busy={enrichBusy}
+              onCargar={onEnrich}
+              folderBusy={folderBusy}
+              onCrearCarpeta={onCrearCarpeta}
+              analyzeBusy={analyzeBusy}
+              onAnalizar={onAnalizar}
+            />
           </td>
         </tr>
       ) : null}
@@ -585,6 +688,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
   const [folderBusy, setFolderBusy] = useState<string | null>(null);
+  const [analyzeBusy, setAnalyzeBusy] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
@@ -701,6 +805,18 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     setRows((prev) =>
       prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: r.data.path, dropbox_folder_url: r.data.url } : x)),
     );
+  }
+
+  async function analizar(id: string) {
+    setAnalyzeBusy(id);
+    const r = await analyzeGovTenderDocs(id);
+    setAnalyzeBusy(null);
+    if ("error" in r) {
+      setError(r.error);
+      return;
+    }
+    setError(null);
+    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, doc_analisis: r.data.analisis } : x)));
   }
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
@@ -1001,10 +1117,12 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       expanded={expandedId === r.id}
                       enrichBusy={enrichBusy === r.id}
                       folderBusy={folderBusy === r.id}
+                      analyzeBusy={analyzeBusy === r.id}
                       onSeguir={() => seguir(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEnrich={() => enrich(r.id)}
                       onCrearCarpeta={() => crearCarpeta(r.id)}
+                      onAnalizar={() => analizar(r.id)}
                     />
                   ))}
                   {shown.length === 0 ? (
