@@ -14,6 +14,7 @@ import {
   type GovDetalle,
 } from "@/lib/panamacompra/client";
 import { hasDropboxConfig, createFolder, getSharedLink } from "@/lib/dropbox/client";
+import { analyzeTenderDocs, type GovDocAnalisis } from "@/lib/panamacompra/docs";
 import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
 
 // Carpeta base en Dropbox donde viven las licitaciones (override por env).
@@ -65,6 +66,7 @@ export type GovTenderRow = {
   detalle: GovDetalle | null;
   dropbox_folder_path: string | null;
   dropbox_folder_url: string | null;
+  doc_analisis: GovDocAnalisis | null;
 };
 
 // Abrir la vista lee SOLO de la base (cero llamadas al gobierno).
@@ -75,8 +77,14 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
   const run = (cols: string) =>
     c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).order("fecha_cierre", { ascending: true, nullsFirst: false });
   let res = (await run(
-    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
+    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis",
   )) as Res;
+  if (isMissingColumn(res.error)) {
+    // migración 0018 pendiente: sin columna doc_analisis
+    res = (await run(
+      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
+    )) as Res;
+  }
   if (isMissingColumn(res.error)) {
     // migración 0017 pendiente: sin columnas de dropbox
     res = (await run(
@@ -115,6 +123,7 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
       detalle: r.detalle ?? null,
       dropbox_folder_path: r.dropbox_folder_path ?? null,
       dropbox_folder_url: r.dropbox_folder_url ?? null,
+      doc_analisis: r.doc_analisis ?? null,
     };
   });
   return { ok: true, data: { rows, syncedAt } };
@@ -224,6 +233,28 @@ export async function createGovTenderFolder(
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo crear la carpeta en Dropbox" };
   }
+}
+
+// Lee los PDFs que haya en la carpeta de Dropbox de la licitación y extrae los
+// requerimientos reales con IA (Sonnet). Reemplaza al viejo "¿cumplimos?" que
+// solo miraba el título.
+export async function analyzeGovTenderDocs(govId: string): Promise<Result<{ analisis: GovDocAnalisis }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("titulo, dropbox_folder_path")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { titulo: string | null; dropbox_folder_path: string | null } | null };
+  if (!g) return { error: "No encontrada" };
+  if (!g.dropbox_folder_path) return { error: "Creá primero la carpeta en Dropbox y subí los documentos del pliego." };
+  const r = await analyzeTenderDocs({ folderPath: g.dropbox_folder_path, titulo: g.titulo });
+  if (!r.ok) return { error: r.error };
+  const { error } = await c.supabase.from("gov_tenders").update({ doc_analisis: r.data }).eq("id", govId).eq("org_id", c.orgId);
+  if (error) return { error: "Falta la migración 0018 (doc_analisis) — corré el SQL y reintentá" };
+  revalidatePath("/potenciales");
+  return { ok: true, data: { analisis: r.data } };
 }
 
 // "Actualizar": delega al sync compartido (mismo código que el cron diario).
