@@ -13,6 +13,8 @@ import {
   ExternalLink,
   Fan,
   FileText,
+  FolderOpen,
+  FolderPlus,
   Landmark,
   Loader2,
   Mail,
@@ -37,6 +39,7 @@ import {
   refreshGovTenders,
   followGovTender,
   enrichGovTender,
+  createGovTenderFolder,
   type GovTenderRow,
 } from "./gov-actions";
 
@@ -188,25 +191,83 @@ function MiniKpi({
 
 // Detalle del pliego (renglones + contacto + entidad) para evaluar si podemos
 // licitar. Se muestra en procesos de alto puntaje; se carga bajo demanda.
-function DetallePliego({ r, busy, onCargar }: { r: GovTenderRow; busy: boolean; onCargar: () => void }) {
+// Carpeta de Dropbox de la licitación: crear (una vez) y abrir para juntar los
+// documentos del pliego.
+function DropboxBand({ r, busy, onCrear }: { r: GovTenderRow; busy: boolean; onCrear: () => void }) {
+  const has = !!r.dropbox_folder_path;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-100 bg-sky-50/50 p-3">
+      <div className="flex items-center gap-2">
+        <span className="flex size-8 items-center justify-center rounded-lg bg-sky-100 text-sky-600">
+          <FolderOpen className="size-4" />
+        </span>
+        <div>
+          <p className="text-xs font-bold text-slate-800">Documentos en Dropbox</p>
+          <p className="text-[11px] text-slate-500">
+            {has ? "Carpeta creada — subí ahí los PDFs del pliego." : "Creá una carpeta para juntar los documentos de esta licitación."}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5">
+        {has && r.dropbox_folder_url ? (
+          <a
+            href={r.dropbox_folder_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-sky-700"
+          >
+            <FolderOpen className="size-3.5" /> Abrir en Dropbox
+          </a>
+        ) : (
+          <button
+            type="button"
+            onClick={onCrear}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
+            {busy ? "Creando…" : has ? "Reintentar link" : "Crear carpeta en Dropbox"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DetallePliego({
+  r,
+  busy,
+  onCargar,
+  folderBusy,
+  onCrearCarpeta,
+}: {
+  r: GovTenderRow;
+  busy: boolean;
+  onCargar: () => void;
+  folderBusy: boolean;
+  onCrearCarpeta: () => void;
+}) {
   const d = r.detalle;
   if (!d) {
     return (
-      <div className="rounded-xl border border-slate-100 bg-white p-3.5">
-        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego · ¿podemos licitar?</p>
-        <p className="mt-2 text-xs text-slate-500">
-          Trae del pliego los renglones que hay que suministrar, el contacto de la unidad de compra y la forma de pago/entrega
-          — lo que necesitás para decidir si participar y armar el precio.
-        </p>
-        <button
-          type="button"
-          onClick={onCargar}
-          disabled={busy}
-          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
-        >
-          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FileText className="size-3.5" />}
-          {busy ? "Trayendo del pliego…" : "Cargar detalle del pliego"}
-        </button>
+      <div className="space-y-3">
+        <DropboxBand r={r} busy={folderBusy} onCrear={onCrearCarpeta} />
+        <div className="rounded-xl border border-slate-100 bg-white p-3.5">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego · ¿podemos licitar?</p>
+          <p className="mt-2 text-xs text-slate-500">
+            Trae del pliego los renglones que hay que suministrar, el contacto de la unidad de compra y la forma de pago/entrega
+            — lo que necesitás para decidir si participar y armar el precio.
+          </p>
+          <button
+            type="button"
+            onClick={onCargar}
+            disabled={busy}
+            className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FileText className="size-3.5" />}
+            {busy ? "Trayendo del pliego…" : "Cargar detalle del pliego"}
+          </button>
+        </div>
       </div>
     );
   }
@@ -215,7 +276,9 @@ function DetallePliego({ r, busy, onCargar }: { r: GovTenderRow; busy: boolean; 
   const ent = d.entidad;
   const hayEntidad = ent.dependencia || ent.unidadCompra || ent.provincia || ent.direccion;
   return (
-    <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
+    <div className="space-y-3">
+      <DropboxBand r={r} busy={folderBusy} onCrear={onCrearCarpeta} />
+      <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego</p>
         <button
@@ -304,6 +367,7 @@ function DetallePliego({ r, busy, onCargar }: { r: GovTenderRow; busy: boolean; 
       ) : (
         <p className="text-[11px] italic text-slate-400">El pliego no trajo renglones detallados.</p>
       )}
+      </div>
     </div>
   );
 }
@@ -324,9 +388,11 @@ function TenderTr({
   busy,
   expanded,
   enrichBusy,
+  folderBusy,
   onSeguir,
   onToggleExpand,
   onEnrich,
+  onCrearCarpeta,
 }: {
   r: GovTenderRow;
   tamiz: TamizResult;
@@ -334,9 +400,11 @@ function TenderTr({
   busy: boolean;
   expanded: boolean;
   enrichBusy: boolean;
+  folderBusy: boolean;
   onSeguir: () => void;
   onToggleExpand: () => void;
   onEnrich: () => void;
+  onCrearCarpeta: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
   const cerrada = dias !== null && dias < 0;
@@ -494,7 +562,7 @@ function TenderTr({
         <tr className={cn("border-b border-slate-100", urgente ? "bg-red-50/30" : "bg-slate-50/50")}>
           <td colSpan={7} className="px-4 pb-4 pt-2">
             {/* Detalle del pliego: renglones, contacto, entidad — la data real. */}
-            <DetallePliego r={r} busy={enrichBusy} onCargar={onEnrich} />
+            <DetallePliego r={r} busy={enrichBusy} onCargar={onEnrich} folderBusy={folderBusy} onCrearCarpeta={onCrearCarpeta} />
           </td>
         </tr>
       ) : null}
@@ -516,6 +584,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [sort, setSort] = useState<SortState<GovSortKey>>({ key: "score", dir: "desc" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
+  const [folderBusy, setFolderBusy] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
@@ -618,6 +687,20 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     }
     setError(null);
     setRows((prev) => prev.map((x) => (x.id === id ? { ...x, detalle: r.data.detalle } : x)));
+  }
+
+  async function crearCarpeta(id: string) {
+    setFolderBusy(id);
+    const r = await createGovTenderFolder(id);
+    setFolderBusy(null);
+    if ("error" in r) {
+      setError(r.error);
+      return;
+    }
+    setError(null);
+    setRows((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: r.data.path, dropbox_folder_url: r.data.url } : x)),
+    );
   }
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
@@ -917,9 +1000,11 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       busy={busy === r.id}
                       expanded={expandedId === r.id}
                       enrichBusy={enrichBusy === r.id}
+                      folderBusy={folderBusy === r.id}
                       onSeguir={() => seguir(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEnrich={() => enrich(r.id)}
+                      onCrearCarpeta={() => crearCarpeta(r.id)}
                     />
                   ))}
                   {shown.length === 0 ? (

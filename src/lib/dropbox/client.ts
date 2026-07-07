@@ -133,6 +133,24 @@ export async function uploadFile(destPath: string, data: Uint8Array): Promise<{ 
   return { id: j.id, path: j.path_display ?? destPath, name: j.name };
 }
 
+/** Crea una carpeta (idempotente: si ya existe, devuelve su path). */
+export async function createFolder(path: string): Promise<{ path: string }> {
+  const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
+  const res = await fetch("https://api.dropboxapi.com/2/files/create_folder_v2", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ path, autorename: false }),
+  });
+  if (res.ok) {
+    const j = (await res.json()) as { metadata: { path_display?: string } };
+    return { path: j.metadata.path_display ?? path };
+  }
+  const errText = await res.text();
+  // Ya existe → OK, devolvemos el path pedido.
+  if (res.status === 409 && errText.includes("conflict")) return { path };
+  throw new Error(`Dropbox create_folder ${res.status}: ${errText.slice(0, 200)}`);
+}
+
 /** Link compartido (para WhatsApp/Email). Reusa el existente si ya hay uno. */
 export async function getSharedLink(path: string): Promise<string> {
   const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
