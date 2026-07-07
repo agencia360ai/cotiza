@@ -202,8 +202,9 @@ export async function syncGovTenders(
     }
     conPrecio += locales.length;
 
-    // 4b) Pliego para el resto, hasta el presupuesto.
-    const PRECIO_BUDGET = 60;
+    // 4b) Pliego para el resto, hasta el presupuesto. Más alto porque el sync
+    // corre de noche (maxDuration 300) — llena precios más rápido.
+    const PRECIO_BUDGET = 120;
     const intentar = paraPliego.slice(0, PRECIO_BUDGET);
     for (let i = 0; i < intentar.length; i += 3) {
       await Promise.all(

@@ -6,7 +6,6 @@ import {
   AlarmClock,
   AlertTriangle,
   Building2,
-  Calculator,
   CheckCircle2,
   ChevronDown,
   CircleDashed,
@@ -23,11 +22,9 @@ import {
   ScanSearch,
   Search,
   Snowflake,
-  Sparkles,
   Target,
   User,
   Wind,
-  XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -39,7 +36,6 @@ import {
   listGovTenders,
   refreshGovTenders,
   followGovTender,
-  evaluateGovTender,
   enrichGovTender,
   type GovTenderRow,
 } from "./gov-actions";
@@ -321,43 +317,15 @@ function Campo({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function CumpleBadge({ v }: { v: "si" | "parcial" | "no" }) {
-  if (v === "si")
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
-        <CheckCircle2 className="size-3" /> Cumplimos
-      </span>
-    );
-  if (v === "parcial")
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700 ring-1 ring-inset ring-amber-600/20">
-        <AlertTriangle className="size-3" /> Parcial
-      </span>
-    );
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700 ring-1 ring-inset ring-rose-600/20">
-      <XCircle className="size-3" /> No cumplimos
-    </span>
-  );
-}
-
-function CumpleMini({ v }: { v: "si" | "parcial" | "no" }) {
-  if (v === "si") return <CheckCircle2 className="size-3.5 text-emerald-500" aria-label="Cumplimos" />;
-  if (v === "parcial") return <AlertTriangle className="size-3.5 text-amber-500" aria-label="Cumplimos parcialmente" />;
-  return <XCircle className="size-3.5 text-rose-400" aria-label="No cumplimos" />;
-}
-
 function TenderTr({
   r,
   tamiz,
   sweet,
   busy,
   expanded,
-  evalBusy,
   enrichBusy,
   onSeguir,
   onToggleExpand,
-  onEvaluar,
   onEnrich,
 }: {
   r: GovTenderRow;
@@ -365,11 +333,9 @@ function TenderTr({
   sweet: boolean;
   busy: boolean;
   expanded: boolean;
-  evalBusy: boolean;
   enrichBusy: boolean;
   onSeguir: () => void;
   onToggleExpand: () => void;
-  onEvaluar: () => void;
   onEnrich: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
@@ -395,10 +361,9 @@ function TenderTr({
           </span>
         </td>
         <td className="px-2 py-3 align-top">
-          <button type="button" onClick={onToggleExpand} className="text-left" title={`${banda.label} — click para ver el desglose`}>
+          <button type="button" onClick={onToggleExpand} className="text-left" title={`${banda.label} — click para ver el detalle`}>
             <span className="flex items-center gap-1">
               <span className={cn("text-lg font-bold leading-none tabular-nums", banda.texto)}>{tamiz.score}</span>
-              {r.eval ? <CumpleMini v={r.eval.cumplimos} /> : null}
             </span>
             <span className={cn("mt-1 inline-block whitespace-nowrap rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide", banda.chip)}>
               {banda.corto}
@@ -527,128 +492,9 @@ function TenderTr({
 
       {expanded ? (
         <tr className={cn("border-b border-slate-100", urgente ? "bg-red-50/30" : "bg-slate-50/50")}>
-          <td colSpan={7} className="px-4 pb-4 pt-1">
-            <div className="grid gap-3 lg:grid-cols-2">
-              {/* Desglose del tamiz */}
-              <div className="rounded-xl border border-slate-100 bg-white p-3.5">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Desglose del tamiz</p>
-                <div className="mt-2 space-y-2 text-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-slate-500">Técnico (peso 0.7)</span>
-                    <span className="text-sm font-bold tabular-nums text-slate-900">{tamiz.tecnico}</span>
-                  </div>
-                  {tamiz.matches.length > 0 ? (
-                    <div className="flex flex-wrap gap-1">
-                      {tamiz.matches.map((m) => (
-                        <span key={m} className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
-                          {m}
-                        </span>
-                      ))}
-                      {tamiz.penalizado ? (
-                        <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
-                          −30 obra civil / eléctrica
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className="text-[11px] text-slate-400">sin keywords del rubro en el título{tamiz.penalizado ? " · −30 obra civil/eléctrica" : ""}</p>
-                  )}
-                  <div className="flex items-center justify-between gap-2 border-t border-slate-50 pt-2">
-                    <span className="text-xs text-slate-500">Económico (peso 0.3) · {tamiz.economicoLabel}</span>
-                    <span className="text-sm font-bold tabular-nums text-slate-900">{tamiz.economico}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2 border-t border-slate-50 pt-2">
-                    <span className="text-[11px] tabular-nums text-slate-400">
-                      0.7 × {tamiz.tecnico} + 0.3 × {tamiz.economico}
-                    </span>
-                    <span className={cn("inline-flex items-center gap-1.5 text-sm font-bold tabular-nums", BANDA_META[tamiz.banda].texto)}>
-                      {tamiz.score}
-                      <span className={cn("rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide", BANDA_META[tamiz.banda].chip)}>
-                        {BANDA_META[tamiz.banda].label}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* ¿Cumplimos? */}
-              <div className="rounded-xl border border-slate-100 bg-white p-3.5">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">¿Cumplimos?</p>
-                  {r.eval ? <CumpleBadge v={r.eval.cumplimos} /> : null}
-                </div>
-                {r.eval ? (
-                  <div className="mt-2 space-y-2 text-sm">
-                    <p className="text-xs leading-relaxed text-slate-600">{r.eval.resumen}</p>
-                    {r.eval.requisitos.length > 0 ? (
-                      <ul className="space-y-1">
-                        {r.eval.requisitos.map((req, i) => (
-                          <li key={i} className="flex items-start gap-1.5 text-xs text-slate-600">
-                            <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-slate-300" />
-                            {req}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {r.eval.riesgos.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {r.eval.riesgos.map((riesgo, i) => (
-                          <span key={i} className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                            {riesgo}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="flex flex-wrap items-center gap-2 border-t border-slate-50 pt-2">
-                      {r.eval.cumplimos !== "no" ? (
-                        <button
-                          type="button"
-                          disabled
-                          className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-400"
-                          title="Próximamente: estimación de precio DICEC a partir del pliego"
-                        >
-                          <Calculator className="size-3.5" /> Estimar precio · próximamente
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={onEvaluar}
-                        disabled={evalBusy}
-                        className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-violet-600 transition-colors hover:bg-violet-50 disabled:opacity-50"
-                        title="Volver a evaluar con IA"
-                      >
-                        {evalBusy ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-                        Re-evaluar
-                      </button>
-                      <span className="ml-auto text-[10px] text-slate-400">evaluado {relTime(+new Date(r.eval.at))}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-2">
-                    <p className="text-xs text-slate-500">
-                      La IA lee los renglones del pliego y evalúa si el alcance cae dentro del rubro DICEC — con requisitos clave y señales de riesgo.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={onEvaluar}
-                      disabled={evalBusy}
-                      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
-                    >
-                      {evalBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-                      {evalBusy ? "Evaluando…" : "Evaluar si cumplimos (IA)"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Detalle del pliego para procesos de alto puntaje (>60): lo que
-                necesitás para decidir si licitar. */}
-            {tamiz.score > 60 || r.detalle ? (
-              <div className="mt-3">
-                <DetallePliego r={r} busy={enrichBusy} onCargar={onEnrich} />
-              </div>
-            ) : null}
+          <td colSpan={7} className="px-4 pb-4 pt-2">
+            {/* Detalle del pliego: renglones, contacto, entidad — la data real. */}
+            <DetallePliego r={r} busy={enrichBusy} onCargar={onEnrich} />
           </td>
         </tr>
       ) : null}
@@ -669,7 +515,6 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [bandaFiltro, setBandaFiltro] = useState<"all" | TamizBanda>("all");
   const [sort, setSort] = useState<SortState<GovSortKey>>({ key: "score", dir: "desc" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [evalBusy, setEvalBusy] = useState<string | null>(null);
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
@@ -761,18 +606,6 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     }
     setRows((prev) => prev.map((x) => (x.id === id ? { ...x, converted_tender_id: r.data.tenderId } : x)));
     onFollowed?.();
-  }
-
-  async function evaluar(id: string) {
-    setEvalBusy(id);
-    const r = await evaluateGovTender(id);
-    setEvalBusy(null);
-    if ("error" in r) {
-      setError(r.error);
-      return;
-    }
-    setError(null);
-    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, eval: r.data.eval } : x)));
   }
 
   async function enrich(id: string) {
@@ -1052,7 +885,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
           <>
             <p className="px-4 pb-1 text-xs text-slate-400">
               {shown.length} de {rows.length} procesos · ordená por cualquier columna (las cerradas quedan al final) · click en una
-              fila para el desglose y evaluar si cumplimos
+              fila para ver el detalle del pliego
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -1083,11 +916,9 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       sweet={inSweet(r.precio_ref)}
                       busy={busy === r.id}
                       expanded={expandedId === r.id}
-                      evalBusy={evalBusy === r.id}
                       enrichBusy={enrichBusy === r.id}
                       onSeguir={() => seguir(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
-                      onEvaluar={() => evaluar(r.id)}
                       onEnrich={() => enrich(r.id)}
                     />
                   ))}
