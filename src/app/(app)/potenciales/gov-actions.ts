@@ -13,7 +13,23 @@ import {
   extractPrecioRef,
   type GovDetalle,
 } from "@/lib/panamacompra/client";
+import { hasDropboxConfig, createFolder, getSharedLink } from "@/lib/dropbox/client";
 import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
+
+// Carpeta base en Dropbox donde viven las licitaciones (override por env).
+const LICITACIONES_BASE =
+  process.env.DROPBOX_LICITACIONES_PATH?.replace(/\/+$/, "") || "/Dicec/Proyectos/02 Licitaciones/LICITACIONES 2026";
+
+// Nombre de carpeta estilo DICEC ("Acto #<num> <título>"), saneado para Dropbox
+// (sin / \ : ? * " < > | y colapsando espacios).
+function folderName(numProceso: string, titulo: string | null): string {
+  const base = `Acto #${numProceso} ${titulo ?? ""}`.trim();
+  return base
+    .replace(/[/\\:?*"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
@@ -47,6 +63,8 @@ export type GovTenderRow = {
   converted_tender_id: string | null;
   eval: GovTenderEval | null;
   detalle: GovDetalle | null;
+  dropbox_folder_path: string | null;
+  dropbox_folder_url: string | null;
 };
 
 // Abrir la vista lee SOLO de la base (cero llamadas al gobierno).
@@ -57,8 +75,14 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
   const run = (cols: string) =>
     c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).order("fecha_cierre", { ascending: true, nullsFirst: false });
   let res = (await run(
-    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
+    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
   )) as Res;
+  if (isMissingColumn(res.error)) {
+    // migración 0017 pendiente: sin columnas de dropbox
+    res = (await run(
+      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
+    )) as Res;
+  }
   if (isMissingColumn(res.error)) {
     // migración 0015 pendiente: sin columna detalle
     res = (await run(
@@ -89,6 +113,8 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
       relevancia_motivo: r.relevancia_motivo ?? null,
       eval: r.eval ?? null,
       detalle: r.detalle ?? null,
+      dropbox_folder_path: r.dropbox_folder_path ?? null,
+      dropbox_folder_url: r.dropbox_folder_url ?? null,
     };
   });
   return { ok: true, data: { rows, syncedAt } };
@@ -156,6 +182,47 @@ export async function enrichGovTender(govId: string): Promise<Result<{ detalle: 
     return { ok: true, data: { detalle } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo traer el detalle" };
+  }
+}
+
+// Crea la carpeta de la licitación en Dropbox (bajo LICITACIONES 2026) y guarda
+// su path + link compartido. Idempotente: si ya existe, reusa.
+export async function createGovTenderFolder(
+  govId: string,
+): Promise<Result<{ path: string; url: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasDropboxConfig()) return { error: "Faltan las credenciales de Dropbox en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("num_proceso, titulo, dropbox_folder_path, dropbox_folder_url")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as {
+    data: { num_proceso: string; titulo: string | null; dropbox_folder_path: string | null; dropbox_folder_url: string | null } | null;
+  };
+  if (!g) return { error: "No encontrada" };
+  try {
+    const path = g.dropbox_folder_path ?? `${LICITACIONES_BASE}/${folderName(g.num_proceso, g.titulo)}`;
+    if (!g.dropbox_folder_path) await createFolder(path);
+    let url = g.dropbox_folder_url;
+    if (!url) {
+      try {
+        url = await getSharedLink(path);
+      } catch {
+        url = null; // la carpeta se creó; el link se puede reintentar
+      }
+    }
+    const { error } = await c.supabase
+      .from("gov_tenders")
+      .update({ dropbox_folder_path: path, dropbox_folder_url: url })
+      .eq("id", govId)
+      .eq("org_id", c.orgId);
+    if (error) return { error: "Falta la migración 0017 (dropbox) — corré el SQL y reintentá" };
+    revalidatePath("/potenciales");
+    return { ok: true, data: { path, url } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo crear la carpeta en Dropbox" };
   }
 }
 
