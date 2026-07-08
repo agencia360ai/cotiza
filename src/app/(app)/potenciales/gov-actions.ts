@@ -69,50 +69,60 @@ export type GovTenderRow = {
   doc_analisis: GovDocAnalisis | null;
 };
 
-// Abrir la vista lee SOLO de la base (cero llamadas al gobierno).
+// Column sets de más completo a más básico (fallback por migraciones pendientes).
+const GOV_COLSETS = [
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, converted_tender_id",
+];
+const PAGE_SIZE = 1000;
+
+// Abrir la vista lee SOLO de la base (cero llamadas al gobierno). PostgREST
+// corta en 1000 filas; con miles de procesos hay que PAGINAR — si no, se cargan
+// solo las 1000 más viejas (ya cerradas) y las abiertas quedan afuera.
 export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; syncedAt: number | null }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   type Res = { data: GovTenderRow[] | null; error: ({ message: string; code?: string }) | null };
-  const run = (cols: string) =>
-    c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).order("fecha_cierre", { ascending: true, nullsFirst: false });
-  let res = (await run(
-    "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis",
-  )) as Res;
-  if (isMissingColumn(res.error)) {
-    // migración 0018 pendiente: sin columna doc_analisis
-    res = (await run(
-      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
-    )) as Res;
+  const page = (cols: string, from: number) =>
+    c.supabase
+      .from("gov_tenders")
+      .select(cols)
+      .eq("org_id", c.orgId)
+      .order("fecha_cierre", { ascending: true, nullsFirst: false })
+      .range(from, from + PAGE_SIZE - 1) as unknown as Promise<Res>;
+
+  // Resolver el set de columnas disponible (según migraciones) con la 1ª página.
+  let cols = GOV_COLSETS[0];
+  let first: Res | null = null;
+  for (const cs of GOV_COLSETS) {
+    const r = (await page(cs, 0)) as Res;
+    if (!r.error) {
+      cols = cs;
+      first = r;
+      break;
+    }
+    if (!isMissingColumn(r.error)) return { error: r.error.message };
   }
-  if (isMissingColumn(res.error)) {
-    // migración 0017 pendiente: sin columnas de dropbox
-    res = (await run(
-      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
-    )) as Res;
+  if (!first) return { error: "Falta la migración 0010 (gov_tenders)" };
+
+  // Traer el resto de las páginas (tope de seguridad: 30k filas).
+  const data: GovTenderRow[] = [...(first.data ?? [])];
+  if ((first.data?.length ?? 0) === PAGE_SIZE) {
+    for (let from = PAGE_SIZE; from < 30_000; from += PAGE_SIZE) {
+      const r = (await page(cols, from)) as Res;
+      if (r.error) return { error: r.error.message };
+      const batch = r.data ?? [];
+      data.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+    }
   }
-  if (isMissingColumn(res.error)) {
-    // migración 0015 pendiente: sin columna detalle
-    res = (await run(
-      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval",
-    )) as Res;
-  }
-  if (isMissingColumn(res.error)) {
-    // migración 0013 pendiente: sin columna eval
-    res = (await run(
-      "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id",
-    )) as Res;
-  }
-  if (isMissingColumn(res.error)) {
-    // migración 0011 pendiente: sin columnas de relevancia
-    res = (await run("id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, converted_tender_id")) as Res;
-  }
-  // Error de esquema base → probablemente falta 0010; error real se reporta tal cual.
-  if (res.error) {
-    return { error: isMissingColumn(res.error) ? "Falta la migración 0010 (gov_tenders)" : res.error.message };
-  }
+
   let syncedAt: number | null = null;
-  const rows = (res.data ?? []).map((r) => {
+  const rows = data.map((r) => {
     if (r.seen_at) syncedAt = Math.max(syncedAt ?? 0, +new Date(r.seen_at));
     return {
       ...r,
