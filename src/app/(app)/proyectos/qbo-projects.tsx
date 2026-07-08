@@ -12,7 +12,6 @@ import {
   Hammer,
   Package,
   Briefcase,
-  Check,
   ChevronDown,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -66,7 +65,6 @@ export function QboProjectsBoard() {
   const [tab, setTab] = useState<string>("all");
   const [statusOv, setStatusOv] = useState<Map<string, ProjectBizStatus>>(new Map());
   const [progressOv, setProgressOv] = useState<Map<string, number>>(new Map());
-  const [editingProgress, setEditingProgress] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
@@ -90,12 +88,17 @@ export function QboProjectsBoard() {
     const r = await setProjectStatus(p.id, next);
     setRowError(r.ok ? null : r.error);
   }
-  function changeProgress(p: QboProject, v: number) {
-    setProgressOv((m) => new Map(m).set(p.id, v));
-  }
-  async function saveProgress(p: QboProject) {
-    const r = await setProjectProgress(p.id, progressOf(p));
-    setRowError(r.ok ? null : r.error);
+  async function saveProgress(p: QboProject, v: number) {
+    const prev = progressOf(p);
+    setProgressOv((m) => new Map(m).set(p.id, v)); // optimista
+    const r = await setProjectProgress(p.id, v);
+    if (!r.ok) {
+      // revertir para no mostrar un valor que NO se guardó
+      setProgressOv((m) => new Map(m).set(p.id, prev));
+      setRowError(r.error);
+    } else {
+      setRowError(null);
+    }
   }
   useEffect(() => {
     void load(); // lee de la base: abrir la página NO consulta QBO
@@ -271,13 +274,7 @@ export function QboProjectsBoard() {
                 p={p}
                 status={statusOf(p)}
                 progress={progressOf(p)}
-                editing={editingProgress === p.id}
-                onStartEdit={() => setEditingProgress(p.id)}
-                onChangeProgress={(v) => changeProgress(p, v)}
-                onDoneProgress={() => {
-                  setEditingProgress(null);
-                  void saveProgress(p);
-                }}
+                onSaveProgress={(v) => saveProgress(p, v)}
                 onChangeStatus={(s) => changeStatus(p, s)}
               />
             ))}
@@ -331,23 +328,59 @@ function StatusPicker({ value, onChange }: { value: ProjectBizStatus; onChange: 
   );
 }
 
+// Input de avance: escribís el número (0-100) y se guarda al salir del campo
+// o con Enter. Sin slider (arrastrar sin confirmar perdía el valor).
+function ProgressInput({ value, onSave, label }: { value: number; onSave: (v: number) => void; label: string }) {
+  const [draft, setDraft] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  // Sincronizar cuando el valor guardado cambia (tras guardar o Actualizar).
+  useEffect(() => {
+    if (!focused) setDraft(String(value));
+  }, [value, focused]);
+  const shown = Math.min(100, Math.max(0, Number(draft) || 0));
+  function commit() {
+    setFocused(false);
+    const v = Math.min(100, Math.max(0, Math.round(Number(draft) || 0)));
+    setDraft(String(v));
+    if (v !== value) onSave(v);
+  }
+  return (
+    <div>
+      <div className="flex items-center gap-1">
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={draft}
+          onFocus={() => setFocused(true)}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          aria-label={label}
+          className="w-12 rounded-md border border-slate-200 px-1.5 py-1 text-right text-sm font-bold tabular-nums text-slate-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+        />
+        <span className="text-xs font-semibold text-slate-400">%</span>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+        <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${shown}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function ProjectRow({
   p,
   status,
   progress,
-  editing,
-  onStartEdit,
-  onChangeProgress,
-  onDoneProgress,
+  onSaveProgress,
   onChangeStatus,
 }: {
   p: QboProject;
   status: ProjectBizStatus;
   progress: number;
-  editing: boolean;
-  onStartEdit: () => void;
-  onChangeProgress: (v: number) => void;
-  onDoneProgress: () => void;
+  onSaveProgress: (v: number) => void;
   onChangeStatus: (s: ProjectBizStatus) => void;
 }) {
   const meta = (p.rubro && RUBRO_META[p.rubro]) || RUBRO_FALLBACK;
@@ -367,42 +400,9 @@ function ProjectRow({
         </p>
       </div>
 
-      {/* Avance manual — click para actualizar */}
+      {/* Avance manual — escribí el número y se guarda solo */}
       <div className="w-24 shrink-0 sm:w-28">
-        {editing ? (
-          <div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold tabular-nums text-blue-700">{progress}%</span>
-              <button
-                type="button"
-                onClick={onDoneProgress}
-                className="inline-flex items-center gap-0.5 rounded-md bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-blue-700"
-              >
-                <Check className="size-3" /> Listo
-              </button>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={progress}
-              onChange={(e) => onChangeProgress(Number(e.target.value))}
-              className="mt-1.5 w-full accent-blue-600"
-              aria-label={`Avance de ${p.name}`}
-            />
-          </div>
-        ) : (
-          <button type="button" onClick={onStartEdit} className="group w-full text-left" title="Click para actualizar el avance">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold tabular-nums text-slate-900">{progress}%</span>
-              <span className="text-[10px] text-slate-400 transition-colors group-hover:text-blue-600">avance ✎</span>
-            </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
-            </div>
-          </button>
-        )}
+        <ProgressInput value={progress} onSave={onSaveProgress} label={`Avance de ${p.name}`} />
       </div>
 
       {/* Financiero — gasto vs cobro + barra de rentabilidad */}
