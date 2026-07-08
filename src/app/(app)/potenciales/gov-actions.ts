@@ -10,7 +10,7 @@ import {
   pcLogin,
   pcPliegoRaw,
   extractDetalle,
-  extractPrecioRef,
+  extractPrecioBreakdown,
   type GovDetalle,
 } from "@/lib/panamacompra/client";
 import { hasDropboxConfig, createFolder, getSharedLink } from "@/lib/dropbox/client";
@@ -192,10 +192,19 @@ export async function enrichGovTender(govId: string): Promise<Result<{ detalle: 
     const pliego = await pcPliegoRaw(session, idTipo, String(idFlujos));
     if (!pliego) return { error: "PanamaCompra no devolvió el pliego (puede no estar publicado)." };
     const detalle = extractDetalle(pliego, new Date().toISOString());
-    const precio = g.precio_ref === null ? extractPrecioRef(pliego) : null;
+    // Recalcular el precio SIEMPRE desde el pliego (autoridad); guardar el desglose.
+    const bd = extractPrecioBreakdown(pliego);
     const patch: Record<string, unknown> = { detalle };
-    if (precio !== null) patch.precio_ref = precio;
-    const { error } = await c.supabase.from("gov_tenders").update(patch).eq("id", govId).eq("org_id", c.orgId);
+    if (bd.elegido !== null) {
+      patch.precio_ref = bd.elegido;
+      patch.precio_breakdown = bd;
+    }
+    let { error } = await c.supabase.from("gov_tenders").update(patch).eq("id", govId).eq("org_id", c.orgId);
+    if (isMissingColumn(error)) {
+      // migración 0019 (precio_breakdown) pendiente: guardar sin el desglose
+      delete patch.precio_breakdown;
+      ({ error } = await c.supabase.from("gov_tenders").update(patch).eq("id", govId).eq("org_id", c.orgId));
+    }
     if (error) return { error: "Falta la migración 0015 (detalle) — corré el SQL y reintentá" };
     revalidatePath("/potenciales");
     return { ok: true, data: { detalle } };

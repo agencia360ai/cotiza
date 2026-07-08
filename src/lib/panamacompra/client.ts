@@ -182,32 +182,36 @@ function findFirstByKey(node: unknown, keyRe: RegExp, depth = 0): number | null 
   return null;
 }
 
-// Todos los valores numéricos cuya clave matchee (recursivo). Para el estimado
-// del proceso tomamos el MÁXIMO: el total del proceso es ≥ el estimado de
-// cualquier renglón, así evitamos devolver el estimado de un solo renglón.
-function findAllByKey(node: unknown, keyRe: RegExp, out: number[] = [], depth = 0): number[] {
-  if (node == null || depth > 8) return out;
+const RE_PRECIO_REF = /precio.*ref/i;
+const RE_PRECIO_REF_TOTAL = /precio.*ref.*(total|reng|linea|item)/i;
+const RE_UNITARIO = /unitari/i;
+
+// Claves que representan un MONTO de referencia/estimado/total del proceso o de
+// un renglón. El total del proceso = la suma de los renglones = el MAYOR de
+// estos valores (el total siempre ≥ cualquier renglón). Excluye montos que no
+// son el precio (fianza, %, ITBMS, partida presupuestaria, cantidades).
+const RE_PRICE_LIKE = /(precio.*ref|estimad|precio.*total|monto.*total|montoreferencia|totalreferencia|totalgeneral)/i;
+const RE_PRICE_EXCLUDE = /(unitari|fianza|garant|porcentaje|itbms|impuesto|partida|saldo|disponible|cantidad|subsan)/i;
+
+// Todos los montos "precio-like" del documento (para tomar el máximo = total).
+function collectPriceLike(node: unknown, out: { key: string; value: number }[] = [], depth = 0): { key: string; value: number }[] {
+  if (node == null || depth > 9) return out;
   if (Array.isArray(node)) {
-    for (const it of node) findAllByKey(it, keyRe, out, depth + 1);
+    for (const it of node) collectPriceLike(it, out, depth + 1);
     return out;
   }
   if (typeof node === "object") {
     for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      if (keyRe.test(k.replace(/[_\s]/g, ""))) {
+      const nk = k.replace(/[_\s]/g, "");
+      if (RE_PRICE_LIKE.test(nk) && !RE_PRICE_EXCLUDE.test(nk)) {
         const n = parseNum(v);
-        if (n !== null) out.push(n);
+        if (n !== null) out.push({ key: k, value: n });
       }
-      findAllByKey(v, keyRe, out, depth + 1);
+      collectPriceLike(v, out, depth + 1);
     }
   }
   return out;
 }
-
-// Amplio: montoTotalEstimado, valorEstimado, presupuestoEstimado, precioEstimado…
-const RE_ESTIMADO = /(monto|precio|valor|presupuesto).*estimad/i;
-const RE_PRECIO_REF = /precio.*ref/i;
-const RE_PRECIO_REF_TOTAL = /precio.*ref.*(total|reng|linea|item)/i;
-const RE_UNITARIO = /unitari/i;
 
 // precio de referencia de UN renglón: preferí el total del renglón; nunca el
 // unitario suelto (subvaluaría cuando cantidad>1).
@@ -253,19 +257,47 @@ function esFilaTotal(it: Record<string, unknown>): boolean {
   return false;
 }
 
-export function extractPrecioRef(node: unknown): number | null {
-  // 1) Estimado del proceso = el máximo de los estimados (el total del proceso).
-  const estimados = findAllByKey(node, RE_ESTIMADO);
-  if (estimados.length > 0) return Math.max(...estimados);
-  // 2) Sin estimado: sumar el precio de referencia de cada renglón (excluyendo
-  //    filas TOTAL para no doble-contar, y usando el total del renglón, no el unitario).
-  const items = findItemsArray(node);
-  if (items) {
-    const sum = items.filter((it) => !esFilaTotal(it)).reduce((acc, it) => acc + (precioDeRenglon(it) ?? 0), 0);
-    if (sum > 0) return Math.round(sum * 100) / 100;
+export type PrecioBreakdown = {
+  elegido: number | null;
+  maxRef: number | null; // mayor monto "precio-like" (= total del proceso)
+  sumaItems: number | null; // suma de los renglones (excl. filas TOTAL)
+  nItems: number;
+  candidatos: { key: string; value: number }[]; // top valores precio-like (diagnóstico)
+};
+
+// Núcleo auditable: devuelve el precio + de dónde salió.
+export function extractPrecioBreakdown(node: unknown): PrecioBreakdown {
+  const priceLike = collectPriceLike(node);
+  const maxRef = priceLike.length > 0 ? Math.max(...priceLike.map((p) => p.value)) : null;
+
+  const itemsArr = findItemsArray(node);
+  let sumaItems: number | null = null;
+  let nItems = 0;
+  if (itemsArr) {
+    const reales = itemsArr.filter((it) => !esFilaTotal(it));
+    nItems = reales.length;
+    const s = reales.reduce((acc, it) => acc + (precioDeRenglon(it) ?? 0), 0);
+    if (s > 0) sumaItems = Math.round(s * 100) / 100;
   }
-  // 3) Último recurso.
-  return findFirstByKey(node, RE_PRECIO_REF);
+
+  // El total del proceso = suma de renglones. maxRef debería igualarlo.
+  //  - Si ambos existen y ~coinciden → total (el más confiable).
+  //  - Si la suma supera claramente al maxRef → la suma infló (fila TOTAL
+  //    duplicada); confiar en maxRef (el total real).
+  //  - Si solo hay uno, usar ese.
+  let elegido: number | null = null;
+  if (maxRef !== null && sumaItems !== null) {
+    elegido = sumaItems > maxRef * 1.3 ? maxRef : Math.max(maxRef, sumaItems);
+  } else {
+    elegido = maxRef ?? sumaItems ?? findFirstByKey(node, RE_PRECIO_REF);
+  }
+
+  const candidatos = [...priceLike].sort((a, b) => b.value - a.value).slice(0, 8);
+  return { elegido, maxRef, sumaItems, nItems, candidatos };
+}
+
+export function extractPrecioRef(node: unknown): number | null {
+  return extractPrecioBreakdown(node).elegido;
 }
 
 // ── Renglones del pliego (para la evaluación IA de "¿cumplimos?") ─────────────
