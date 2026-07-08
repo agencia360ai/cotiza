@@ -190,12 +190,15 @@ const RE_UNITARIO = /unitari/i;
 // un renglón. El total del proceso = la suma de los renglones = el MAYOR de
 // estos valores (el total siempre ≥ cualquier renglón). Excluye montos que no
 // son el precio (fianza, %, ITBMS, partida presupuestaria, cantidades).
-const RE_PRICE_LIKE = /(precio.*ref|estimad|precio.*total|monto.*total|montoreferencia|totalreferencia|totalgeneral)/i;
+// Estrictamente el "precio de referencia/estimado" de renglón o proceso. NO se
+// amplía a "presupuesto"/"monto proceso" para no agarrar montos ajenos (partida
+// del depto, etc.) que inflarían el total.
+const RE_PRICE_LIKE = /(precio.*ref|estimad|montoreferencia|totalreferencia)/i;
 const RE_PRICE_EXCLUDE = /(unitari|fianza|garant|porcentaje|itbms|impuesto|partida|saldo|disponible|cantidad|subsan)/i;
 
-// Todos los montos "precio-like" del documento (para tomar el máximo = total).
+// Todos los montos "precio-like" del documento (renglones + total si existe).
 function collectPriceLike(node: unknown, out: { key: string; value: number }[] = [], depth = 0): { key: string; value: number }[] {
-  if (node == null || depth > 9) return out;
+  if (node == null || depth > 12) return out;
   if (Array.isArray(node)) {
     for (const it of node) collectPriceLike(it, out, depth + 1);
     return out;
@@ -259,41 +262,45 @@ function esFilaTotal(it: Record<string, unknown>): boolean {
 
 export type PrecioBreakdown = {
   elegido: number | null;
-  maxRef: number | null; // mayor monto "precio-like" (= total del proceso)
-  sumaItems: number | null; // suma de los renglones (excl. filas TOTAL)
-  nItems: number;
-  candidatos: { key: string; value: number }[]; // top valores precio-like (diagnóstico)
+  metodo: "total_explicito" | "suma_renglones" | "unico" | null;
+  maxRef: number | null; // mayor monto "precio-like" encontrado
+  suma: number | null; // suma de TODOS los montos precio-like
+  nValores: number; // cuántos montos precio-like se encontraron
+  candidatos: { key: string; value: number }[]; // valores precio-like (diagnóstico)
 };
 
-// Núcleo auditable: devuelve el precio + de dónde salió.
+// Núcleo auditable del precio de referencia del proceso.
+//
+// El pliego guarda el precio de referencia POR RENGLÓN (ej. chiller 141,082.40 +
+// mano de obra 35,270.60). El TOTAL del proceso (176,353.09) casi nunca está como
+// campo aparte → es la SUMA de los renglones. Pero algunos pliegos SÍ traen un
+// total explícito además de los renglones; sumar todo doble-contaría.
+//
+// Regla (sobre los montos precio-like ordenados desc):
+//   - Si el mayor = suma de los demás (y hay ≥2 "demás") → es el total explícito.
+//   - Si no → total = suma de todos los renglones.
 export function extractPrecioBreakdown(node: unknown): PrecioBreakdown {
   const priceLike = collectPriceLike(node);
-  const maxRef = priceLike.length > 0 ? Math.max(...priceLike.map((p) => p.value)) : null;
+  const candidatos = [...priceLike].sort((a, b) => b.value - a.value).slice(0, 12);
+  const valores = priceLike.map((p) => p.value).sort((a, b) => b - a);
+  const round2 = (n: number) => Math.round(n * 100) / 100;
 
-  const itemsArr = findItemsArray(node);
-  let sumaItems: number | null = null;
-  let nItems = 0;
-  if (itemsArr) {
-    const reales = itemsArr.filter((it) => !esFilaTotal(it));
-    nItems = reales.length;
-    const s = reales.reduce((acc, it) => acc + (precioDeRenglon(it) ?? 0), 0);
-    if (s > 0) sumaItems = Math.round(s * 100) / 100;
+  if (valores.length === 0) return { elegido: null, metodo: null, maxRef: null, suma: null, nValores: 0, candidatos };
+
+  const maxRef = valores[0];
+  const suma = round2(valores.reduce((a, b) => a + b, 0));
+
+  if (valores.length === 1) {
+    return { elegido: maxRef, metodo: "unico", maxRef, suma, nValores: 1, candidatos };
   }
 
-  // El total del proceso = suma de renglones. maxRef debería igualarlo.
-  //  - Si ambos existen y ~coinciden → total (el más confiable).
-  //  - Si la suma supera claramente al maxRef → la suma infló (fila TOTAL
-  //    duplicada); confiar en maxRef (el total real).
-  //  - Si solo hay uno, usar ese.
-  let elegido: number | null = null;
-  if (maxRef !== null && sumaItems !== null) {
-    elegido = sumaItems > maxRef * 1.3 ? maxRef : Math.max(maxRef, sumaItems);
-  } else {
-    elegido = maxRef ?? sumaItems ?? findFirstByKey(node, RE_PRECIO_REF);
+  const restante = round2(suma - maxRef);
+  // El mayor valor = suma de los demás (≥2 renglones) ⇒ total explícito.
+  if (valores.length >= 3 && Math.abs(maxRef - restante) < 0.5) {
+    return { elegido: maxRef, metodo: "total_explicito", maxRef, suma, nValores: valores.length, candidatos };
   }
-
-  const candidatos = [...priceLike].sort((a, b) => b.value - a.value).slice(0, 8);
-  return { elegido, maxRef, sumaItems, nItems, candidatos };
+  // Si no, el total = la suma de todos los renglones.
+  return { elegido: suma, metodo: "suma_renglones", maxRef, suma, nValores: valores.length, candidatos };
 }
 
 export function extractPrecioRef(node: unknown): number | null {
