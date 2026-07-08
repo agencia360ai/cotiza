@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { hasPanamaCompraConfig, pcLogin, pcListProcesos, pcPliegoRaw, extractPrecioRef, type PcRegistro } from "./client";
+import { hasPanamaCompraConfig, pcLogin, pcListProcesos, pcPliegoRaw, extractPrecioBreakdown, type PcRegistro } from "./client";
 import { matchKeywords, classifyWithAI } from "./relevance";
 
 // Sync de licitaciones del gobierno — compartido entre la action (botón
@@ -174,8 +174,14 @@ export async function syncGovTenders(
     if (isMissingColumn(spRes.error)) spRes = (await runSinPrecio(false)) as typeof spRes; // 0014 pendiente
     const sinPrecio = spRes.data ?? [];
 
-    const setPrecio = (id: string, precio: number) =>
-      db.from("gov_tenders").update({ precio_ref: precio }).eq("id", id).eq("org_id", orgId);
+    // Guarda precio + desglose auditable (si la columna 0019 no existe, cae a
+    // guardar solo el precio).
+    const setPrecio = async (id: string, precio: number, breakdown: unknown) => {
+      const { error } = await db.from("gov_tenders").update({ precio_ref: precio, precio_breakdown: breakdown }).eq("id", id).eq("org_id", orgId);
+      if (isMissingColumn(error)) {
+        await db.from("gov_tenders").update({ precio_ref: precio }).eq("id", id).eq("org_id", orgId);
+      }
+    };
     // Marca "el gobierno no publica precio" en la columna (no pisa raw). Fallback
     // al marcador viejo dentro de raw si la migración 0014 no corrió.
     const marcarSinPrecio = async (id: string, raw: unknown) => {
@@ -189,23 +195,11 @@ export async function syncGovTenders(
       }
     };
 
-    // 4a) Del registro ya guardado, sin tocar la API.
-    const paraPliego: { id: string; tipo: string | null; raw: unknown }[] = [];
-    const locales: { id: string; precio: number }[] = [];
-    for (const p of sinPrecio) {
-      const local = extractPrecioRef(p.raw);
-      if (local !== null) locales.push({ id: p.id, precio: local });
-      else paraPliego.push(p);
-    }
-    for (let i = 0; i < locales.length; i += 20) {
-      await Promise.all(locales.slice(i, i + 20).map((l) => setPrecio(l.id, l.precio)));
-    }
-    conPrecio += locales.length;
-
-    // 4b) Pliego para el resto, hasta el presupuesto. Más alto porque el sync
-    // corre de noche (maxDuration 300) — llena precios más rápido.
+    // El precio SIEMPRE sale del PLIEGO (tiene el total del proceso + los
+    // renglones); el registro de la lista puede traer un valor parcial/de un
+    // renglón. Presupuesto por corrida (el cron nocturno completa el backlog).
     const PRECIO_BUDGET = 120;
-    const intentar = paraPliego.slice(0, PRECIO_BUDGET);
+    const intentar = sinPrecio.slice(0, PRECIO_BUDGET);
     for (let i = 0; i < intentar.length; i += 3) {
       await Promise.all(
         intentar.slice(i, i + 3).map(async (p) => {
@@ -218,9 +212,9 @@ export async function syncGovTenders(
           }
           try {
             const rawPliego = await pcPliegoRaw(session, idTipo, String(idFlujos));
-            const precio = rawPliego ? extractPrecioRef(rawPliego) : null;
-            if (precio !== null) {
-              await setPrecio(p.id, precio);
+            const bd = rawPliego ? extractPrecioBreakdown(rawPliego) : null;
+            if (bd && bd.elegido !== null) {
+              await setPrecio(p.id, bd.elegido, bd);
               conPrecio++;
             } else {
               // El pliego respondió y no publica precio: no reintentar.
@@ -232,7 +226,7 @@ export async function syncGovTenders(
         }),
       );
     }
-    pendientesPrecio = Math.max(0, paraPliego.length - intentar.length);
+    pendientesPrecio = Math.max(0, sinPrecio.length - intentar.length);
 
     return { ok: true, data: { total: rows.length, nuevos, relevantes, conPrecio, pendientesPrecio, incremental, porTipo, truncados } };
   } catch (e) {
