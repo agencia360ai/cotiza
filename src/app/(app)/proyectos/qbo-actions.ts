@@ -176,13 +176,18 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
 
     // Reconciliar: borrar filas del año que ya NO vinieron de QBO (proyecto
     // borrado/renombrado) para que no queden huérfanas inflando conteos.
-    // Solo si el pull trajo lista (guarda contra un fetch vacío por error).
+    // Solo si el pull trajo lista (guarda contra un fetch vacío por error) y
+    // NUNCA borra filas con trabajo manual (avance, status ≠ activo, o cerrado)
+    // para que un hipo del listado de QBO no borre el avance del equipo.
     const ids = rows.map((r) => r.qb_job_id);
     await supabase
       .from("qbo_project_state")
       .delete()
       .eq("org_id", orgId)
       .eq("year", year)
+      .is("progress", null)
+      .eq("status", "activo")
+      .eq("closed", false)
       .not("qb_job_id", "in", `(${ids.map((i) => `"${i}"`).join(",")})`);
   }
 
