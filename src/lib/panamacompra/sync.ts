@@ -54,6 +54,10 @@ export async function syncGovTenders(
   opts?: { full?: boolean },
 ): Promise<{ error: string } | { ok: true; data: SyncStats }> {
   if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
+  // Time-box: la función de Vercel corta a los 300s. Cortamos ANTES (~235s) para
+  // no timeoutear nunca; lo que quede se completa en la próxima corrida / el cron.
+  const deadline = Date.now() + 235_000;
+  const vencido = () => Date.now() > deadline;
   try {
     const session = await pcLogin();
 
@@ -71,6 +75,10 @@ export async function syncGovTenders(
     const porTipo: Record<string, number> = {};
     const truncados: string[] = [];
     for (const t of TIPOS) {
+      if (vencido()) {
+        truncados.push(t.key); // no dio el tiempo para este tipo → hay más
+        continue;
+      }
       try {
         const { registros, truncado } = await pcListProcesos(session, {
           ...t,
@@ -149,23 +157,20 @@ export async function syncGovTenders(
     //    Los que el gobierno no publica quedan marcados para no reintentarlos.
     let conPrecio = 0;
     let pendientesPrecio = 0;
-    // precio_checked: columna (migración 0014). El backfill solo mira lo abierto,
-    // sin precio, no chequeado, y que NO sea explícitamente irrelevante (ahorra
-    // presupuesto). Relevantes y cierres próximos primero.
+    // EFICIENCIA: el pliego (pesado, red al gobierno) se baja SOLO para
+    // RELEVANTES abiertas sin precio — que son ~decenas, no miles. Lo no
+    // relevante es ruido y no necesita precio. Cierres próximos primero.
     const backfillCols = "id, tipo, raw";
     const runSinPrecio = (useCol: boolean) => {
       let qy = db
         .from("gov_tenders")
         .select(backfillCols)
         .eq("org_id", orgId)
+        .eq("relevante", true)
         .is("precio_ref", null)
-        .or("relevante.is.null,relevante.is.true")
         .or(`fecha_cierre.is.null,fecha_cierre.gte.${nowIso}`);
       qy = useCol ? qy.eq("precio_checked", false) : qy.is("raw->>_precio_checked", null);
-      return qy
-        .order("relevante", { ascending: false, nullsFirst: false })
-        .order("fecha_cierre", { ascending: true, nullsFirst: false })
-        .limit(400);
+      return qy.order("fecha_cierre", { ascending: true, nullsFirst: false }).limit(400);
     };
     let spRes = (await runSinPrecio(true)) as {
       data: { id: string; tipo: string | null; raw: unknown }[] | null;
@@ -197,12 +202,16 @@ export async function syncGovTenders(
 
     // El precio SIEMPRE sale del PLIEGO (tiene el total del proceso + los
     // renglones); el registro de la lista puede traer un valor parcial/de un
-    // renglón. Presupuesto por corrida (el cron nocturno completa el backlog).
-    const PRECIO_BUDGET = 120;
+    // renglón. Presupuesto por corrida + corte por tiempo → nunca timeoutea.
+    const PRECIO_BUDGET = 80;
     const intentar = sinPrecio.slice(0, PRECIO_BUDGET);
+    let intentados = 0;
     for (let i = 0; i < intentar.length; i += 3) {
+      if (vencido()) break; // se acabó el tiempo → el resto va en la próxima corrida
+      const lote = intentar.slice(i, i + 3);
+      intentados += lote.length;
       await Promise.all(
-        intentar.slice(i, i + 3).map(async (p) => {
+        lote.map(async (p) => {
           const rw = p.raw as { idProcesosContratacionFlujos?: string | number } | null;
           const idFlujos = rw?.idProcesosContratacionFlujos;
           const idTipo = p.tipo ? TIPO_TO_ID[p.tipo] : undefined;
@@ -226,7 +235,7 @@ export async function syncGovTenders(
         }),
       );
     }
-    pendientesPrecio = Math.max(0, sinPrecio.length - intentar.length);
+    pendientesPrecio = Math.max(0, sinPrecio.length - intentados);
 
     return { ok: true, data: { total: rows.length, nuevos, relevantes, conPrecio, pendientesPrecio, incremental, porTipo, truncados } };
   } catch (e) {
