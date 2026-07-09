@@ -9,8 +9,9 @@ import { useState } from "react";
 
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
+// Mismo formato $ que formatMoney (los KPIs de arriba): una sola moneda visible.
 function bal(n: number): string {
-  return "B/. " + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
 export type MonthPoint = { month: number; monto: number; count: number };
