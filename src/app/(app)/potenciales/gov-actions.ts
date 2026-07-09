@@ -16,8 +16,9 @@ import {
   extractPrecioBreakdown,
   type GovDetalle,
 } from "@/lib/panamacompra/client";
-import { hasDropboxConfig, createFolder, getSharedLink, listFolder, uploadFile } from "@/lib/dropbox/client";
+import { hasDropboxConfig, createFolder, getSharedLink, listFolder, uploadFile, copyFile, searchFiles, type DbxEntry } from "@/lib/dropbox/client";
 import { analyzeTenderDocs, type GovDocAnalisis } from "@/lib/panamacompra/docs";
+import { extractRequiredDocs, type SubmissionDoc, type SubmissionDocEstado, type SubmissionPlan } from "@/lib/panamacompra/submit-docs";
 import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
 
 // Carpeta base en Dropbox donde viven las licitaciones (override por env).
@@ -86,10 +87,12 @@ export type GovTenderRow = {
   dropbox_folder_path: string | null;
   dropbox_folder_url: string | null;
   doc_analisis: GovDocAnalisis | null;
+  docs_someter: SubmissionPlan | null;
 };
 
 // Column sets de más completo a más básico (fallback por migraciones pendientes).
 const GOV_COLSETS = [
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter",
   "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis",
   "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
   "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
@@ -153,6 +156,7 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
       dropbox_folder_path: r.dropbox_folder_path ?? null,
       dropbox_folder_url: r.dropbox_folder_url ?? null,
       doc_analisis: r.doc_analisis ?? null,
+      docs_someter: r.docs_someter ?? null,
     };
   });
   return { ok: true, data: { rows, syncedAt } };
@@ -396,6 +400,163 @@ export async function analyzeGovTenderDocs(govId: string): Promise<Result<{ anal
   if (error) return { error: "Falta la migración 0018 (doc_analisis) — corre el SQL y reintenta" };
   revalidatePath("/potenciales");
   return { ok: true, data: { analisis: r.data } };
+}
+
+// ── Documentos a someter (checklist + copia de licitaciones pasadas) ──────────
+const SOMETER_SUBFOLDER = "DOCUMENTOS A SOMETER";
+const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+// Carpeta de licitación (primer segmento bajo la base) de donde salió un archivo.
+function carpetaDe(path: string): string {
+  const rel = path.startsWith(LICITACIONES_BASE) ? path.slice(LICITACIONES_BASE.length) : path;
+  return rel.replace(/^\/+/, "").split("/")[0] || path;
+}
+
+// Busca en las carpetas de LICITACIONES el archivo que mejor matchea un documento
+// requerido. Excluye la carpeta de la licitación actual (para no copiar el pliego).
+async function buscarDocReutilizable(doc: SubmissionDoc, excluirPrefix: string): Promise<DbxEntry | null> {
+  const kws = (doc.keywords ?? []).map(norm).filter(Boolean);
+  const query = doc.keywords?.[0] || doc.nombre;
+  let results: DbxEntry[] = [];
+  try {
+    results = await searchFiles(query, { path: LICITACIONES_BASE, maxResults: 100 });
+  } catch {
+    return null;
+  }
+  const excl = norm(excluirPrefix);
+  const scored = results
+    .filter((r) => r.path && !norm(r.path).startsWith(excl)) // no la carpeta actual
+    .filter((r) => /\.(pdf|docx?|xlsx?|jpe?g|png)$/i.test(r.name))
+    .map((r) => {
+      const n = norm(r.name);
+      const hits = kws.filter((k) => n.includes(k)).length || (norm(query) && n.includes(norm(query)) ? 1 : 0);
+      const someterBonus = /someter/.test(norm(r.path)) ? 0.5 : 0; // preferí una copia ya curada
+      return { r, score: hits + someterBonus };
+    })
+    .filter((x) => x.score >= 1)
+    .sort((a, b) => b.score - a.score || (b.r.modified ?? "").localeCompare(a.r.modified ?? ""));
+  return scored[0]?.r ?? null;
+}
+
+// Paso 1: la IA lee los PDFs del pliego y saca la lista de documentos a someter;
+// crea la subcarpeta "DOCUMENTOS A SOMETER". Aún no copia nada (eso va por doc,
+// para el medidor de %).
+export async function analyzeSubmissionDocs(
+  govId: string,
+): Promise<Result<{ resumen: string; documentos: SubmissionDoc[]; someterPath: string }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasDropboxConfig()) return { error: "Faltan las credenciales de Dropbox en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("titulo, dropbox_folder_path")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { titulo: string | null; dropbox_folder_path: string | null } | null };
+  if (!g) return { error: "No encontrada" };
+  if (!g.dropbox_folder_path) return { error: "Primero crea la carpeta y baja los documentos del pliego." };
+  const r = await extractRequiredDocs({ folderPath: g.dropbox_folder_path, titulo: g.titulo });
+  if (!r.ok) return { error: r.error };
+  const someterPath = `${g.dropbox_folder_path}/${SOMETER_SUBFOLDER}`;
+  try {
+    await createFolder(someterPath);
+  } catch {
+    /* si falla, se reintenta al copiar el primer documento */
+  }
+  return { ok: true, data: { resumen: r.data.resumen, documentos: r.data.documentos, someterPath } };
+}
+
+// Paso 2 (por documento reutilizable): busca en licitaciones pasadas y copia el
+// match a "DOCUMENTOS A SOMETER". Devuelve el documento con su estado resuelto.
+export async function resolveSubmissionDoc(govId: string, doc: SubmissionDoc): Promise<Result<SubmissionDoc>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasDropboxConfig()) return { error: "Faltan las credenciales de Dropbox en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("dropbox_folder_path")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { dropbox_folder_path: string | null } | null };
+  if (!g?.dropbox_folder_path) return { error: "Primero crea la carpeta y baja los documentos." };
+  const someterPath = `${g.dropbox_folder_path}/${SOMETER_SUBFOLDER}`;
+  // No reutilizable = específico de esta licitación → hay que hacerlo a la medida.
+  if (!doc.reutilizable) return { ok: true, data: { ...doc, estado: "por_hacer", copiadoDe: null, archivoPath: null } };
+  try {
+    const match = await buscarDocReutilizable(doc, g.dropbox_folder_path);
+    if (!match) return { ok: true, data: { ...doc, estado: "falta", copiadoDe: null, archivoPath: null } };
+    let archivoPath: string | null = null;
+    try {
+      const copied = await copyFile(match.path, `${someterPath}/${match.name}`);
+      archivoPath = copied.path;
+    } catch {
+      archivoPath = null; // se encontró pero no se pudo copiar (permiso/conflicto)
+    }
+    const copiadoDe = carpetaDe(match.path);
+    const estado: SubmissionDocEstado = !archivoPath ? "falta" : doc.renovable ? "por_renovar" : "copiado";
+    return { ok: true, data: { ...doc, estado, copiadoDe, archivoPath } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo resolver el documento" };
+  }
+}
+
+const ESTADO_TXT: Record<SubmissionDocEstado, string> = {
+  pendiente: "[ ] PENDIENTE",
+  copiado: "[x] COPIADO  ",
+  por_renovar: "[!] RENOVAR  ",
+  falta: "[ ] FALTA    ",
+  por_hacer: "[~] HACER    ",
+};
+function buildChecklistText(num: string, titulo: string | null, plan: SubmissionPlan): string {
+  const lines = [
+    "CHECKLIST — DOCUMENTOS A SOMETER",
+    `Licitación: ${titulo ?? ""} (${num})`,
+    `Generado: ${plan.at}`,
+    "",
+    plan.resumen,
+    "",
+  ];
+  for (const d of plan.documentos) {
+    const est = ESTADO_TXT[d.estado] ?? d.estado;
+    const extra = (d.estado === "copiado" || d.estado === "por_renovar") && d.copiadoDe ? ` — de: ${d.copiadoDe}` : "";
+    const nota = d.notas ? `  (${d.notas})` : "";
+    lines.push(`${est}  ${d.nombre}${extra}${nota}`);
+  }
+  lines.push("", "Leyenda: [x] copiado · [!] copiado, verificar vigencia/renovar · [ ] falta (conseguir) · [~] hacer a la medida de esta licitación");
+  return lines.join("\n");
+}
+
+// Paso 3: persiste el plan y escribe el checklist como archivo en la carpeta.
+export async function saveSubmissionPlan(
+  govId: string,
+  resumen: string,
+  documentos: SubmissionDoc[],
+): Promise<Result<{ plan: SubmissionPlan }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("num_proceso, titulo, dropbox_folder_path")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { num_proceso: string; titulo: string | null; dropbox_folder_path: string | null } | null };
+  if (!g?.dropbox_folder_path) return { error: "Sin carpeta de Dropbox" };
+  const someterPath = `${g.dropbox_folder_path}/${SOMETER_SUBFOLDER}`;
+  const plan: SubmissionPlan = { resumen, someterPath, documentos, at: new Date().toISOString() };
+  if (hasDropboxConfig()) {
+    try {
+      await createFolder(someterPath).catch(() => {});
+      const txt = buildChecklistText(g.num_proceso, g.titulo, plan);
+      await uploadFile(`${someterPath}/_CHECKLIST DOCUMENTOS A SOMETER.txt`, new TextEncoder().encode(txt), { overwrite: true });
+    } catch {
+      /* el checklist en archivo es opcional; el de la app es la fuente de verdad */
+    }
+  }
+  const { error } = await c.supabase.from("gov_tenders").update({ docs_someter: plan }).eq("id", govId).eq("org_id", c.orgId);
+  if (isMissingColumn(error)) return { error: "Falta la migración 0020 (docs_someter) — corre el SQL y reintenta." };
+  if (error) return { error: error.message };
+  revalidatePath("/potenciales");
+  return { ok: true, data: { plan } };
 }
 
 // "Actualizar": delega al sync compartido (mismo código que el cron diario).
