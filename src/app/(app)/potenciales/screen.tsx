@@ -1519,6 +1519,8 @@ function SendToQboDialog({
   const [numero, setNumero] = useState("");
   const [nombre, setNombre] = useState("");
   const [parentId, setParentId] = useState("");
+  const [parentMode, setParentMode] = useState<"existente" | "nuevo">("existente");
+  const [newParent, setNewParent] = useState(quote.client_std_name ?? quote.client_name ?? "");
   const [email, setEmail] = useState(quote.contact_email ?? "");
   const [startDate, setStartDate] = useState(today());
   const [endDate, setEndDate] = useState("");
@@ -1541,6 +1543,9 @@ function SendToQboDialog({
       setNumero(r.data.numero);
       setNombre(r.data.nombre);
       setParentId(r.data.matchedParentId ?? r.data.parents[0]?.id ?? "");
+      // Sin match por nombre (o sin lista): probablemente el cliente no existe
+      // en QBO todavía → arrancar en "cliente nuevo".
+      if (!r.data.matchedParentId || r.data.parents.length === 0) setParentMode("nuevo");
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : "No se pudo consultar QBO — reintenta");
     }
@@ -1558,9 +1563,13 @@ function SendToQboDialog({
 
   async function crear() {
     if (busy || done) return;
-    const parent = sug?.parents.find((p) => p.id === parentId);
-    if (!parent) {
+    const parent = parentMode === "existente" ? sug?.parents.find((p) => p.id === parentId) : null;
+    if (parentMode === "existente" && !parent) {
       setErr("Elige el cliente de QBO al que pertenece el proyecto.");
+      return;
+    }
+    if (parentMode === "nuevo" && !newParent.trim()) {
+      setErr("Escribe el nombre del cliente nuevo para crearlo en QBO.");
       return;
     }
     setBusy(true);
@@ -1569,8 +1578,9 @@ function SendToQboDialog({
       const r = await sendQuoteToQbo(quote.id, {
         numero: numero.trim(),
         nombre: nombre.trim(),
-        parentId: parent.id,
-        parentName: parent.name,
+        parentId: parent?.id ?? null,
+        parentName: parent?.name ?? newParent.trim(),
+        newParentName: parentMode === "nuevo" ? newParent.trim() : null,
         email: email.trim() || null,
         startDate: startDate || null,
         endDate: endDate || null,
@@ -1605,7 +1615,9 @@ function SendToQboDialog({
         }
       }
       onSent(patch);
-      setDone(`${r.data.nombre}${trackingWarn ? ` · Tracking: ${trackingWarn}` : ""}`);
+      setDone(
+        `${r.data.nombre}${r.data.parentCreado ? ` (cliente "${r.data.parentCreado}" creado en QBO)` : ""}${trackingWarn ? ` · Tracking: ${trackingWarn}` : ""}`,
+      );
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Se cortó el envío — verifica en QBO antes de reintentar");
     } finally {
@@ -1674,16 +1686,53 @@ function SendToQboDialog({
               <input className={inputCls} value={nombre} onChange={(e) => setNombre(e.target.value)} />
             </Field>
           </div>
-          <Field label="Cliente en QBO">
-            <select className={inputCls} value={parentId} onChange={(e) => setParentId(e.target.value)}>
-              {sug.parents.length === 0 ? <option value="">(no se pudo leer la lista de clientes)</option> : null}
-              {sug.parents.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <div>
+            <div className="mb-1.5 flex items-center gap-1 text-xs">
+              <span className="mr-1 font-semibold uppercase tracking-wider text-slate-500">Cliente en QBO</span>
+              <button
+                type="button"
+                onClick={() => setParentMode("existente")}
+                className={cn(
+                  "rounded-md px-2.5 py-1 font-semibold",
+                  parentMode === "existente" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                )}
+              >
+                Existente
+              </button>
+              <button
+                type="button"
+                onClick={() => setParentMode("nuevo")}
+                className={cn(
+                  "rounded-md px-2.5 py-1 font-semibold",
+                  parentMode === "nuevo" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                )}
+              >
+                Cliente nuevo
+              </button>
+            </div>
+            {parentMode === "existente" ? (
+              <select className={inputCls} value={parentId} onChange={(e) => setParentId(e.target.value)}>
+                {sug.parents.length === 0 ? <option value="">(no se pudo leer la lista — usa "Cliente nuevo")</option> : null}
+                {sug.parents.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div>
+                <input
+                  className={inputCls}
+                  placeholder="Nombre del cliente nuevo en QBO"
+                  value={newParent}
+                  onChange={(e) => setNewParent(e.target.value)}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Se crea primero el cliente en QuickBooks y el proyecto queda colgado de él.
+                </p>
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Fecha de inicio">
               <input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
