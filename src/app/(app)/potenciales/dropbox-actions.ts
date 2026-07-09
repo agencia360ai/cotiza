@@ -218,6 +218,10 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
         follow_up_date: null,
         rejection_reason: null,
         converted_project_id: null,
+        qbo_job_id: null,
+        qbo_sent_at: null,
+        seguimiento_descartado_at: null,
+        seguimiento_descartado_motivo: null,
       },
     };
   } catch (e) {
