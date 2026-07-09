@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  AlarmClock,
   FileText,
   Gavel,
   Plus,
@@ -27,6 +28,7 @@ import {
   Link2,
   CloudUpload,
   Landmark,
+  Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { norm } from "@/lib/clients/normalize";
@@ -46,7 +48,7 @@ import {
   type Rubro,
   type Modalidad,
 } from "@/lib/pipeline/types";
-import { PROJECT_TYPE_LABEL, type ProjectType } from "@/lib/projects/types";
+import { type ProjectType } from "@/lib/projects/types";
 import {
   updateQuote,
   createQuote,
@@ -57,6 +59,13 @@ import {
 import { DropboxImportDialog } from "./dropbox-import";
 import { GovTendersBoard } from "./gov-tenders";
 import { listGovTenders } from "./gov-actions";
+import {
+  suggestQboProjectSetup,
+  sendQuoteToQbo,
+  dismissSeguimiento,
+  restoreSeguimiento,
+  type QboSendSuggestion,
+} from "./qbo-send-actions";
 import { groupRevisions, parseRev } from "@/lib/pipeline/revisions";
 import { CotizadorDialog } from "./cotizador";
 import { publishQuote, getQuoteLetter, createQuoteSharedLink, type QuoteLetterBundle } from "./cotizador-actions";
@@ -71,7 +80,6 @@ type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["presentada", "en_revision", "por_partir", "ganada", "no_ganada"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
-const PROJECT_TYPES: ProjectType[] = ["obra", "instalacion", "remodelacion", "otro"];
 
 // Fecha LOCAL de Panamá (UTC-5): toISOString() es UTC y después de las 7pm
 // local ya devuelve "mañana" — corría follow-ups un día antes.
@@ -79,6 +87,39 @@ const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso + "T00:00:00").toLocaleDateString("es-PA", { day: "2-digit", month: "short", year: "2-digit" });
+}
+
+// ── Antigüedad de enviadas (aging) ────────────────────────────────────────────
+// Bandas: fresca ≤7 d (gris) · 8–20 d (ámbar) · ≥21 d (rojo = entra a
+// "Seguimiento pendiente" hasta que se apruebe/rechace o se descarte).
+const STALE_DAYS = 21;
+
+function daysSince(iso: string | null): number | null {
+  if (!iso) return null;
+  const d = Math.floor((+new Date(today() + "T00:00:00") - +new Date(iso + "T00:00:00")) / 86400000);
+  return d >= 0 ? d : 0;
+}
+
+function AgingChip({ days, compact }: { days: number; compact?: boolean }) {
+  const cls =
+    days >= STALE_DAYS
+      ? "bg-rose-50 text-rose-700 ring-rose-600/20"
+      : days >= 8
+        ? "bg-amber-50 text-amber-700 ring-amber-600/20"
+        : "bg-slate-100 text-slate-500 ring-slate-200";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full font-semibold ring-1 ring-inset tabular-nums",
+        compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
+        cls,
+      )}
+      title={`Enviada hace ${days} día${days === 1 ? "" : "s"} sin respuesta`}
+    >
+      <Clock className="size-3" />
+      {days === 0 ? "hoy" : `hace ${days} d`}
+    </span>
+  );
 }
 // Sugerir tipo de proyecto desde el rubro de la cotización.
 function suggestType(rubro: Rubro | null): ProjectType {
@@ -171,7 +212,9 @@ function CotizacionesTab({
   const [sort, setSort] = useState<SortState<QSortKey>>({ key: "sent_date", dir: "desc" });
   const [editing, setEditing] = useState<QuoteRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const [converting, setConverting] = useState<QuoteRow | null>(null);
+  const [sendingQbo, setSendingQbo] = useState<QuoteRow | null>(null);
+  const [dismissing, setDismissing] = useState<QuoteRow | null>(null);
+  const [showDescartadas, setShowDescartadas] = useState(false);
   const [showDropbox, setShowDropbox] = useState(false);
   const [showCotizador, setShowCotizador] = useState(false);
   const [showEngineerLink, setShowEngineerLink] = useState(false);
@@ -260,6 +303,26 @@ function CotizacionesTab({
     setQuotes((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
   }
 
+  // Action points de seguimiento: enviadas VIGENTES con ≥21 días sin respuesta y
+  // sin descartar. Global (ignora los filtros de vista): es una lista de tareas,
+  // no una vista. Las descartadas quedan consultables con su motivo.
+  const seguimiento = useMemo(() => {
+    const pend: { q: QuoteRow; days: number }[] = [];
+    const descartadas: QuoteRow[] = [];
+    for (const g of groups) {
+      const x = g.main;
+      if (x.status !== "enviada") continue;
+      if (x.seguimiento_descartado_at) {
+        descartadas.push(x);
+        continue;
+      }
+      const d = daysSince(x.sent_date);
+      if (d !== null && d >= STALE_DAYS) pend.push({ q: x, days: d });
+    }
+    pend.sort((a, b) => b.days - a.days);
+    return { pend, descartadas };
+  }, [groups]);
+
   return (
     <>
       <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -268,6 +331,126 @@ function CotizacionesTab({
         <Kpi label="Por cobrar" value={String(kpis.porCobrar)} sub="aprobadas sin pago" icon={DollarSign} accent="#2563EB" />
         <Kpi label="Tasa de cierre" value={`${kpis.cierre}%`} sub={`${kpis.rechazadaCount} rechazadas`} icon={TrendingUp} accent="#6366F1" />
       </section>
+
+      {/* Seguimiento pendiente: enviadas viejas que piden acción */}
+      {seguimiento.pend.length > 0 || seguimiento.descartadas.length > 0 ? (
+        <section className="mb-4 rounded-2xl border border-amber-200/70 bg-amber-50/50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="flex size-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                <AlarmClock className="size-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Seguimiento pendiente
+                  {seguimiento.pend.length > 0 ? (
+                    <span className="ml-2 rounded-full bg-amber-600 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums">
+                      {seguimiento.pend.length}
+                    </span>
+                  ) : null}
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Enviadas hace más de {STALE_DAYS} días sin respuesta — dales seguimiento o descártalas con un motivo.
+                </p>
+              </div>
+            </div>
+            {seguimiento.descartadas.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowDescartadas((v) => !v)}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+              >
+                {showDescartadas ? "Ocultar descartadas" : `Descartadas (${seguimiento.descartadas.length})`}
+              </button>
+            ) : null}
+          </div>
+
+          {seguimiento.pend.length > 0 ? (
+            <ul className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {seguimiento.pend.slice(0, 6).map(({ q: x, days }) => (
+                <li
+                  key={x.id}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-amber-100 bg-white px-3 py-2.5 shadow-sm"
+                >
+                  <button type="button" onClick={() => setEditing(x)} className="min-w-0 flex-1 cursor-pointer text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold tabular-nums text-slate-700">{x.quote_number}</span>
+                      <AgingChip days={days} compact />
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-slate-600">
+                      {x.client_std_name ?? x.client_name ?? "—"}
+                      <span className="ml-1.5 font-semibold text-slate-800">
+                        {x.amount_usd !== null ? formatMoneyExact(x.amount_usd) : ""}
+                      </span>
+                    </p>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {waLink(x.contact_phone) ? (
+                      <a
+                        href={waLink(x.contact_phone)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex size-7 items-center justify-center rounded-md text-emerald-600 hover:bg-emerald-50"
+                        title="Dar seguimiento por WhatsApp"
+                      >
+                        <MessageCircle className="size-4" />
+                      </a>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setDismissing(x)}
+                      className="flex size-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      title="Descartar del seguimiento (con motivo)"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">Nada pendiente — todas las enviadas viejas están descartadas o resueltas.</p>
+          )}
+          {seguimiento.pend.length > 6 ? (
+            <p className="mt-2 text-[11px] text-slate-500">
+              +{seguimiento.pend.length - 6} más — filtra por estado &ldquo;Enviada&rdquo; y ordena por fecha para verlas todas.
+            </p>
+          ) : null}
+
+          {showDescartadas && seguimiento.descartadas.length > 0 ? (
+            <ul className="mt-3 space-y-1.5 border-t border-amber-100 pt-3">
+              {seguimiento.descartadas.map((x) => (
+                <li key={x.id} className="flex items-center justify-between gap-2 rounded-lg bg-white/70 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold tabular-nums text-slate-500">
+                      {x.quote_number} <span className="font-normal">· {x.client_std_name ?? x.client_name ?? "—"}</span>
+                    </p>
+                    <p className="truncate text-[11px] italic text-slate-400">
+                      {x.seguimiento_descartado_motivo || "sin motivo"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const r = await restoreSeguimiento(x.id);
+                        if (!("error" in r)) {
+                          applyLocal({ ...x, seguimiento_descartado_at: null, seguimiento_descartado_motivo: null });
+                        }
+                      } catch {
+                        /* reintenta con otro click */
+                      }
+                    }}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <Undo2 className="size-3.5" /> Restaurar
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* Filtros */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -470,7 +653,12 @@ function CotizacionesTab({
                         </div>
                       </td>
                       <td className="hidden whitespace-nowrap px-3 py-2.5 text-slate-500 sm:table-cell">
-                        {fmtDate(x.sent_date)}
+                        <div>{fmtDate(x.sent_date)}</div>
+                        {x.status === "enviada" && daysSince(x.sent_date) !== null ? (
+                          <div className="mt-0.5">
+                            <AgingChip days={daysSince(x.sent_date)!} compact />
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -495,14 +683,22 @@ function CotizacionesTab({
                               <Mail className="size-4" />
                             </a>
                           ) : null}
-                          {x.status === "aprobada" && !x.converted_project_id ? (
+                          {x.qbo_job_id ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
+                              title={`En QBO desde ${x.qbo_sent_at ? fmtDate(x.qbo_sent_at.slice(0, 10)) : "—"}`}
+                            >
+                              <CheckCircle2 className="size-3.5" /> QBO
+                            </span>
+                          ) : x.status === "aprobada" ? (
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setConverting(x);
+                                setSendingQbo(x);
                               }}
                               className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                              title="Crear el proyecto en QuickBooks"
                             >
                               → Proyecto
                             </button>
@@ -573,9 +769,10 @@ function CotizacionesTab({
             setQuotes((prev) => prev.filter((x) => x.id !== id));
             setEditing(null);
           }}
-          onConvert={() => {
-            setConverting(editing);
+          onSendQbo={(q) => {
+            applyLocal(q);
             setEditing(null);
+            setSendingQbo(q);
           }}
         />
       ) : null}
@@ -591,16 +788,23 @@ function CotizacionesTab({
         />
       ) : null}
 
-      {converting ? (
-        <ConvertDialog
-          quote={converting}
-          clients={clients}
-          onClose={() => setConverting(null)}
-          onConverted={(projectId) => {
-            setQuotes((prev) =>
-              prev.map((x) => (x.id === converting.id ? { ...x, converted_project_id: projectId } : x)),
-            );
-            setConverting(null);
+      {sendingQbo ? (
+        <SendToQboDialog
+          quote={sendingQbo}
+          onClose={() => setSendingQbo(null)}
+          onSent={(patch) => {
+            setQuotes((prev) => prev.map((x) => (x.id === sendingQbo.id ? { ...x, ...patch } : x)));
+          }}
+        />
+      ) : null}
+
+      {dismissing ? (
+        <DescartarSeguimientoDialog
+          quote={dismissing}
+          onClose={() => setDismissing(null)}
+          onDone={(at, motivo) => {
+            applyLocal({ ...dismissing, seguimiento_descartado_at: at, seguimiento_descartado_motivo: motivo });
+            setDismissing(null);
           }}
         />
       ) : null}
@@ -646,7 +850,7 @@ function QuoteDrawer({
   onClose,
   onSaved,
   onDeleted,
-  onConvert,
+  onSendQbo,
   onEditLetter,
 }: {
   quote: QuoteRow;
@@ -654,7 +858,7 @@ function QuoteDrawer({
   onClose: () => void;
   onSaved: (q: QuoteRow) => void;
   onDeleted: (id: string) => void;
-  onConvert: () => void;
+  onSendQbo: (q: QuoteRow) => void;
   onEditLetter?: (b: QuoteLetterBundle) => void;
 }) {
   const [f, setF] = useState<QuoteRow>(quote);
@@ -725,9 +929,9 @@ function QuoteDrawer({
     }
   }
 
-  async function save() {
-    if (saving || pubBusy) return; // guardar durante un publish podía revertir "enviada" a "borrador"
-    setSaving(true);
+  // Persistir el formulario. Devuelve true si guardó (para encadenar el envío
+  // a QBO sin duplicar la lógica).
+  async function doSave(): Promise<boolean> {
     setError(null);
     try {
       const r = await updateQuote(quote.id, {
@@ -751,11 +955,31 @@ function QuoteDrawer({
       });
       if ("error" in r) {
         setError(r.error);
-        return;
+        return false;
       }
-      onSaved(f);
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Se cortó el guardado — reintenta");
+      return false;
+    }
+  }
+
+  async function save() {
+    if (saving || pubBusy) return; // guardar durante un publish podía revertir "enviada" a "borrador"
+    setSaving(true);
+    try {
+      if (await doSave()) onSaved(f);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Un solo flujo: guarda el formulario y abre el diálogo de envío a QBO.
+  async function guardarYEnviar() {
+    if (saving || pubBusy) return;
+    setSaving(true);
+    try {
+      if (await doSave()) onSendQbo(f);
     } finally {
       setSaving(false);
     }
@@ -1022,36 +1246,60 @@ function QuoteDrawer({
           <textarea rows={2} className={inputCls} value={f.notes ?? ""} onChange={(e) => set("notes", e.target.value || null)} />
         </Field>
 
-        {f.converted_project_id ? (
-          <Link
-            href={`/proyectos/${f.converted_project_id}`}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
-          >
-            <ArrowUpRight className="size-4" />
-            Ver proyecto vinculado
-          </Link>
-        ) : f.status === "aprobada" ? (
-          <button
-            type="button"
-            onClick={onConvert}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
-          >
-            <ArrowUpRight className="size-4" />
-            Convertir a proyecto
-          </button>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {f.qbo_job_id ? (
+            <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+              <CheckCircle2 className="size-4" />
+              En QBO{f.qbo_sent_at ? ` · ${fmtDate(f.qbo_sent_at.slice(0, 10))}` : ""}
+            </span>
+          ) : null}
+          {f.converted_project_id ? (
+            <Link
+              href={`/proyectos/${f.converted_project_id}`}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+            >
+              <ArrowUpRight className="size-4" />
+              Ver proyecto vinculado
+            </Link>
+          ) : null}
+        </div>
 
         {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
 
-        <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+          {!f.qbo_job_id ? (
+            <button
+              type="button"
+              onClick={guardarYEnviar}
+              disabled={saving || pubBusy}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              title="Guarda los cambios y crea el proyecto en QuickBooks (asigna el próximo número DC/DM)"
+            >
+              {saving ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
+              Guardar y enviar a proyectos
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={save}
             disabled={saving || pubBusy}
-            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            className={cn(
+              "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-50",
+              f.qbo_job_id
+                ? "bg-slate-900 text-white hover:bg-slate-800"
+                : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+            )}
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : null}
             Guardar
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving || pubBusy}
+            className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+          >
+            Cancelar
           </button>
           <button
             type="button"
@@ -1164,6 +1412,10 @@ function NewQuoteDrawer({
       follow_up_date: status === "enviada" ? followUp || null : null,
       rejection_reason: null,
       converted_project_id: null,
+      qbo_job_id: null,
+      qbo_sent_at: null,
+      seguimiento_descartado_at: null,
+      seguimiento_descartado_motivo: null,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Se cortó el guardado — reintenta");
@@ -1248,129 +1500,290 @@ function NewQuoteDrawer({
   );
 }
 
-function ConvertDialog({
+// ── Enviar a proyectos (QBO): el cierre del loop cotización → proyecto ────────
+// Jala de QBO el próximo correlativo DC/DM (editable), pre-selecciona el
+// cliente padre, y crea el proyecto con los campos del formulario de QBO
+// (nombre, email, fechas, notas). Opcional: crear también el proyecto de
+// tracking en Reportme (fotos/hitos).
+function SendToQboDialog({
   quote,
-  clients,
   onClose,
-  onConverted,
+  onSent,
 }: {
   quote: QuoteRow;
-  clients: ClientOpt[];
   onClose: () => void;
-  onConverted: (projectId: string) => void;
+  onSent: (patch: Partial<QuoteRow>) => void;
 }) {
-  // Pre-match cliente por nombre.
-  const preMatch = useMemo(() => {
-    if (quote.client_id) {
-      const byId = clients.find((c) => c.id === quote.client_id);
-      if (byId) return byId;
+  const [sug, setSug] = useState<QboSendSuggestion | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [numero, setNumero] = useState("");
+  const [nombre, setNombre] = useState("");
+  const [parentId, setParentId] = useState("");
+  const [email, setEmail] = useState(quote.contact_email ?? "");
+  const [startDate, setStartDate] = useState(today());
+  const [endDate, setEndDate] = useState("");
+  const [notas, setNotas] = useState("");
+  const [alsoTracking, setAlsoTracking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  async function load() {
+    setLoadErr(null);
+    setSug(null);
+    try {
+      const r = await suggestQboProjectSetup(quote.id);
+      if ("error" in r) {
+        setLoadErr(r.error);
+        return;
+      }
+      setSug(r.data);
+      setNumero(r.data.numero);
+      setNombre(r.data.nombre);
+      setParentId(r.data.matchedParentId ?? r.data.parents[0]?.id ?? "");
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : "No se pudo consultar QBO — reintenta");
     }
-    const n = (quote.client_name ?? "").trim().toLowerCase();
-    if (!n) return null;
-    return clients.find((c) => c.name.trim().toLowerCase() === n) ?? clients.find((c) => n.includes(c.name.trim().toLowerCase())) ?? null;
-  }, [quote.client_id, quote.client_name, clients]);
+  }
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const [mode, setMode] = useState<"existing" | "new">(preMatch ? "existing" : clients.length ? "existing" : "new");
-  const [clientId, setClientId] = useState(preMatch?.id ?? clients[0]?.id ?? "");
-  const [newClient, setNewClient] = useState(quote.client_name ?? "");
-  const [name, setName] = useState(
-    quote.description ? quote.description.slice(0, 60) : `Proyecto ${quote.quote_number}`,
-  );
-  const [projectType, setProjectType] = useState<ProjectType>(suggestType(quote.rubro));
-  const [location, setLocation] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Editar el número reescribe el prefijo del nombre (si seguía sincronizado).
+  function cambiarNumero(nuevo: string) {
+    setNombre((n) => (numero && n.startsWith(numero) ? nuevo + n.slice(numero.length) : n));
+    setNumero(nuevo);
+  }
 
-  async function convert() {
-    if (!name.trim()) {
-      setError("Poné un nombre al proyecto");
+  async function crear() {
+    if (busy || done) return;
+    const parent = sug?.parents.find((p) => p.id === parentId);
+    if (!parent) {
+      setErr("Elige el cliente de QBO al que pertenece el proyecto.");
       return;
     }
-    setSaving(true);
-    setError(null);
-    const r = await convertQuoteToProject(quote.id, {
-      clientId: mode === "existing" ? clientId : null,
-      newClientName: mode === "new" ? newClient : null,
-      name,
-      projectType,
-      locationLabel: location || null,
-    });
-    setSaving(false);
-    if ("error" in r) {
-      setError(r.error);
-      return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await sendQuoteToQbo(quote.id, {
+        numero: numero.trim(),
+        nombre: nombre.trim(),
+        parentId: parent.id,
+        parentName: parent.name,
+        email: email.trim() || null,
+        startDate: startDate || null,
+        endDate: endDate || null,
+        notas: notas.trim() || null,
+      });
+      if ("error" in r) {
+        setErr(r.error);
+        return;
+      }
+      const patch: Partial<QuoteRow> = {
+        status: "aprobada",
+        qbo_job_id: r.data.qboJobId,
+        qbo_sent_at: new Date().toISOString(),
+      };
+      // Tracking opcional en Reportme (mejor esfuerzo: si falla, el proyecto de
+      // QBO ya quedó creado y se avisa en el panel de éxito).
+      let trackingWarn: string | null = null;
+      if (alsoTracking && !quote.converted_project_id) {
+        const clientName = quote.client_std_name ?? quote.client_name;
+        if (quote.client_id || clientName) {
+          const cr = await convertQuoteToProject(quote.id, {
+            clientId: quote.client_id,
+            newClientName: quote.client_id ? null : clientName,
+            name: nombre.trim().slice(0, 80),
+            projectType: suggestType(quote.rubro),
+            locationLabel: quote.location_name,
+          });
+          if ("error" in cr) trackingWarn = cr.error;
+          else patch.converted_project_id = cr.data.projectId;
+        } else {
+          trackingWarn = "Sin cliente identificado — crea el tracking desde Proyectos.";
+        }
+      }
+      onSent(patch);
+      setDone(`${r.data.nombre}${trackingWarn ? ` · Tracking: ${trackingWarn}` : ""}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Se cortó el envío — verifica en QBO antes de reintentar");
+    } finally {
+      setBusy(false);
     }
-    onConverted(r.data.projectId);
   }
 
   return (
-    <Modal title="Convertir a proyecto" onClose={onClose}>
-      <p className="mb-4 text-sm text-slate-600">
-        Cotización <strong>{quote.quote_number}</strong> · {formatMoneyExact(quote.amount_usd)}
+    <Modal title="Enviar a proyectos (QuickBooks)" onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-600">
+        Cotización <strong>{quote.quote_number}</strong> · {formatMoneyExact(quote.amount_usd)} ·{" "}
+        {quote.client_std_name ?? quote.client_name ?? "sin cliente"}
       </p>
-      <div className="space-y-3">
-        <div>
-          <div className="mb-1.5 flex gap-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setMode("existing")}
-              className={cn("rounded-md px-2.5 py-1 font-semibold", mode === "existing" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600")}
-            >
-              Cliente existente
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("new")}
-              className={cn("rounded-md px-2.5 py-1 font-semibold", mode === "new" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600")}
-            >
-              Cliente nuevo
-            </button>
+
+      {done ? (
+        <div className="space-y-3">
+          <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-inset ring-emerald-600/20">
+            <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+              <CheckCircle2 className="size-5" /> Proyecto creado en QBO
+            </p>
+            <p className="mt-1 text-sm text-emerald-700">{done}</p>
+            <p className="mt-1 text-xs text-emerald-600">Ya aparece en la sección Proyectos; los números llegan con el próximo &ldquo;Actualizar&rdquo;.</p>
           </div>
-          {mode === "existing" ? (
-            <select className={inputCls} value={clientId} onChange={(e) => setClientId(e.target.value)}>
-              {clients.length === 0 ? <option value="">(no hay clientes — crea uno)</option> : null}
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input className={inputCls} placeholder="Nombre del cliente nuevo" value={newClient} onChange={(e) => setNewClient(e.target.value)} />
-          )}
-        </div>
-        <Field label="Nombre del proyecto">
-          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Tipo">
-            <select className={inputCls} value={projectType} onChange={(e) => setProjectType(e.target.value as ProjectType)}>
-              {PROJECT_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {PROJECT_TYPE_LABEL[t]}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sucursal / lugar">
-            <input className={inputCls} placeholder="Opcional" value={location} onChange={(e) => setLocation(e.target.value)} />
-          </Field>
-        </div>
-        {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
-        <div className="flex items-center gap-2 pt-1">
           <button
             type="button"
-            onClick={convert}
-            disabled={saving}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            onClick={onClose}
+            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
           >
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
-            Crear proyecto
-          </button>
-          <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">
-            Cancelar
+            Listo
           </button>
         </div>
+      ) : sug === null && loadErr === null ? (
+        <div className="space-y-2 py-4">
+          <div className="h-9 animate-pulse rounded-lg bg-slate-100" />
+          <div className="h-9 animate-pulse rounded-lg bg-slate-100" />
+          <p className="text-xs text-slate-400">Consultando el próximo número de contrato en QuickBooks…</p>
+        </div>
+      ) : loadErr ? (
+        <div className="space-y-3">
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{loadErr}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Reintentar
+          </button>
+        </div>
+      ) : sug ? (
+        <div className="space-y-3">
+          {sug.yaEnviada ? (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
+              Esta cotización ya tiene un proyecto en QBO — enviar otra vez crearía un duplicado.
+            </p>
+          ) : null}
+          {!sug.desdeQbo ? (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
+              QBO no respondió: el número sale de la última sincronización — verifícalo antes de crear.
+            </p>
+          ) : null}
+          <div className="grid grid-cols-[7.5rem_1fr] gap-3">
+            <Field label="Número">
+              <input className={inputCls} value={numero} onChange={(e) => cambiarNumero(e.target.value.toUpperCase())} />
+            </Field>
+            <Field label="Nombre del proyecto (como se verá en QBO)">
+              <input className={inputCls} value={nombre} onChange={(e) => setNombre(e.target.value)} />
+            </Field>
+          </div>
+          <Field label="Cliente en QBO">
+            <select className={inputCls} value={parentId} onChange={(e) => setParentId(e.target.value)}>
+              {sug.parents.length === 0 ? <option value="">(no se pudo leer la lista de clientes)</option> : null}
+              {sug.parents.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Fecha de inicio">
+              <input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </Field>
+            <Field label="Fecha de entrega">
+              <input type="date" className={inputCls} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </Field>
+          </div>
+          <Field label="Email (opcional)">
+            <input type="email" className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          <Field label="Notas (van al proyecto en QBO)">
+            <textarea rows={2} className={inputCls} value={notas} onChange={(e) => setNotas(e.target.value)} />
+          </Field>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+            <input type="checkbox" checked={alsoTracking} onChange={(e) => setAlsoTracking(e.target.checked)} className="size-4 rounded border-slate-300" />
+            Crear también el proyecto de tracking en Reportme (fotos e hitos)
+          </label>
+          {err ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p> : null}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={crear}
+              disabled={busy || !!sug.yaEnviada}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
+              {busy ? "Creando en QBO…" : "Crear proyecto en QBO"}
+            </button>
+            <button type="button" onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50">
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+// Descartar una enviada vieja del seguimiento, dejando el motivo registrado.
+function DescartarSeguimientoDialog({
+  quote,
+  onClose,
+  onDone,
+}: {
+  quote: QuoteRow;
+  onClose: () => void;
+  onDone: (at: string, motivo: string | null) => void;
+}) {
+  const [motivo, setMotivo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function confirmar() {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await dismissSeguimiento(quote.id, motivo);
+      if ("error" in r) {
+        setErr(r.error);
+        return;
+      }
+      onDone(r.data.at, motivo.trim() || null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "No se pudo descartar — reintenta");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Descartar del seguimiento" onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-600">
+        <strong>{quote.quote_number}</strong> · {quote.client_std_name ?? quote.client_name ?? "—"} deja de aparecer en los
+        action points. La cotización sigue como enviada.
+      </p>
+      <Field label="Motivo (queda registrado)">
+        <input
+          className={inputCls}
+          placeholder="Ej: cliente pospuso a 2027, presupuesto congelado…"
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+          autoFocus
+        />
+      </Field>
+      {err ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p> : null}
+      <div className="mt-3 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={confirmar}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+          Descartar
+        </button>
+        <button type="button" onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50">
+          Cancelar
+        </button>
       </div>
     </Modal>
   );

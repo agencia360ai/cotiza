@@ -86,6 +86,10 @@ export type QuoteRow = {
   follow_up_date: string | null;
   rejection_reason: string | null;
   converted_project_id: string | null;
+  qbo_job_id: string | null; // proyecto creado en QuickBooks desde esta cotización
+  qbo_sent_at: string | null;
+  seguimiento_descartado_at: string | null; // sacada de los action points de seguimiento
+  seguimiento_descartado_motivo: string | null;
 };
 
 export type TenderRow = {
