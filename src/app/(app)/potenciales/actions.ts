@@ -56,7 +56,7 @@ export async function updateQuote(
   if ("location_id" in p && !(await locationSupported(c.supabase))) delete p.location_id;
   const { error } = await c.supabase.from("sales_quotes").update(p).eq("id", id).eq("org_id", c.orgId);
   if (error) return { error: error.message };
-  // Aprendé del ajuste manual: guardá el alias (con sucursal si se asignó) para
+  // Aprende del ajuste manual: guarda el alias (con sucursal si se asignó) para
   // que la próxima importación con ese mismo nombre se auto-linkee.
   if (patch.client_id && patch.client_name) {
     await c.supabase
@@ -163,7 +163,7 @@ export async function convertQuoteToProject(
   let clientId = opts.clientId;
   if (!clientId) {
     const name = opts.newClientName?.trim();
-    if (!name) return { error: "Elegí o creá un cliente" };
+    if (!name) return { error: "Elige o crea un cliente" };
     const { data: nc, error: ce } = (await c.supabase
       .from("clients")
       .insert({ org_id: c.orgId, name })
@@ -199,7 +199,7 @@ export async function convertQuoteToProject(
     .is("converted_project_id", null);
   if (linkErr) {
     await c.supabase.from("client_projects").delete().eq("id", project.id).eq("org_id", c.orgId);
-    return { error: "No se pudo vincular la cotización al proyecto; reintentá" };
+    return { error: "No se pudo vincular la cotización al proyecto; reintenta" };
   }
 
   revalidatePath(REVALIDATE);

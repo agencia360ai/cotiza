@@ -387,7 +387,7 @@ function CotizacionesTab({
                     Sin cotizaciones con estos filtros.
                     {soloSinCliente && sinClienteGlobal > 0 ? (
                       <span className="mt-1 block text-xs text-amber-600">
-                        Hay {sinClienteGlobal} sin cliente en otros años/filtros — probá con &ldquo;Todos&rdquo; en el año.
+                        Hay {sinClienteGlobal} sin cliente en otros años/filtros — prueba con &ldquo;Todos&rdquo; en el año.
                       </span>
                     ) : null}
                   </td>
@@ -1276,7 +1276,7 @@ function ConvertDialog({
           </div>
           {mode === "existing" ? (
             <select className={inputCls} value={clientId} onChange={(e) => setClientId(e.target.value)}>
-              {clients.length === 0 ? <option value="">(no hay clientes — creá uno)</option> : null}
+              {clients.length === 0 ? <option value="">(no hay clientes — crea uno)</option> : null}
               {clients.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}

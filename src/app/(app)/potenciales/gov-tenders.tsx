@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDashed,
+  CloudDownload,
   Droplets,
   ExternalLink,
   Fan,
@@ -41,9 +42,14 @@ import {
   followGovTender,
   enrichGovTender,
   createGovTenderFolder,
+  listGovTenderDocs,
+  uploadGovTenderDocToDropbox,
   analyzeGovTenderDocs,
   type GovTenderRow,
 } from "./gov-actions";
+
+// Progreso de la descarga de documentos (pliego → Dropbox), por fila.
+type DocProgress = { done: number; total: number; current: string; subidos: number; saltados: number };
 
 function relTime(ts: number): string {
   const m = Math.round((Date.now() - ts) / 60000);
@@ -268,53 +274,105 @@ function DocAnalisisCard({ r, busy, onAnalizar }: { r: GovTenderRow; busy: boole
         </div>
       ) : (
         <p className="mt-2 text-xs text-slate-500">
-          Subí los PDFs del pliego a la carpeta de Dropbox y la IA (Sonnet) los lee para extraer requisitos, plazos, garantías y
-          si DICEC puede cumplir — con la data real, no solo el título.
+          Baja los documentos del pliego a la carpeta de Dropbox y la IA (Sonnet) los lee para extraer requisitos, plazos,
+          garantías y si DICEC puede cumplir — con la data real, no solo el título.
         </p>
       )}
     </div>
   );
 }
 
-// Carpeta de Dropbox de la licitación: crear (una vez) y abrir para juntar los
-// documentos del pliego.
-function DropboxBand({ r, busy, onCrear }: { r: GovTenderRow; busy: boolean; onCrear: () => void }) {
+// Carpeta de Dropbox de la licitación: crear (una vez), abrir, y bajar los
+// documentos del pliego (PanamaCompra → Dropbox) con medidor de %.
+function DropboxBand({
+  r,
+  busy,
+  onCrear,
+  docBusy,
+  docProgress,
+  docMsg,
+  onDescargarDocs,
+}: {
+  r: GovTenderRow;
+  busy: boolean;
+  onCrear: () => void;
+  docBusy: boolean;
+  docProgress: DocProgress | null;
+  docMsg: string | null;
+  onDescargarDocs: () => void;
+}) {
   const has = !!r.dropbox_folder_path;
+  const pct = docProgress && docProgress.total > 0 ? Math.round((docProgress.done / docProgress.total) * 100) : 0;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-100 bg-sky-50/50 p-3">
-      <div className="flex items-center gap-2">
-        <span className="flex size-8 items-center justify-center rounded-lg bg-sky-100 text-sky-600">
-          <FolderOpen className="size-4" />
-        </span>
-        <div>
-          <p className="text-xs font-bold text-slate-800">Documentos en Dropbox</p>
-          <p className="text-[11px] text-slate-500">
-            {has ? "Carpeta creada — subí ahí los PDFs del pliego." : "Creá una carpeta para juntar los documentos de esta licitación."}
-          </p>
+    <div className="rounded-xl border border-sky-100 bg-sky-50/50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="flex size-8 items-center justify-center rounded-lg bg-sky-100 text-sky-600">
+            <FolderOpen className="size-4" />
+          </span>
+          <div>
+            <p className="text-xs font-bold text-slate-800">Documentos en Dropbox</p>
+            <p className="text-[11px] text-slate-500">
+              {has
+                ? "Baja los documentos del pliego a la carpeta con un clic."
+                : "Crea una carpeta y baja ahí los documentos de esta licitación."}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {has ? (
+            <button
+              type="button"
+              onClick={onDescargarDocs}
+              disabled={docBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+              title="Baja los PDFs del pliego de PanamaCompra y los sube a esta carpeta"
+            >
+              {docBusy ? <Loader2 className="size-3.5 animate-spin" /> : <CloudDownload className="size-3.5" />}
+              {docBusy ? "Bajando…" : "Bajar documentos del pliego"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onCrear}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
+              {busy ? "Creando…" : "Crear carpeta en Dropbox"}
+            </button>
+          )}
+          {has && r.dropbox_folder_url ? (
+            <a
+              href={r.dropbox_folder_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-sky-700"
+            >
+              <FolderOpen className="size-3.5" /> Abrir
+            </a>
+          ) : null}
         </div>
       </div>
-      <div className="flex items-center gap-1.5">
-        {has && r.dropbox_folder_url ? (
-          <a
-            href={r.dropbox_folder_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-sky-700"
-          >
-            <FolderOpen className="size-3.5" /> Abrir en Dropbox
-          </a>
-        ) : (
-          <button
-            type="button"
-            onClick={onCrear}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
-            {busy ? "Creando…" : has ? "Reintentar link" : "Crear carpeta en Dropbox"}
-          </button>
-        )}
-      </div>
+
+      {docProgress ? (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-slate-600">
+            <span className="truncate">
+              {docProgress.total > 0 ? `Bajando ${Math.min(docProgress.done + 1, docProgress.total)} de ${docProgress.total}` : "Leyendo el pliego…"}
+              {docProgress.current ? <span className="text-slate-400"> · {docProgress.current}</span> : null}
+            </span>
+            <span className="ml-2 shrink-0 font-semibold tabular-nums text-slate-700">{pct}%</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-sky-100">
+            <div className="h-full rounded-full bg-sky-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      ) : null}
+
+      {docMsg && !docProgress ? (
+        <p className="mt-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px] text-slate-600 ring-1 ring-inset ring-sky-100">{docMsg}</p>
+      ) : null}
     </div>
   );
 }
@@ -327,6 +385,10 @@ function DetallePliego({
   onCrearCarpeta,
   analyzeBusy,
   onAnalizar,
+  docBusy,
+  docProgress,
+  docMsg,
+  onDescargarDocs,
 }: {
   r: GovTenderRow;
   busy: boolean;
@@ -335,18 +397,33 @@ function DetallePliego({
   onCrearCarpeta: () => void;
   analyzeBusy: boolean;
   onAnalizar: () => void;
+  docBusy: boolean;
+  docProgress: DocProgress | null;
+  docMsg: string | null;
+  onDescargarDocs: () => void;
 }) {
   const d = r.detalle;
+  const dropbox = (
+    <DropboxBand
+      r={r}
+      busy={folderBusy}
+      onCrear={onCrearCarpeta}
+      docBusy={docBusy}
+      docProgress={docProgress}
+      docMsg={docMsg}
+      onDescargarDocs={onDescargarDocs}
+    />
+  );
   if (!d) {
     return (
       <div className="space-y-3">
-        <DropboxBand r={r} busy={folderBusy} onCrear={onCrearCarpeta} />
+        {dropbox}
         {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
         <div className="rounded-xl border border-slate-100 bg-white p-3.5">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego · ¿podemos licitar?</p>
           <p className="mt-2 text-xs text-slate-500">
             Trae del pliego los renglones que hay que suministrar, el contacto de la unidad de compra y la forma de pago/entrega
-            — lo que necesitás para decidir si participar y armar el precio.
+            — lo que necesitas para decidir si participar y armar el precio.
           </p>
           <button
             type="button"
@@ -367,7 +444,7 @@ function DetallePliego({
   const hayEntidad = ent.dependencia || ent.unidadCompra || ent.provincia || ent.direccion;
   return (
     <div className="space-y-3">
-      <DropboxBand r={r} busy={folderBusy} onCrear={onCrearCarpeta} />
+      {dropbox}
       {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
       <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between">
@@ -481,11 +558,15 @@ function TenderTr({
   enrichBusy,
   folderBusy,
   analyzeBusy,
+  docBusy,
+  docProgress,
+  docMsg,
   onSeguir,
   onToggleExpand,
   onEnrich,
   onCrearCarpeta,
   onAnalizar,
+  onDescargarDocs,
 }: {
   r: GovTenderRow;
   tamiz: TamizResult;
@@ -495,11 +576,15 @@ function TenderTr({
   enrichBusy: boolean;
   folderBusy: boolean;
   analyzeBusy: boolean;
+  docBusy: boolean;
+  docProgress: DocProgress | null;
+  docMsg: string | null;
   onSeguir: () => void;
   onToggleExpand: () => void;
   onEnrich: () => void;
   onCrearCarpeta: () => void;
   onAnalizar: () => void;
+  onDescargarDocs: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
   const cerrada = dias !== null && dias < 0;
@@ -665,6 +750,10 @@ function TenderTr({
               onCrearCarpeta={onCrearCarpeta}
               analyzeBusy={analyzeBusy}
               onAnalizar={onAnalizar}
+              docBusy={docBusy}
+              docProgress={docProgress}
+              docMsg={docMsg}
+              onDescargarDocs={onDescargarDocs}
             />
           </td>
         </tr>
@@ -689,6 +778,9 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
   const [folderBusy, setFolderBusy] = useState<string | null>(null);
   const [analyzeBusy, setAnalyzeBusy] = useState<string | null>(null);
+  const [docBusy, setDocBusy] = useState<string | null>(null);
+  const [docProgress, setDocProgress] = useState<{ id: string } & DocProgress | null>(null);
+  const [docMsg, setDocMsg] = useState<{ id: string; text: string } | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
@@ -758,7 +850,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     setLastRefresh(
       `${r.data.total} procesos (${desglose}) · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados` +
         (r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos traídos` : "") +
-        (r.data.pendientesPrecio > 0 ? ` · quedan ~${r.data.pendientesPrecio} sin monto (tocá Actualizar de nuevo)` : ""),
+        (r.data.pendientesPrecio > 0 ? ` · quedan ~${r.data.pendientesPrecio} sin monto (toca Actualizar de nuevo)` : ""),
     );
     if (r.data.truncados.length > 0) {
       setTruncWarn(
@@ -817,6 +909,57 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     }
     setError(null);
     setRows((prev) => prev.map((x) => (x.id === id ? { ...x, doc_analisis: r.data.analisis } : x)));
+  }
+
+  // Baja los documentos del pliego (PanamaCompra → Dropbox) uno por uno, con %.
+  // El cliente maneja el loop para poder mostrar el avance sin timeoutear (cada
+  // archivo es una acción corta).
+  async function descargarDocs(id: string) {
+    setDocBusy(id);
+    setDocMsg(null);
+    setError(null);
+    setDocProgress({ id, done: 0, total: 0, current: "", subidos: 0, saltados: 0 });
+    const listed = await listGovTenderDocs(id);
+    if ("error" in listed) {
+      setError(listed.error);
+      setDocBusy(null);
+      setDocProgress(null);
+      return;
+    }
+    // La carpeta pudo crearse recién: reflejarla en la fila.
+    setRows((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: listed.data.folderPath, dropbox_folder_url: listed.data.folderUrl } : x)),
+    );
+    const docs = listed.data.docs;
+    if (docs.length === 0) {
+      setDocBusy(null);
+      setDocProgress(null);
+      setDocMsg({ id, text: "El pliego no trae documentos descargables. Ábrelo en PanamaCompra y súbelos a la carpeta a mano." });
+      return;
+    }
+    let subidos = 0;
+    let saltados = 0;
+    for (let i = 0; i < docs.length; i++) {
+      const d = docs[i];
+      setDocProgress({ id, done: i, total: docs.length, current: d.nombre, subidos, saltados });
+      if (d.existe) {
+        saltados++;
+      } else {
+        const up = await uploadGovTenderDocToDropbox(id, d.nombre, d.url);
+        if (!("error" in up) && up.data.subido) subidos++;
+      }
+      setDocProgress({ id, done: i + 1, total: docs.length, current: d.nombre, subidos, saltados });
+    }
+    const noBajados = docs.length - subidos - saltados;
+    setDocBusy(null);
+    setDocProgress(null);
+    setDocMsg({
+      id,
+      text:
+        `${subidos} documento${subidos === 1 ? "" : "s"} subido${subidos === 1 ? "" : "s"} a Dropbox` +
+        (saltados > 0 ? ` · ${saltados} ya estaban` : "") +
+        (noBajados > 0 ? ` · ${noBajados} no se pudieron bajar (ábrelos en PanamaCompra)` : ""),
+    });
   }
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
@@ -918,7 +1061,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
               onClick={() => refresh(true)}
               disabled={!!refreshing}
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
-              title="Recorre TODAS las páginas de PanamaCompra (tarda más). Usalo si sospechás que falta algo."
+              title="Recorre TODAS las páginas de PanamaCompra (tarda más). Úsalo si sospechas que falta algo."
             >
               {refreshing === "full" ? <Loader2 className="size-3.5 animate-spin" /> : <ScanSearch className="size-3.5" />}
               Escaneo completo
@@ -1083,8 +1226,8 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
         ) : (
           <>
             <p className="px-4 pb-1 text-xs text-slate-400">
-              {shown.length} de {rows.length} procesos · ordená por cualquier columna (las cerradas quedan al final) · click en una
-              fila para ver el detalle del pliego
+              {shown.length} de {rows.length} procesos · ordena por cualquier columna (las cerradas quedan al final) · haz clic en
+              una fila para ver el detalle del pliego
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -1118,11 +1261,15 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       enrichBusy={enrichBusy === r.id}
                       folderBusy={folderBusy === r.id}
                       analyzeBusy={analyzeBusy === r.id}
+                      docBusy={docBusy === r.id}
+                      docProgress={docProgress?.id === r.id ? docProgress : null}
+                      docMsg={docMsg?.id === r.id ? docMsg.text : null}
                       onSeguir={() => seguir(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEnrich={() => enrich(r.id)}
                       onCrearCarpeta={() => crearCarpeta(r.id)}
                       onAnalizar={() => analizar(r.id)}
+                      onDescargarDocs={() => descargarDocs(r.id)}
                     />
                   ))}
                   {shown.length === 0 ? (
@@ -1131,7 +1278,7 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                         Nada matchea ese filtro.
                         {soloRelevantes && rows.length > 0 && stats.relevantes === 0 ? (
                           <span className="mt-1 block text-xs">
-                            Todavía no hay clasificadas — tocá &ldquo;Actualizar&rdquo; para clasificar con IA, o mirá &ldquo;Todas&rdquo;.
+                            Todavía no hay clasificadas — toca &ldquo;Actualizar&rdquo; para clasificar con IA, o mira &ldquo;Todas&rdquo;.
                           </span>
                         ) : null}
                       </td>

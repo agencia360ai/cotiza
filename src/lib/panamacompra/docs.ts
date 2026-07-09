@@ -61,7 +61,7 @@ export async function analyzeTenderDocs(input: {
     .filter((e) => /\.(pdf|png|jpe?g|webp)$/i.test(e.name))
     .sort((a, b) => (/\.pdf$/i.test(b.name) ? 1 : 0) - (/\.pdf$/i.test(a.name) ? 1 : 0)); // PDFs primero
   if (files.length === 0) {
-    return { ok: false, error: "La carpeta no tiene PDFs todavía. Subí los documentos del pliego a Dropbox y reintentá." };
+    return { ok: false, error: "La carpeta no tiene PDFs todavía. Sube los documentos del pliego a Dropbox y reintenta." };
   }
 
   const content: Anthropic.MessageParam["content"] = [];

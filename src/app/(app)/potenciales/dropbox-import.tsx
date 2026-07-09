@@ -127,7 +127,7 @@ export function DropboxImportDialog({
           {loading ? (
             <p className="py-10 text-center text-sm text-slate-500">Leyendo la carpeta…</p>
           ) : files === null ? (
-            <p className="py-10 text-center text-sm text-slate-500">Pegá la ruta y tocá &ldquo;Listar&rdquo;.</p>
+            <p className="py-10 text-center text-sm text-slate-500">Pega la ruta y toca &ldquo;Listar&rdquo;.</p>
           ) : files.length === 0 ? (
             <p className="py-10 text-center text-sm text-slate-500">No hay PDFs en esta carpeta.</p>
           ) : (
@@ -206,7 +206,7 @@ export function DropboxImportDialog({
             </button>
           </div>
           <p className="mt-2 text-[11px] text-slate-400">
-            Dedup por archivo: las ya importadas no se repiten. Las marcadas <span className="text-amber-600">a revisar</span> tienen un número que ya existe — no van pre-seleccionadas; marcalas a mano si querés importarlas igual.
+            Dedup por archivo: las ya importadas no se repiten. Las marcadas <span className="text-amber-600">a revisar</span> tienen un número que ya existe — no van pre-seleccionadas; márcalas a mano si quieres importarlas igual.
           </p>
         </footer>
       </div>
