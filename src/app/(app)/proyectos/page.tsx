@@ -17,6 +17,9 @@ import { cn } from "@/lib/utils";
 import { QboProjectsBoard } from "./qbo-projects";
 
 export const dynamic = "force-dynamic";
+// Las server actions de esta ruta pueden tardar: "Actualizar" recorre QBO
+// (customers + P&L por proyecto). Sin esto, Vercel corta en el default.
+export const maxDuration = 300;
 
 type ProjectRow = {
   id: string;

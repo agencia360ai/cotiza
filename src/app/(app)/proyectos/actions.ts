@@ -124,18 +124,21 @@ export async function deleteProject(projectId: string): Promise<Result> {
     }
   }
 
+  // Primero la fila (cascadea hitos/media); las fotos del bucket DESPUÉS. Al
+  // revés, un delete fallido (FK, RLS) dejaba el proyecto vivo con todas sus
+  // fotos ya borradas de forma irreversible.
+  const { error } = await supabase
+    .from("client_projects")
+    .delete()
+    .eq("id", projectId);
+  if (error) return { error: error.message };
+
   if (pathsToRemove.size > 0) {
     await supabase.storage
       .from("cotiza-projects")
       .remove(Array.from(pathsToRemove))
       .catch(() => {});
   }
-
-  const { error } = await supabase
-    .from("client_projects")
-    .delete()
-    .eq("id", projectId);
-  if (error) return { error: error.message };
   revalidatePath("/proyectos");
   return { ok: true };
 }
