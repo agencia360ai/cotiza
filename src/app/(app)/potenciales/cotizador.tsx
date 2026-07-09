@@ -305,8 +305,8 @@ export function CotizadorDialog({
           {phase === "brief" || phase === "generating" ? (
             <div>
               <p className="text-sm text-slate-600">
-                Describí el trabajo en una línea — la IA arma la cotización completa en el formato de DICEC: cliente,
-                renglones, precios, ITBMS y condiciones. Después la revisás y ajustás antes de guardar.
+                Describe el trabajo en una línea — la IA arma la cotización completa en el formato de DICEC: cliente,
+                renglones, precios, ITBMS y condiciones. Después la revisas y ajustas antes de guardar.
               </p>
               <textarea
                 rows={4}
@@ -332,7 +332,7 @@ export function CotizadorDialog({
                     )}
                   >
                     <Mic className="size-4" />
-                    {listening ? "Escuchando… tocá para parar" : "Dictar por voz"}
+                    {listening ? "Escuchando… toca para parar" : "Dictar por voz"}
                   </button>
                 ) : null}
                 <button
@@ -574,7 +574,7 @@ export function CotizadorDialog({
                     </div>
                   ))}
                   {letter.items.length === 0 ? (
-                    <p className="px-3 py-4 text-center text-xs text-slate-400">Sin renglones — agregá al menos uno.</p>
+                    <p className="px-3 py-4 text-center text-xs text-slate-400">Sin renglones — agrega al menos uno.</p>
                   ) : null}
                 </div>
                 <div className="border-t border-slate-100 px-3 py-2 text-right text-sm">

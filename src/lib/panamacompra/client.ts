@@ -62,6 +62,16 @@ export async function pcLogin(): Promise<PcSession> {
   return { userToken: j.result.userToken, userSesionId: j.result.userSesionId };
 }
 
+// Login con cache por instancia (~10 min). Evita re-loguear en cada archivo
+// cuando la descarga de documentos hace una acción por archivo.
+let pcSessionCache: { session: PcSession; exp: number } | null = null;
+export async function pcLoginCached(): Promise<PcSession> {
+  if (pcSessionCache && pcSessionCache.exp > Date.now()) return pcSessionCache.session;
+  const session = await pcLogin();
+  pcSessionCache = { session, exp: Date.now() + 10 * 60_000 };
+  return session;
+}
+
 export type PcRegistro = {
   idProcesosContratacion?: string;
   numProceso?: string;
@@ -140,6 +150,38 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
     throw new Error(`PanamaCompra pliego HTTP ${res.status}`); // transitorio → reintentar
   }
   return res.json().catch(() => null);
+}
+
+// Solo el endpoint de archivos de PanamaCompra (no SSRF a otros hosts).
+const ARCHIVO_URL_RE = /^https:\/\/[a-z0-9.-]*panamacompra\.gob\.pa\/procesos-contratacion-archivos\//i;
+
+// Descarga un archivo del pliego (PDF/doc) con la sesión de proveedor. Devuelve
+// los bytes + content-type, o null si el archivo no existe (404). Lanza en
+// errores transitorios (auth/5xx) para poder reintentar.
+export async function pcDownloadArchivo(
+  session: PcSession,
+  url: string,
+): Promise<{ bytes: Buffer; contentType: string | null } | null> {
+  if (!ARCHIVO_URL_RE.test(url.trim())) throw new Error("URL de archivo no permitida");
+  const res = await fetch(url.trim(), {
+    method: "GET",
+    headers: {
+      Accept: "*/*",
+      "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+      Origin: "https://www.panamacompra.gob.pa",
+      Referer: "https://www.panamacompra.gob.pa/",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+      cookie: `userToken=${session.userToken}; userSesionId=${session.userSesionId}`,
+    },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    throw new Error(`Descarga HTTP ${res.status}`);
+  }
+  const ab = await res.arrayBuffer();
+  return { bytes: Buffer.from(ab), contentType: res.headers.get("content-type") };
 }
 
 // ── Precio de referencia del proceso ──────────────────────────────────────────
@@ -231,25 +273,62 @@ function precioDeRenglon(it: Record<string, unknown>): number | null {
   return null;
 }
 
-// Primer array cuyos elementos (objetos) traen su propio precio*ref = renglones.
-function findItemsArray(node: unknown, depth = 0): Record<string, unknown>[] | null {
-  if (node == null || depth > 8) return null;
+// Encontrar el array de RENGLONES reales — no la lista de secciones del pliego.
+//
+// El pliego es un árbol de ~18 secciones ("Número de Proceso", "Contacto…",
+// "Items de la licitación pública", "Archivos…", etc.). El bug viejo buscaba un
+// precio ANIDADO (depth 6) dentro de cada sección; como la sección "Items"
+// contiene renglones con precio, TODA la lista de secciones matcheaba y se
+// mostraban 18 secciones en vez de los renglones.
+//
+// Un renglón real trae su precio y su cantidad/unidad/código como claves
+// PROPIAS (directas); una sección los tiene anidados más abajo. Discriminamos
+// por eso: el precio DIRECTO ya descarta las secciones; la firma de ítem
+// (cantidad/código/unidad) confirma que es la tabla de renglones.
+function isPlainObj(it: unknown): it is Record<string, unknown> {
+  return !!it && typeof it === "object" && !Array.isArray(it);
+}
+function directKeys(it: Record<string, unknown>): string[] {
+  return Object.keys(it).map((k) => k.replace(/[_\s]/g, "").toLowerCase());
+}
+function hasDirectPrecio(it: Record<string, unknown>): boolean {
+  return directKeys(it).some((k) => RE_PRICE_LIKE.test(k) && !RE_PRICE_EXCLUDE.test(k));
+}
+const RE_ITEM_SIGNATURE = /^cantidad|^codigo|unidadmedida|unidaddemedida|numerorenglon|^renglon|numeroitem|^item$/;
+function looksLikeItem(it: Record<string, unknown>): boolean {
+  return hasDirectPrecio(it) && directKeys(it).some((k) => RE_ITEM_SIGNATURE.test(k));
+}
+
+// Recolecta TODOS los arrays cuyos objetos cumplen `pred`, con su puntaje
+// (cuántos objetos cumplen). El array de renglones real es el de mayor puntaje.
+function collectItemArrays(
+  node: unknown,
+  pred: (it: Record<string, unknown>) => boolean,
+  out: { objs: Record<string, unknown>[]; score: number }[] = [],
+  depth = 0,
+): { objs: Record<string, unknown>[]; score: number }[] {
+  if (node == null || depth > 14) return out;
   if (Array.isArray(node)) {
-    const objs = node.filter((it): it is Record<string, unknown> => !!it && typeof it === "object" && !Array.isArray(it));
-    if (objs.length > 0 && objs.some((it) => findFirstByKey(it, RE_PRECIO_REF, 6) !== null)) return objs;
-    for (const it of node) {
-      const r = findItemsArray(it, depth + 1);
-      if (r) return r;
-    }
-    return null;
+    const objs = node.filter(isPlainObj);
+    const score = objs.filter(pred).length;
+    if (score > 0) out.push({ objs, score });
+    for (const it of node) collectItemArrays(it, pred, out, depth + 1);
+    return out;
   }
-  if (typeof node === "object") {
-    for (const v of Object.values(node as Record<string, unknown>)) {
-      const r = findItemsArray(v, depth + 1);
-      if (r) return r;
-    }
+  if (isPlainObj(node)) {
+    for (const v of Object.values(node)) collectItemArrays(v, pred, out, depth + 1);
   }
-  return null;
+  return out;
+}
+
+function findItemsArray(node: unknown): Record<string, unknown>[] | null {
+  // 1) preferí arrays con firma de ítem completa (precio directo + cantidad/…);
+  // 2) si ninguno, relajá a "precio directo" (igual descarta las secciones).
+  let pool = collectItemArrays(node, looksLikeItem);
+  if (pool.length === 0) pool = collectItemArrays(node, hasDirectPrecio);
+  if (pool.length === 0) return null;
+  pool.sort((a, b) => b.score - a.score);
+  return pool[0].objs;
 }
 
 // ¿La descripción del renglón es una fila "TOTAL" resumen (no un ítem real)?
@@ -337,14 +416,96 @@ export function extractItems(node: unknown): PliegoItem[] {
   const arr = findItemsArray(node);
   if (!arr) return [];
   return arr
+    .filter((it) => !esFilaTotal(it))
     .slice(0, 40)
     .map((it) => ({
       descripcion: findFirstString(it, /descripcion|nombre|detalle|titulo/i) ?? "",
-      cantidad: findFirstByKey(it, /^cantidad/i, 4),
+      cantidad: findFirstByKey(it, /^cantidad/i, 3),
       unidad: findFirstString(it, /unidad/i),
-      precioRef: findFirstByKey(it, RE_PRECIO_REF, 6),
+      precioRef: precioDeRenglon(it),
     }))
     .filter((i) => i.descripcion.length > 1);
+}
+
+// ── Archivos descargables del pliego (para bajarlos a Dropbox) ────────────────
+// El pliego trae los documentos (pliego de cargos, especificaciones, etc.). El
+// portal los descarga desde:
+//   {BASE}/procesos-contratacion-archivos/v2/download-file-{UUID}-{code}-{code}
+// Estrategia de extracción (segura: si una URL sale mal, la descarga da 404 y se
+// salta, nunca escribe data equivocada):
+//   1) si el pliego trae una URL con "download-file" → usarla TAL CUAL (sin construir);
+//   2) si no, construir {UUID}-{code}-{code} con el UUID y el código del archivo.
+export type PliegoArchivo = { nombre: string; url: string };
+
+const ARCHIVO_DL_BASE = `${BASE}/procesos-contratacion-archivos/v2/`;
+const RE_UUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+const RE_DOC_EXT = /\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|csv|txt|dwg|dwf|jpe?g|png|gif)$/i;
+// Código de archivo tipo "ZA-101-1AZ-11089496": mayúsculas/números con ≥2 guiones.
+const RE_CODE = /^[A-Z0-9]+(?:-[A-Z0-9]+){2,}$/;
+
+function stringValues(o: Record<string, unknown>): string[] {
+  return Object.values(o).filter((v): v is string => typeof v === "string");
+}
+// Nombre de archivo legible: preferí un valor que TERMINE en extensión de doc;
+// si no, un campo etiquetado nombre/archivo/descripción.
+function nombreArchivo(o: Record<string, unknown>): string | null {
+  for (const v of stringValues(o)) if (RE_DOC_EXT.test(v.trim())) return v.trim();
+  for (const [k, v] of Object.entries(o)) {
+    if (typeof v === "string" && /nombre|archivo|documento|descripcion|titulo/i.test(k.replace(/[_\s]/g, "")) && v.trim().length > 1) {
+      return v.trim();
+    }
+  }
+  return null;
+}
+function normalizarUrlDescarga(v: string): string {
+  if (/^https?:\/\//i.test(v)) return v.trim();
+  const m = v.match(/download-file.*/i);
+  return m ? `${ARCHIVO_DL_BASE}${m[0].replace(/^\/+/, "")}` : v.trim();
+}
+
+export function extractArchivos(node: unknown): PliegoArchivo[] {
+  const out: PliegoArchivo[] = [];
+  const seen = new Set<string>();
+  const add = (nombre: string | null, url: string) => {
+    const u = url.trim();
+    if (!u || seen.has(u.toLowerCase())) return;
+    seen.add(u.toLowerCase());
+    const name = (nombre ?? "").trim() || decodeURIComponent(u.split("/").pop() ?? "documento");
+    out.push({ nombre: name, url: u });
+  };
+  const walk = (n: unknown, parentName: string | null, depth: number) => {
+    if (n == null || depth > 16) return;
+    if (Array.isArray(n)) {
+      for (const it of n) walk(it, parentName, depth + 1);
+      return;
+    }
+    if (typeof n !== "object") return;
+    const o = n as Record<string, unknown>;
+    const nom = nombreArchivo(o);
+    // 1) URL de descarga embebida (verbatim).
+    let embebida = false;
+    for (const v of stringValues(o)) {
+      if (v.includes("download-file")) {
+        embebida = true;
+        add(nom ?? parentName, normalizarUrlDescarga(v));
+      }
+    }
+    // 2) construir desde UUID + código si el objeto es un archivo (y no hubo URL).
+    if (!embebida && nom && RE_DOC_EXT.test(nom)) {
+      let uuid: string | null = null;
+      let code: string | null = null;
+      for (const v of stringValues(o)) {
+        const m = v.match(RE_UUID);
+        if (m && !uuid) uuid = m[0];
+        const t = v.trim();
+        if (!code && RE_CODE.test(t) && !RE_UUID.test(t)) code = t;
+      }
+      if (uuid && code) add(nom, `${ARCHIVO_DL_BASE}download-file-${uuid}-${code}-${code}`);
+    }
+    for (const v of Object.values(o)) walk(v, nom ?? parentName, depth + 1);
+  };
+  walk(node, null, 0);
+  return out.slice(0, 60);
 }
 
 // ── Detalle completo del pliego (para evaluar si podemos licitar) ─────────────

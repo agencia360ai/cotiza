@@ -101,7 +101,7 @@ export function EngineerLinkDialog({ onClose }: { onClose: () => void }) {
                 <Pencil className="size-3.5" /> Código fácil de recordar
               </p>
               <p className="mt-1 text-[11px] text-violet-600">
-                En vez de un token largo, elegí un código corto para dictarlo de memoria (ej: <b>dicec</b> →{" "}
+                En vez de un token largo, elige un código corto para dictarlo de memoria (ej: <b>dicec</b> →{" "}
                 <span className="tabular-nums">…/q/dicec</span>). Ojo: un código obvio es fácil de adivinar por terceros.
               </p>
               <div className="mt-2 flex items-center gap-2">

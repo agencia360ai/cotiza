@@ -8,12 +8,15 @@ import { evaluateTender } from "@/lib/panamacompra/evaluate";
 import {
   hasPanamaCompraConfig,
   pcLogin,
+  pcLoginCached,
   pcPliegoRaw,
+  pcDownloadArchivo,
   extractDetalle,
+  extractArchivos,
   extractPrecioBreakdown,
   type GovDetalle,
 } from "@/lib/panamacompra/client";
-import { hasDropboxConfig, createFolder, getSharedLink } from "@/lib/dropbox/client";
+import { hasDropboxConfig, createFolder, getSharedLink, listFolder, uploadFile } from "@/lib/dropbox/client";
 import { analyzeTenderDocs, type GovDocAnalisis } from "@/lib/panamacompra/docs";
 import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
 
@@ -30,6 +33,22 @@ function folderName(numProceso: string, titulo: string | null): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 180);
+}
+
+// Nombre de archivo seguro para Dropbox. Le agrega extensión según content-type
+// si el nombre del pliego no la trae.
+function sanitizeFileName(nombre: string, contentType: string | null): string {
+  let name = (nombre || "documento").replace(/[/\\:?*"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 150);
+  if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+    const ct = contentType ?? "";
+    const ext = /pdf/i.test(ct) ? ".pdf" : /word|msword|wordprocessing/i.test(ct) ? ".docx" : /excel|spreadsheet/i.test(ct) ? ".xlsx" : /zip/i.test(ct) ? ".zip" : "";
+    name += ext;
+  }
+  return name || "documento";
+}
+// Base del nombre (sin extensión, minúsculas) para detectar "ya está descargado".
+function baseName(name: string): string {
+  return name.replace(/\.[a-z0-9]{2,5}$/i, "").trim().toLowerCase();
 }
 
 type Result<T> = { error: string } | { ok: true; data: T };
@@ -161,7 +180,7 @@ export async function evaluateGovTender(govId: string): Promise<Result<{ eval: G
       raw: g.raw,
     });
     const { error } = await c.supabase.from("gov_tenders").update({ eval: ev }).eq("id", govId).eq("org_id", c.orgId);
-    if (error) return { error: "Falta la migración 0013 (eval) — corré el SQL y reintentá" };
+    if (error) return { error: "Falta la migración 0013 (eval) — corre el SQL y reintenta" };
     revalidatePath("/potenciales");
     return { ok: true, data: { eval: ev } };
   } catch (e) {
@@ -205,7 +224,7 @@ export async function enrichGovTender(govId: string): Promise<Result<{ detalle: 
       delete patch.precio_breakdown;
       ({ error } = await c.supabase.from("gov_tenders").update(patch).eq("id", govId).eq("org_id", c.orgId));
     }
-    if (error) return { error: "Falta la migración 0015 (detalle) — corré el SQL y reintentá" };
+    if (error) return { error: "Falta la migración 0015 (detalle) — corre el SQL y reintenta" };
     revalidatePath("/potenciales");
     return { ok: true, data: { detalle } };
   } catch (e) {
@@ -246,11 +265,114 @@ export async function createGovTenderFolder(
       .update({ dropbox_folder_path: path, dropbox_folder_url: url })
       .eq("id", govId)
       .eq("org_id", c.orgId);
-    if (error) return { error: "Falta la migración 0017 (dropbox) — corré el SQL y reintentá" };
+    if (error) return { error: "Falta la migración 0017 (dropbox) — corre el SQL y reintenta" };
     revalidatePath("/potenciales");
     return { ok: true, data: { path, url } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo crear la carpeta en Dropbox" };
+  }
+}
+
+// Documentos del pliego para bajar a Dropbox. Fetchea el pliego, extrae los
+// archivos y ASEGURA la carpeta de Dropbox (la crea si no existe). No descarga
+// nada todavía — cada archivo lo baja uploadGovTenderDocToDropbox por separado,
+// para poder mostrar el % de avance en la UI.
+export async function listGovTenderDocs(
+  govId: string,
+): Promise<Result<{ docs: { nombre: string; url: string; existe: boolean }[]; folderPath: string; folderUrl: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
+  if (!hasDropboxConfig()) return { error: "Faltan las credenciales de Dropbox en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("num_proceso, titulo, tipo, raw, dropbox_folder_path, dropbox_folder_url")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as {
+    data: {
+      num_proceso: string;
+      titulo: string | null;
+      tipo: string | null;
+      raw: unknown;
+      dropbox_folder_path: string | null;
+      dropbox_folder_url: string | null;
+    } | null;
+  };
+  if (!g) return { error: "No encontrada" };
+  const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
+  const idFlujos = rw?.idProcesosContratacionFlujos;
+  const idTipo = g.tipo ? TIPO_TO_ID[g.tipo] : undefined;
+  if (!idFlujos || !idTipo) return { error: "Este proceso no tiene pliego consultable." };
+  try {
+    const session = await pcLoginCached();
+    const pliego = await pcPliegoRaw(session, idTipo, String(idFlujos));
+    if (!pliego) return { error: "PanamaCompra no devolvió el pliego (puede no estar publicado)." };
+    const archivos = extractArchivos(pliego);
+
+    // Asegurar la carpeta de Dropbox (crear + link si no existe).
+    let path = g.dropbox_folder_path;
+    let url = g.dropbox_folder_url;
+    if (!path) {
+      path = `${LICITACIONES_BASE}/${folderName(g.num_proceso, g.titulo)}`;
+      await createFolder(path);
+      try {
+        url = await getSharedLink(path);
+      } catch {
+        url = null;
+      }
+      const { error } = await c.supabase
+        .from("gov_tenders")
+        .update({ dropbox_folder_path: path, dropbox_folder_url: url })
+        .eq("id", govId)
+        .eq("org_id", c.orgId);
+      if (error) return { error: "Falta la migración 0017 (dropbox) — corre el SQL y reintenta." };
+    }
+
+    // ¿Cuáles ya están en la carpeta? (para saltarlos y no duplicar).
+    let existentes = new Set<string>();
+    try {
+      const entries = await listFolder(path);
+      existentes = new Set(entries.filter((e) => e.tag === "file").map((e) => baseName(e.name)));
+    } catch {
+      /* carpeta recién creada / vacía */
+    }
+    const docs = archivos.map((a) => ({ ...a, existe: existentes.has(baseName(a.nombre)) }));
+    return { ok: true, data: { docs, folderPath: path, folderUrl: url } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo leer el pliego" };
+  }
+}
+
+// Baja UN documento de PanamaCompra y lo sube a la carpeta de Dropbox. Se llama
+// una vez por archivo desde el cliente (así la UI muestra el % de avance).
+// Falla suave: si el archivo no existe (404), lo marca no-subido sin romper.
+export async function uploadGovTenderDocToDropbox(
+  govId: string,
+  nombre: string,
+  url: string,
+): Promise<Result<{ nombre: string; subido: boolean; path: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasPanamaCompraConfig()) return { error: "Faltan credenciales de PanamaCompra." };
+  if (!hasDropboxConfig()) return { error: "Faltan las credenciales de Dropbox en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("dropbox_folder_path")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { dropbox_folder_path: string | null } | null };
+  if (!g) return { error: "No encontrada" };
+  if (!g.dropbox_folder_path) return { error: "Primero crea la carpeta en Dropbox." };
+  try {
+    const session = await pcLoginCached();
+    const file = await pcDownloadArchivo(session, url);
+    if (!file || file.bytes.length === 0) return { ok: true, data: { nombre, subido: false, path: null } }; // 404 → saltado
+    const safe = sanitizeFileName(nombre, file.contentType);
+    const up = await uploadFile(`${g.dropbox_folder_path}/${safe}`, file.bytes);
+    return { ok: true, data: { nombre: safe, subido: true, path: up.path } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo bajar/subir el documento" };
   }
 }
 
@@ -267,11 +389,11 @@ export async function analyzeGovTenderDocs(govId: string): Promise<Result<{ anal
     .eq("org_id", c.orgId)
     .maybeSingle()) as { data: { titulo: string | null; dropbox_folder_path: string | null } | null };
   if (!g) return { error: "No encontrada" };
-  if (!g.dropbox_folder_path) return { error: "Creá primero la carpeta en Dropbox y subí los documentos del pliego." };
+  if (!g.dropbox_folder_path) return { error: "Crea primero la carpeta en Dropbox y sube los documentos del pliego." };
   const r = await analyzeTenderDocs({ folderPath: g.dropbox_folder_path, titulo: g.titulo });
   if (!r.ok) return { error: r.error };
   const { error } = await c.supabase.from("gov_tenders").update({ doc_analisis: r.data }).eq("id", govId).eq("org_id", c.orgId);
-  if (error) return { error: "Falta la migración 0018 (doc_analisis) — corré el SQL y reintentá" };
+  if (error) return { error: "Falta la migración 0018 (doc_analisis) — corre el SQL y reintenta" };
   revalidatePath("/potenciales");
   return { ok: true, data: { analisis: r.data } };
 }

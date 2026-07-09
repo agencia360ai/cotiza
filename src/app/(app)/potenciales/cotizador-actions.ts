@@ -37,7 +37,7 @@ export type SaveCotizacionInput = SaveQuoteInput;
 export async function generateQuoteDraft(brief: string, image?: QuoteImage | null): Promise<Result<CotizadorDraft>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!brief.trim() && !image) return { error: "Contame qué hay que cotizar (o subí una foto)" };
+  if (!brief.trim() && !image) return { error: "Cuéntame qué hay que cotizar (o sube una foto)" };
   try {
     return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim(), image ?? null) };
   } catch (e) {
@@ -214,7 +214,7 @@ export async function setEngineerLinkCode(codeRaw: string): Promise<Result<{ url
     .eq("cotizador_token", code)
     .neq("id", c.orgId)
     .maybeSingle()) as { data: { id: string } | null };
-  if (taken) return { error: "Ese código ya está en uso, probá otro." };
+  if (taken) return { error: "Ese código ya está en uso, prueba otro." };
   const { error } = await admin.from("organizations").update({ cotizador_token: code }).eq("id", c.orgId);
   if (error) return { error: error.message };
   return { ok: true, data: { url: await portalUrl(code) } };
