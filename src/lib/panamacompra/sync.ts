@@ -51,21 +51,32 @@ export type SyncStats = {
 export async function syncGovTenders(
   db: Db,
   orgId: string,
-  opts?: { full?: boolean },
+  opts?: { full?: boolean; deadlineTs?: number },
 ): Promise<{ error: string } | { ok: true; data: SyncStats }> {
   if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
   // Time-box: la función de Vercel corta a los 300s. Cortamos ANTES (~235s) para
   // no timeoutear nunca; lo que quede se completa en la próxima corrida / el cron.
-  const deadline = Date.now() + 235_000;
+  // El cron multi-org pasa SU deadline global — si cada org usara 235s propios,
+  // la segunda org correría más allá del límite de la función.
+  const deadline = Math.min(opts?.deadlineTs ?? Infinity, Date.now() + 235_000);
   const vencido = () => Date.now() > deadline;
   try {
     const session = await pcLogin();
 
-    // Conocidos (para modo incremental + conteo de nuevos).
-    const { data: existing } = (await db.from("gov_tenders").select("num_proceso").eq("org_id", orgId)) as {
-      data: { num_proceso: string }[] | null;
-    };
-    const have = new Set((existing ?? []).map((r) => r.num_proceso));
+    // Conocidos (para modo incremental + conteo de nuevos). PAGINADO: PostgREST
+    // corta en 1000 filas; con miles de procesos el set quedaría incompleto, el
+    // corte incremental casi nunca dispararía y "nuevos" se sobrecontaría.
+    const have = new Set<string>();
+    for (let from = 0; from < 30_000; from += 1000) {
+      const { data: pageRows } = (await db
+        .from("gov_tenders")
+        .select("num_proceso")
+        .eq("org_id", orgId)
+        .order("num_proceso")
+        .range(from, from + 999)) as { data: { num_proceso: string }[] | null };
+      for (const r of pageRows ?? []) have.add(r.num_proceso);
+      if ((pageRows?.length ?? 0) < 1000) break;
+    }
     // "Escaneo completo" recorre todas las páginas aunque ya conozca procesos —
     // para recuperar cualquier cosa que el corte incremental se haya perdido.
     const incremental = have.size > 0 && !opts?.full;
@@ -117,6 +128,8 @@ export async function syncGovTenders(
     const nuevos = rows.filter((r) => !have.has(r.num_proceso)).length;
 
     // 3) Clasificar lo sin clasificar (keywords fuertes directo; resto IA).
+    //    También respeta el time-box: la IA en lotes puede tomar >1 min con
+    //    cientos de pendientes — lo que no alcance queda para la próxima corrida.
     let relevantes = 0;
     const { data: pend } = (await db
       .from("gov_tenders")
@@ -135,7 +148,7 @@ export async function syncGovTenders(
         else if (p.titulo) paraIA.push({ i, titulo: p.titulo });
         else updates.push({ id: p.id, relevante: false, motivo: null });
       });
-      const ai = await classifyWithAI(paraIA);
+      const ai = vencido() ? new Map<number, { relevante: boolean; motivo: string | null }>() : await classifyWithAI(paraIA, deadline);
       for (const { i } of paraIA) {
         const v = ai.get(i);
         if (v) updates.push({ id: pending[i].id, relevante: v.relevante, motivo: v.motivo });

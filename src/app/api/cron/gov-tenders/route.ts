@@ -15,16 +15,36 @@ export async function GET(req: Request) {
   }
   if (!hasAdminCredentials()) return NextResponse.json({ error: "sin service role" }, { status: 500 });
 
+  // Deadline GLOBAL de la función (no por org): con varias orgs, cada sync usa
+  // lo que quede del presupuesto — si cada una tuviera 235s propios, la segunda
+  // ya correría más allá de los 300s y Vercel mataría la función a mitad.
+  const deadlineTs = Date.now() + 265_000;
+
   const admin = createAdminClient() as unknown as Db;
-  const { data: orgs } = (await admin.from("gov_tenders").select("org_id")) as { data: { org_id: string }[] | null };
-  const orgIds = Array.from(new Set((orgs ?? []).map((r) => r.org_id)));
+  // Orgs con la feature activa. PAGINADO: select plano sobre gov_tenders corta
+  // en 1000 filas y con miles de procesos podía dejar orgs fuera del nightly.
+  const orgSet = new Set<string>();
+  for (let from = 0; from < 100_000; from += 1000) {
+    const { data: page } = (await admin
+      .from("gov_tenders")
+      .select("org_id")
+      .order("org_id")
+      .range(from, from + 999)) as { data: { org_id: string }[] | null };
+    for (const r of page ?? []) orgSet.add(r.org_id);
+    if ((page?.length ?? 0) < 1000) break;
+  }
+  const orgIds = Array.from(orgSet);
 
   // full=true: escaneo completo diario. El corte incremental asume que lo nuevo
   // sale primero en PanamaCompra; el escaneo completo garantiza cobertura aunque
   // ese orden no se cumpla (el interactivo "Actualizar" sigue siendo incremental).
   const results: Record<string, unknown> = {};
   for (const orgId of orgIds) {
-    const r = await syncGovTenders(admin, orgId, { full: true });
+    if (Date.now() > deadlineTs) {
+      results[orgId] = { skipped: "sin tiempo — corre en el próximo cron" };
+      continue;
+    }
+    const r = await syncGovTenders(admin, orgId, { full: true, deadlineTs });
     results[orgId] = "error" in r ? { error: r.error } : r.data;
   }
   return NextResponse.json({ ok: true, orgs: orgIds.length, results });

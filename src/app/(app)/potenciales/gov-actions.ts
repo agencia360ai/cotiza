@@ -109,12 +109,15 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   type Res = { data: GovTenderRow[] | null; error: ({ message: string; code?: string }) | null };
+  // Tiebreaker por id: con miles de empates en fecha_cierre (y muchos NULL), el
+  // orden entre páginas no es estable → filas duplicadas o perdidas al paginar.
   const page = (cols: string, from: number) =>
     c.supabase
       .from("gov_tenders")
       .select(cols)
       .eq("org_id", c.orgId)
       .order("fecha_cierre", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1) as unknown as Promise<Res>;
 
   // Resolver el set de columnas disponible (según migraciones) con la 1ª página.
@@ -333,7 +336,9 @@ export async function listGovTenderDocs(
       if (error) return { error: "Falta la migración 0017 (dropbox) — corre el SQL y reintenta." };
     }
 
-    // ¿Cuáles ya están en la carpeta? (para saltarlos y no duplicar).
+    // ¿Cuáles ya están en la carpeta? (para saltarlos y no duplicar). OJO: en la
+    // carpeta viven con el nombre SANEADO — comparar contra el mismo saneo, si
+    // no un "ANEXO: PLANOS.pdf" se re-bajaría como "(1)", "(2)"… en cada corrida.
     let existentes = new Set<string>();
     try {
       const entries = await listFolder(path);
@@ -341,7 +346,7 @@ export async function listGovTenderDocs(
     } catch {
       /* carpeta recién creada / vacía */
     }
-    const docs = archivos.map((a) => ({ ...a, existe: existentes.has(baseName(a.nombre)) }));
+    const docs = archivos.map((a) => ({ ...a, existe: existentes.has(baseName(sanitizeFileName(a.nombre, null))) }));
     return { ok: true, data: { docs, folderPath: path, folderUrl: url } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo leer el pliego" };
@@ -423,9 +428,11 @@ async function buscarDocReutilizable(doc: SubmissionDoc, excluirPrefix: string):
   } catch {
     return null;
   }
-  const excl = norm(excluirPrefix);
+  // Prefijo con separador: sin él, "Acto #123 Chiller" también excluiría a
+  // "Acto #123 Chiller Fase 2" (otra licitación cuyo nombre lo extiende).
+  const excl = norm(excluirPrefix).replace(/\/+$/, "") + "/";
   const scored = results
-    .filter((r) => r.path && !norm(r.path).startsWith(excl)) // no la carpeta actual
+    .filter((r) => r.path && !(norm(r.path) + "/").startsWith(excl)) // no la carpeta actual
     .filter((r) => /\.(pdf|docx?|xlsx?|jpe?g|png)$/i.test(r.name))
     .map((r) => {
       const n = norm(r.name);

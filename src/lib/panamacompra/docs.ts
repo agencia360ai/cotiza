@@ -43,8 +43,11 @@ NO hace por sí sola: obra civil mayor, instalación eléctrica de potencia, plo
 Sé concreto y fiel a los documentos; si un dato no está, devolvé null (no inventes). cumplimos="parcial" cuando parte del alcance requiere subcontratar (obra civil/eléctrica) o mezcla rubros.`;
 
 const MAX_FILES = 6;
-const MAX_TOTAL_BYTES = 25 * 1024 * 1024; // límite práctico de Claude por request
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
+// El request a Claude va en base64 (×4/3): 20MB crudos ≈ 26.7MB de request,
+// bajo el tope de 32MB de la API. Con 25MB crudos los pliegos escaneados
+// grandes daban 413 request_too_large justo en los casos más importantes.
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
 export async function analyzeTenderDocs(input: {
   folderPath: string;

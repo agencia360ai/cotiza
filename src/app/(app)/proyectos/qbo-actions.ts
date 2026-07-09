@@ -16,7 +16,9 @@ type DB = Awaited<ReturnType<typeof createClient>>;
 function isMissingColumn(error: { message?: string; code?: string } | null): boolean {
   if (!error) return false;
   if (error.code === "42703") return true;
-  return /column .* does not exist|does not exist/i.test(error.message ?? "");
+  // Mismo patrón que pipeline/gov-actions: PostgREST reporta una columna nueva
+  // como "could not find … in the schema cache" hasta recargar el schema.
+  return /does not exist|could not find|schema cache/i.test(error.message ?? "");
 }
 
 // Dedupe de "Actualizar" concurrentes (un solo pull a QBO a la vez por org).
