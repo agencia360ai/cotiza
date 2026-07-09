@@ -71,33 +71,66 @@ export function QboProjectsBoard() {
   async function load(force = false) {
     setLoading(true);
     setRefreshError(null);
-    const r = await getQboProjects(force ? { force: true } : undefined);
-    if (!r.ok && res?.ok && res.projects.length > 0) {
-      setRefreshError(r.error);
-    } else {
+    try {
+      const r = await getQboProjects(force ? { force: true } : undefined);
+      const teniaData = res?.ok && res.projects.length > 0;
+      if (!r.ok && teniaData) {
+        setRefreshError(r.error); // conservar el board; solo avisar
+        return;
+      }
+      // Pull "ok" pero VACÍO sobre un board con datos = payload truncado del
+      // gateway, no "se borraron los proyectos": conservar y avisar.
+      if (r.ok && r.projects.length === 0 && teniaData) {
+        setRefreshError("QuickBooks devolvió 0 proyectos — se mantiene lo último sincronizado. Reintenta en un momento.");
+        return;
+      }
       setRes(r);
+      // Solo limpiar los overrides cuando llegó data fresca que ya los trae:
+      // limpiarlos tras un fallo revertía visualmente un avance YA guardado.
+      setStatusOv(new Map());
+      setProgressOv(new Map());
+    } catch (e) {
+      // La action RECHAZÓ (red caída, función matada): sin esto el spinner
+      // quedaba girando para siempre.
+      setRefreshError(e instanceof Error ? e.message : "Se cortó la actualización — reintenta");
+    } finally {
+      setLoading(false);
     }
-    setStatusOv(new Map());
-    setProgressOv(new Map());
-    setLoading(false);
   }
   const statusOf = (p: QboProject) => statusOv.get(p.id) ?? p.status;
   const progressOf = (p: QboProject) => progressOv.get(p.id) ?? p.progress ?? 0;
   async function changeStatus(p: QboProject, next: ProjectBizStatus) {
+    const prev = statusOf(p);
     setStatusOv((m) => new Map(m).set(p.id, next));
-    const r = await setProjectStatus(p.id, next);
-    setRowError(r.ok ? null : r.error);
+    try {
+      const r = await setProjectStatus(p.id, next);
+      if (!r.ok) {
+        // revertir: no mostrar un status que NO se guardó
+        setStatusOv((m) => new Map(m).set(p.id, prev));
+        setRowError(r.error);
+      } else {
+        setRowError(null);
+      }
+    } catch (e) {
+      setStatusOv((m) => new Map(m).set(p.id, prev));
+      setRowError(e instanceof Error ? e.message : "No se pudo guardar el estado — reintenta");
+    }
   }
   async function saveProgress(p: QboProject, v: number) {
     const prev = progressOf(p);
     setProgressOv((m) => new Map(m).set(p.id, v)); // optimista
-    const r = await setProjectProgress(p.id, v);
-    if (!r.ok) {
-      // revertir para no mostrar un valor que NO se guardó
+    try {
+      const r = await setProjectProgress(p.id, v);
+      if (!r.ok) {
+        // revertir para no mostrar un valor que NO se guardó
+        setProgressOv((m) => new Map(m).set(p.id, prev));
+        setRowError(r.error);
+      } else {
+        setRowError(null);
+      }
+    } catch (e) {
       setProgressOv((m) => new Map(m).set(p.id, prev));
-      setRowError(r.error);
-    } else {
-      setRowError(null);
+      setRowError(e instanceof Error ? e.message : "No se pudo guardar el avance — reintenta");
     }
   }
   useEffect(() => {
@@ -287,6 +320,11 @@ export function QboProjectsBoard() {
 
 // Barra de rentabilidad: gasto (rosa) vs margen (verde) como % del cobro.
 function ProfitBar({ income, cost }: { income: number; cost: number }) {
+  // Sin actividad (0/0): barra vacía neutra — una barra verde llena parecía
+  // "100% de margen" en un proyecto sin movimientos.
+  if (income === 0 && cost === 0) {
+    return <div className="h-1.5 rounded-full bg-slate-100" title="Sin movimientos registrados" />;
+  }
   const costPct = income > 0 ? Math.min(100, Math.max(0, (cost / income) * 100)) : cost > 0 ? 100 : 0;
   const marginPct = Math.max(0, 100 - costPct);
   return (
@@ -340,7 +378,14 @@ function ProgressInput({ value, onSave, label }: { value: number; onSave: (v: nu
   const shown = Math.min(100, Math.max(0, Number(draft) || 0));
   function commit() {
     setFocused(false);
-    const v = Math.min(100, Math.max(0, Math.round(Number(draft) || 0)));
+    // Campo vacío o basura ("e", "-") = SIN CAMBIO, no 0: borrar y salir del
+    // campo no debe poner en cero un avance guardado.
+    const n = draft.trim() === "" ? NaN : Number(draft);
+    if (!Number.isFinite(n)) {
+      setDraft(String(value));
+      return;
+    }
+    const v = Math.min(100, Math.max(0, Math.round(n)));
     setDraft(String(v));
     if (v !== value) onSave(v);
   }

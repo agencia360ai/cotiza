@@ -79,7 +79,7 @@ function buildArgs(schema: unknown, kind: "list" | "query"): Record<string, unkn
   const inner: Record<string, unknown> = {};
 
   if (kind === "query") {
-    const sql = "SELECT * FROM Customer MAXRESULTS 1000";
+    const sql = buildCustomerSql(1);
     let placed = false;
     for (const k of ["query", "sql", "statement", "q"]) if (has(k)) (inner[k] = sql), (placed = true);
     if (!placed) inner.query = sql;
@@ -202,17 +202,61 @@ function mapCustomer(raw: Record<string, unknown>): QboCustomer | null {
   };
 }
 
+const QBO_PAGE = 1000;
+function buildCustomerSql(startPosition: number): string {
+  return `SELECT * FROM Customer STARTPOSITION ${startPosition} MAXRESULTS ${QBO_PAGE}`;
+}
+
+// Reemplaza el SQL dentro de los args ya armados (respetando el wrap `params`).
+function withSql(args: Record<string, unknown>, sql: string): Record<string, unknown> {
+  const clone: Record<string, unknown> = { ...args };
+  const target = (clone.params as Record<string, unknown> | undefined) ?? clone;
+  const inner = target === clone ? clone : { ...(clone.params as Record<string, unknown>) };
+  for (const k of ["query", "sql", "statement", "q"]) if (k in inner) inner[k] = sql;
+  if (target !== clone) clone.params = inner;
+  return clone;
+}
+
 export async function fetchQboCustomers(): Promise<FetchResult> {
   const tools = await listQboTools();
   const pick = pickCustomerTool(tools);
   if (!pick) {
     throw new Error(
       `No encontré un tool de customers entre ${tools.length} tools. ` +
-        `Seteá QBO_CUSTOMERS_TOOL con el nombre correcto. Tools: ${tools.map((t) => t.name).slice(0, 40).join(", ")}`,
+        `Setea QBO_CUSTOMERS_TOOL con el nombre correcto. Tools: ${tools.map((t) => t.name).slice(0, 40).join(", ")}`,
     );
   }
-  const result = await callQboTool(pick.tool, buildArgs(pick.schema, pick.kind));
-  const rawList = extractCustomers(result);
+  const baseArgs = buildArgs(pick.schema, pick.kind);
+  const result = await callQboTool(pick.tool, baseArgs);
+  let rawList = extractCustomers(result);
+
+  // PAGINACIÓN: QBO corta en 1000 por query. Pasado ese punto, los proyectos
+  // más nuevos (Id más alto) desaparecerían del listado y el reconcile borraría
+  // sus filas. En modo query se pagina con STARTPOSITION; en modo list, si el
+  // primer call topó el cap, se completa con el tool de query paginado.
+  if (rawList.length >= QBO_PAGE) {
+    const seen = new Set(rawList.map((r) => String(r.Id ?? r.id ?? "")));
+    const queryTool = pick.kind === "query" ? pick : (() => {
+      const q = tools.find((t) => QUERY_RE.test(t.name));
+      return q ? { tool: q.name, kind: "query" as const, schema: q.inputSchema } : null;
+    })();
+    if (queryTool) {
+      const qArgs = queryTool === pick ? baseArgs : buildArgs(queryTool.schema, "query");
+      for (let pos = QBO_PAGE + 1, page = 0; page < 30; pos += QBO_PAGE, page++) {
+        let batch: Record<string, unknown>[] = [];
+        try {
+          batch = extractCustomers(await callQboTool(queryTool.tool, withSql(qArgs, buildCustomerSql(pos))));
+        } catch {
+          break; // paginación best-effort: con lo que hay
+        }
+        const nuevos = batch.filter((r) => !seen.has(String(r.Id ?? r.id ?? "")));
+        for (const r of nuevos) seen.add(String(r.Id ?? r.id ?? ""));
+        rawList = rawList.concat(nuevos);
+        if (batch.length < QBO_PAGE) break;
+      }
+    }
+  }
+
   const customers = rawList.map(mapCustomer).filter((c): c is QboCustomer => c !== null);
   return { customers, toolUsed: pick.tool, rawCount: rawList.length };
 }

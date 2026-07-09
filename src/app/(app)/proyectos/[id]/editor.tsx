@@ -318,7 +318,9 @@ export function ProjectEditor({
                   <span className="inline-flex items-center gap-1">
                     <CalendarIcon className="size-3.5" />
                     Entrega{" "}
-                    {new Date(project.expected_completion_date).toLocaleDateString("es-PA", {
+                    {/* +T00:00:00 = medianoche LOCAL; sin él, "YYYY-MM-DD" parsea
+                        como UTC y en Panamá (UTC-5) se mostraba el día anterior */}
+                    {new Date(project.expected_completion_date + "T00:00:00").toLocaleDateString("es-PA", {
                       day: "2-digit",
                       month: "short",
                       year: "numeric",
@@ -676,7 +678,9 @@ function AddMilestoneForm({
 }) {
   const [text, setText] = useState("");
   const [aiTitle, setAiTitle] = useState<string | null>(null);
-  const [occurredOn, setOccurredOn] = useState(new Date().toISOString().slice(0, 10));
+  // Fecha local de Panamá: toISOString() es UTC y después de las 7pm ya
+  // defaulteaba el hito a "mañana".
+  const [occurredOn, setOccurredOn] = useState(new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }));
   const [status, setStatus] = useState<MilestoneStatus>("en_progreso");
   const [sectionId, setSectionId] = useState<string | null>(defaultSectionId);
   const [submitting, setSubmitting] = useState(false);
@@ -1233,7 +1237,7 @@ function MilestoneRow({
                   {milestone.occurred_on ? (
                     <span className="inline-flex items-center gap-1 text-xs text-slate-500">
                       <CalendarIcon className="size-3" />
-                      {new Date(milestone.occurred_on).toLocaleDateString("es-PA", {
+                      {new Date(milestone.occurred_on + "T00:00:00").toLocaleDateString("es-PA", {
                         day: "2-digit",
                         month: "long",
                         year: "numeric",

@@ -8,6 +8,8 @@ export type QboProject = {
   name: string; // nombre limpio (hoja, sin "Padre:")
   fullName: string; // displayName completo
   parentId: string | null; // customer padre en QBO (para detectar rollups)
+  siblings: number; // proyectos TOTALES del mismo padre en QBO (todos los años,
+  // abiertos y cerrados) — para la guardia anti-rollup; no se persiste
   rubro: string | null; // DC | DM | DS | DV
   year: number | null;
   clientName: string;
@@ -42,6 +44,15 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
   const { customers } = await fetchQboCustomers();
   const byId = new Map(customers.map((c) => [c.id, c]));
 
+  // Hermanos por padre sobre la lista COMPLETA (todos los años, cerrados
+  // incluidos). La guardia anti-rollup necesita saber si el cliente tiene más
+  // proyectos en QBO — contarlos solo dentro del subset abierto+año la dejaba
+  // ciega en el caso más común (un abierto + varios cerrados/de años previos).
+  const hijosPorPadre = new Map<string, number>();
+  for (const c of customers) {
+    if (c.isProject && c.parentId) hijosPorPadre.set(c.parentId, (hijosPorPadre.get(c.parentId) ?? 0) + 1);
+  }
+
   let projects: QboProject[] = customers
     .filter((c) => c.isProject)
     .map((p) => {
@@ -52,6 +63,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         name: leafName(p.fullyQualifiedName, p.displayName),
         fullName: p.displayName,
         parentId: p.parentId ?? null,
+        siblings: p.parentId ? (hijosPorPadre.get(p.parentId) ?? 1) : 1,
         rubro: ry?.rubro ?? null,
         year: ry?.year ?? null,
         clientName: parent?.displayName ?? "",
@@ -81,14 +93,22 @@ type Pnl = { income: number; cost: number };
 const samePnl = (a: Pnl | null, b: Pnl | null) =>
   !!a && !!b && Math.abs(a.income - b.income) < 0.5 && Math.abs(a.cost - b.cost) < 0.5;
 
+export type FinancialsResult = {
+  fin: Map<string, Pnl>;
+  // Proyectos donde TODAS las variantes fallaron/no parsearon (transitorio):
+  // el caller debe CONSERVAR los números previos, no ponerlos en null.
+  errored: Set<string>;
+};
+
 export async function fetchProjectFinancials(
-  projects: { id: string; parentId: string | null }[],
-): Promise<Map<string, Pnl>> {
+  projects: { id: string; parentId: string | null; siblings?: number }[],
+): Promise<FinancialsResult> {
   const out = new Map<string, Pnl>();
-  if (projects.length === 0) return out;
+  const errored = new Set<string>();
+  if (projects.length === 0) return { fin: out, errored };
   const tools = await listQboTools();
   const tool = tools.find((t) => /profit.*loss|profit_loss|\bp_l\b|pnl/i.test(t.name));
-  if (!tool) return out;
+  if (!tool) return { fin: out, errored };
 
   const year = new Date().getFullYear();
   const start = `${year}-01-01`;
@@ -106,11 +126,24 @@ export async function fetchProjectFinancials(
   //   - el P&L de TODA la empresa (bug: $657k en un proyecto sin gastos), o
   //   - el P&L del CLIENTE PADRE agrupando sus sub-proyectos ($3,038 de Cirion).
   // Precalculamos ambos baselines; cualquier resultado por-proyecto igual a uno
-  // de ellos se descarta. La guardia del padre SOLO aplica si el cliente tiene
-  // >1 proyecto (con un solo proyecto, proyecto==cliente es legítimo).
+  // de ellos se descarta. La guardia del padre aplica si el cliente tiene >1
+  // proyecto EN QBO (todos los años, cerrados incluidos — `siblings`): contarlos
+  // solo dentro del subset abierto+año dejaba la guardia ciega en el caso más
+  // común (un abierto + cerrados previos) y el rollup del padre se aceptaba.
   const company = await pnlBy({});
+  // Sin baseline de empresa no podemos detectar contaminación company-wide.
+  // Mejor NO devolver nada: el caller conserva los números previos y el próximo
+  // refresh (con baseline) se recupera solo.
+  if (!company) {
+    for (const p of projects) errored.add(p.id);
+    return { fin: out, errored };
+  }
   const parentCount = new Map<string, number>();
-  for (const p of projects) if (p.parentId) parentCount.set(p.parentId, (parentCount.get(p.parentId) ?? 0) + 1);
+  for (const p of projects) {
+    if (!p.parentId) continue;
+    const enSubset = (parentCount.get(p.parentId) ?? 0) + 1;
+    parentCount.set(p.parentId, Math.max(enSubset, p.siblings ?? 0));
+  }
   const guardedParents = Array.from(parentCount.entries()).filter(([, n]) => n > 1).map(([pid]) => pid);
   const parentPnl = new Map<string, Pnl | null>();
   for (let i = 0; i < guardedParents.length; i += 3) {
@@ -118,31 +151,38 @@ export async function fetchProjectFinancials(
     if (i + 3 < guardedParents.length) await new Promise((r) => setTimeout(r, 200));
   }
 
-  const one = async (p: { id: string; parentId: string | null }): Promise<void> => {
+  // Un baseline {0,0} no discrimina nada (empresa/cliente sin actividad): un
+  // proyecto legítimamente en {0,0} no debe descartarse por "igualar" ese cero.
+  const esCero = (x: Pnl | null) => !!x && x.income === 0 && x.cost === 0;
+
+  const one = async (p: { id: string; parentId: string | null; siblings?: number }): Promise<void> => {
     const parentTotal = p.parentId ? parentPnl.get(p.parentId) ?? null : null;
     const variants: Record<string, unknown>[] = [
       { params: { start_date: start, end_date: end, customer: p.id } },
       { params: { start_date: start, end_date: end, customer_id: p.id } },
       { start_date: start, end_date: end, customer: p.id },
     ];
-    for (let vi = 0; vi < variants.length; vi++) {
+    let algunaParseo = false;
+    for (const variant of variants) {
       let fin: Pnl | null;
       try {
-        fin = parsePnl(await callQboTool(tool.name, variants[vi]));
+        fin = parsePnl(await callQboTool(tool.name, variant));
       } catch {
         continue; // esta variante falló: probar la siguiente
       }
       if (!fin) continue;
+      algunaParseo = true;
       // Igual al total de la empresa o del cliente padre → el filtro no aisló
       // este proyecto. Descartar y probar otra variante.
-      if (samePnl(fin, company) || samePnl(fin, parentTotal)) continue;
-      // Sin baseline de empresa no podemos detectar contaminación company-wide:
-      // confiamos solo en la 1ª variante para no estampar rollups desde las demás.
-      if (!company && vi > 0) continue;
+      if (!esCero(company) && samePnl(fin, company)) continue;
+      if (!esCero(parentTotal) && samePnl(fin, parentTotal)) continue;
       // Resultado filtrado real — incluye {0,0} = proyecto sin actividad (correcto).
       out.set(p.id, fin);
       return;
     }
+    // Nada parseó (red/gateway caído para este proyecto) → transitorio, no
+    // "descartado por rollup": conservar los números previos.
+    if (!algunaParseo) errored.add(p.id);
   };
 
   // Concurrencia baja para no saturar el server: de a 3, con respiro entre tandas.
@@ -150,7 +190,7 @@ export async function fetchProjectFinancials(
     await Promise.all(projects.slice(i, i + 3).map(one));
     if (i + 3 < projects.length) await new Promise((r) => setTimeout(r, 250));
   }
-  return out;
+  return { fin: out, errored };
 }
 
 type PnlRow = { group?: string; Summary?: { ColData?: { value?: string }[] }; Rows?: { Row?: PnlRow[] } };
@@ -189,12 +229,19 @@ function parsePnl(result: QboToolResult): { income: number; cost: number } | nul
   let income = 0;
   let cost = 0;
   let net: number | null = null;
+  let huboGastos = false;
   for (const r of rows) {
     const g = (r.group ?? "").toLowerCase();
-    if (g === "income") income = total(r);
+    if (g === "income" || g === "otherincome") income += total(r);
     else if (g === "netincome") net = total(r);
-    else if (g === "cogs" || g === "expenses" || g === "otherexpenses" || g.includes("expense")) cost += total(r);
+    else if (g === "cogs" || g === "expenses" || g === "otherexpenses" || g.includes("expense")) {
+      cost += total(r);
+      huboGastos = true;
+    }
   }
-  if (net !== null && income > 0) return { income, cost: income - net };
+  // cost = income - net SOLO como fallback cuando el reporte no trae secciones
+  // de gastos: con OtherIncome presente, esa resta daba costos NEGATIVOS y
+  // márgenes >100% (net incluye el otro ingreso).
+  if (!huboGastos && net !== null && income > 0) return { income, cost: income - net };
   return { income, cost };
 }

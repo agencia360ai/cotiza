@@ -68,6 +68,9 @@ async function rpc(
     body: JSON.stringify(payload),
     // sin cache; cada llamada es una operación
     cache: "no-store",
+    // Un gateway colgado no debe congelar la server action hasta que Vercel la
+    // mate (y con el inflight compartido, colgar a todos los que esperan).
+    signal: AbortSignal.timeout(30_000),
   });
 
   const newSession = r.headers.get("mcp-session-id") ?? sessionId;
