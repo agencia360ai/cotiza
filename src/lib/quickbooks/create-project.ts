@@ -38,9 +38,15 @@ export type QboProjectInput = {
   endDate: string | null;
 };
 
-// Arma el payload según las propiedades REALES del schema del tool. Cada campo
-// se manda solo si el tool lo declara — así no rompemos gateways estrictos.
-function buildCreateArgs(schema: unknown, input: QboProjectInput): Record<string, unknown> {
+type CreateFields = {
+  displayName: string;
+  parentId: string | null; // null = cliente padre de primer nivel
+  email: string | null;
+  notes: string | null;
+};
+
+// Variante 1: guiada por el schema del tool (cada campo solo si está declarado).
+function argsFromSchema(schema: unknown, f: CreateFields): Record<string, unknown> {
   const top = (schema as JsonSchema | undefined)?.properties ?? {};
   const paramsSchema = top.params;
   const wrap = !!paramsSchema && (paramsSchema.type === "object" || !!paramsSchema.properties);
@@ -48,71 +54,109 @@ function buildCreateArgs(schema: unknown, input: QboProjectInput): Record<string
   const has = (k: string) => k in props;
   const inner: Record<string, unknown> = {};
 
-  // Nombre
   let named = false;
   for (const k of ["DisplayName", "displayName", "display_name", "name", "Name"]) {
     if (has(k)) {
-      inner[k] = input.displayName;
+      inner[k] = f.displayName;
       named = true;
       break;
     }
   }
-  if (!named) inner.DisplayName = input.displayName;
+  if (!named) inner.DisplayName = f.displayName;
 
-  // Padre (sub-customer). QBO API usa ParentRef:{value}; gateways sueltos usan
-  // parentId/parent_id/customerId.
-  if (has("ParentRef")) inner.ParentRef = { value: input.parentId };
-  else if (has("parentRef")) inner.parentRef = { value: input.parentId };
-  else if (has("parent_id")) inner.parent_id = input.parentId;
-  else if (has("parentId")) inner.parentId = input.parentId;
-  else if (has("customer_id")) inner.customer_id = input.parentId;
-  else inner.ParentRef = { value: input.parentId };
-
-  // Marca de sub-customer/proyecto (solo si el schema los declara).
-  if (has("Job")) inner.Job = true;
-  if (has("job")) inner.job = true;
-  if (has("IsProject")) inner.IsProject = true;
-  if (has("is_project")) inner.is_project = true;
-  // BillWithParent explícito en false: el proyecto factura por sí mismo.
-  if (has("BillWithParent")) inner.BillWithParent = false;
-
-  if (input.email) {
-    if (has("PrimaryEmailAddr")) inner.PrimaryEmailAddr = { Address: input.email };
-    else if (has("email")) inner.email = input.email;
-    else if (has("Email")) inner.Email = input.email;
+  if (f.parentId) {
+    if (has("ParentRef")) inner.ParentRef = { value: f.parentId };
+    else if (has("parentRef")) inner.parentRef = { value: f.parentId };
+    else if (has("parent_id")) inner.parent_id = f.parentId;
+    else if (has("parentId")) inner.parentId = f.parentId;
+    else if (has("customer_id")) inner.customer_id = f.parentId;
+    else inner.ParentRef = { value: f.parentId };
+    if (has("Job")) inner.Job = true;
+    if (has("job")) inner.job = true;
+    if (has("IsProject")) inner.IsProject = true;
+    if (has("is_project")) inner.is_project = true;
+    if (has("BillWithParent")) inner.BillWithParent = false;
   }
-
-  // Notas: el tool puede llamarlas Notes/notes/description. Las fechas de QBO
-  // Projects (start/end) rara vez existen en un create-customer: si el schema
-  // no las tiene, van dentro de las notas para no perder la info.
-  const fechasTxt = [
-    input.startDate ? `Inicio: ${input.startDate}` : null,
-    input.endDate ? `Entrega: ${input.endDate}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  let fechasEnCampo = false;
-  for (const [k, v] of [
-    ["StartDate", input.startDate],
-    ["start_date", input.startDate],
-    ["EndDate", input.endDate],
-    ["end_date", input.endDate],
-  ] as const) {
-    if (v && has(k)) {
-      inner[k] = v;
-      fechasEnCampo = true;
-    }
+  if (f.email) {
+    if (has("PrimaryEmailAddr")) inner.PrimaryEmailAddr = { Address: f.email };
+    else if (has("email")) inner.email = f.email;
+    else if (has("Email")) inner.Email = f.email;
   }
-  const notas = [input.notes, fechasEnCampo ? null : fechasTxt || null].filter(Boolean).join("\n");
-  if (notas) {
-    if (has("Notes")) inner.Notes = notas;
-    else if (has("notes")) inner.notes = notas;
-    else if (has("description")) inner.description = notas;
-    else inner.Notes = notas;
+  if (f.notes) {
+    if (has("Notes")) inner.Notes = f.notes;
+    else if (has("notes")) inner.notes = f.notes;
+    else if (has("description")) inner.description = f.notes;
+    else inner.Notes = f.notes;
   }
-
   return wrap ? { params: inner } : inner;
 }
+
+// Variante 2: shape del API de QBO (Customer object puro).
+function argsQboApi(f: CreateFields): Record<string, unknown> {
+  const o: Record<string, unknown> = { DisplayName: f.displayName };
+  if (f.parentId) {
+    o.ParentRef = { value: f.parentId };
+    o.Job = true;
+    o.BillWithParent = false;
+  }
+  if (f.email) o.PrimaryEmailAddr = { Address: f.email };
+  if (f.notes) o.Notes = f.notes;
+  return o;
+}
+
+// Variante 3: camelCase plano (wrappers Node típicos). Para el padre se mandan
+// varias claves redundantes — los servers ignoran las desconocidas y con que
+// una aterrice el proyecto queda colgado del cliente correcto.
+function argsCamel(f: CreateFields): Record<string, unknown> {
+  const o: Record<string, unknown> = { displayName: f.displayName };
+  if (f.parentId) {
+    o.parentId = f.parentId;
+    o.parentRef = { value: f.parentId };
+    o.parent_id = f.parentId;
+    o.job = true;
+  }
+  if (f.email) o.email = f.email;
+  if (f.notes) o.notes = f.notes;
+  return o;
+}
+
+// Escalera de payloads: schema-driven primero, después los shapes conocidos,
+// cada uno directo y envuelto en {params}. Deduplicadas por contenido.
+function buildVariants(schema: unknown, f: CreateFields): Record<string, unknown>[] {
+  const raw = [argsFromSchema(schema, f), argsQboApi(f), argsCamel(f)];
+  const all: Record<string, unknown>[] = [];
+  for (const a of raw) {
+    all.push(a);
+    if (!("params" in a)) all.push({ params: a });
+  }
+  const seen = new Set<string>();
+  return all.filter((a) => {
+    const k = JSON.stringify(a);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+// ¿El error del gateway es un RECHAZO definitivo de QBO (no se creó nada)?
+// "SAXParseException / Premature end of file" = el body llegó vacío a QBO →
+// el shape de args era el equivocado; reintentar con la siguiente variante es
+// SEGURO porque QBO rechazó la operación.
+function esRechazoDefinitivo(txt: string): boolean {
+  return /premature end of file|unsupported operation|validationfault|saxparse|invalid_request|bad request|required param|missing/i.test(
+    txt,
+  );
+}
+
+function textoDe(result: QboToolResult): string {
+  return (result.content ?? [])
+    .filter((c) => c.type === "text" && typeof c.text === "string")
+    .map((c) => c.text as string)
+    .join(" ")
+    .trim();
+}
+
+const normName = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 
 // Saca el Id del customer creado, probando todas las formas de respuesta.
 function extractCreatedId(result: QboToolResult): { id: string; name: string | null } | null {
@@ -156,7 +200,26 @@ function extractCreatedId(result: QboToolResult): { id: string; name: string | n
   return m ? { id: m[1], name: null } : null;
 }
 
-export async function createQboProject(input: QboProjectInput): Promise<{ id: string; name: string }> {
+// Busca un customer por nombre exacto (normalizado). Se usa como guard de
+// idempotencia (reintento tras un fallo a medias) y como verificación cuando
+// la respuesta del gateway no se pudo parsear.
+async function findByName(displayName: string): Promise<{ id: string; name: string } | null> {
+  try {
+    const { customers } = await fetchQboCustomers();
+    const target = normName(displayName);
+    const hit = customers.find((c) => normName(c.displayName) === target);
+    return hit ? { id: hit.id, name: hit.displayName } : null;
+  } catch {
+    return null; // sin lista no hay verificación — el caller decide
+  }
+}
+
+// Core: crea un customer (proyecto o cliente padre) probando variantes de
+// payload. El "Premature end of file" de QBO significa que el body llegó VACÍO
+// (shape de args equivocado → QBO rechazó): reintentar con otra variante es
+// seguro. Ante una respuesta ambigua (sin Id y sin rechazo claro) se VERIFICA
+// por búsqueda antes de reintentar — jamás se crean duplicados a ciegas.
+async function createQboCustomer(f: CreateFields): Promise<{ id: string; name: string }> {
   const tools = await listQboTools();
   const tool = pickCreateTool(tools);
   if (!tool) {
@@ -165,17 +228,65 @@ export async function createQboProject(input: QboProjectInput): Promise<{ id: st
         "Setea QBO_CREATE_CUSTOMER_TOOL en Vercel con el nombre del tool correcto.",
     );
   }
-  const result = await callQboTool(tool.name, buildCreateArgs(tool.inputSchema, input));
-  if (result.isError) {
-    const txt = (result.content ?? []).map((c) => c.text ?? "").join(" ").slice(0, 300);
-    throw new Error(`QBO rechazó la creación: ${txt || "error del gateway"}`);
+
+  // Idempotencia: si YA existe con ese nombre exacto (reintento después de un
+  // fallo a medias), usarlo en vez de duplicar.
+  const existing = await findByName(f.displayName);
+  if (existing) return existing;
+
+  const variants = buildVariants(tool.inputSchema, f);
+  let lastErr = "";
+  for (const args of variants) {
+    let result: QboToolResult;
+    try {
+      result = await callQboTool(tool.name, args);
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+      continue; // error de transporte: probar la siguiente variante
+    }
+    const txt = textoDe(result);
+    const created = extractCreatedId(result);
+    if (created && !esRechazoDefinitivo(txt)) {
+      return { id: created.id, name: created.name ?? f.displayName };
+    }
+    if (esRechazoDefinitivo(txt) || result.isError) {
+      lastErr = txt || "error del gateway";
+      continue; // QBO rechazó la operación → nada creado → siguiente shape
+    }
+    // Ambiguo (sin Id y sin rechazo reconocible): pudo haberse creado —
+    // verificar por búsqueda antes de intentar otra variante.
+    lastErr = txt || lastErr;
+    const check = await findByName(f.displayName);
+    if (check) return check;
   }
-  const created = extractCreatedId(result);
-  if (!created) {
-    const txt = (result.content ?? []).map((c) => c.text ?? "").join(" ").slice(0, 300);
-    throw new Error(`QBO no devolvió el Id del proyecto creado${txt ? ` — respuesta: ${txt}` : ""}.`);
-  }
-  return { id: created.id, name: created.name ?? input.displayName };
+
+  // Última verificación (por si la creación entró pero ninguna respuesta se
+  // pudo leer) y error detallado con lo que dijo el gateway.
+  const final = await findByName(f.displayName);
+  if (final) return final;
+  throw new Error(
+    `QBO no aceptó la creación con ningún formato de argumentos${lastErr ? ` — último error: ${lastErr.slice(0, 250)}` : ""}. ` +
+      "Si el tool correcto es otro, setea QBO_CREATE_CUSTOMER_TOOL en Vercel.",
+  );
+}
+
+export async function createQboProject(input: QboProjectInput): Promise<{ id: string; name: string }> {
+  // Las fechas van dentro de las notas (el create-customer de QBO no tiene
+  // campos de fechas de proyecto); en Reportme quedan como columnas propias.
+  const fechasTxt = [
+    input.startDate ? `Inicio: ${input.startDate}` : null,
+    input.endDate ? `Entrega: ${input.endDate}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const notes = [input.notes, fechasTxt || null].filter(Boolean).join("\n") || null;
+  return createQboCustomer({ displayName: input.displayName, parentId: input.parentId, email: input.email, notes });
+}
+
+// Cliente padre nuevo en QBO (cuando el cliente de la cotización todavía no
+// existe): customer de primer nivel; el proyecto se cuelga después.
+export async function createQboParentCustomer(input: { displayName: string; email: string | null }): Promise<{ id: string; name: string }> {
+  return createQboCustomer({ displayName: input.displayName.trim(), parentId: null, email: input.email, notes: null });
 }
 
 // ── Próximo número de contrato (DC26-08, DM26-15…) ───────────────────────────

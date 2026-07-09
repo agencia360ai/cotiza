@@ -4,7 +4,13 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { hasQboConfig } from "@/lib/quickbooks/mcp";
-import { createQboProject, suggestFromQbo, nextContractNumber, type QboParentOption } from "@/lib/quickbooks/create-project";
+import {
+  createQboProject,
+  createQboParentCustomer,
+  suggestFromQbo,
+  nextContractNumber,
+  type QboParentOption,
+} from "@/lib/quickbooks/create-project";
 import { norm } from "@/lib/clients/normalize";
 
 // Cotización aprobada → proyecto en QuickBooks. El correlativo (DC26-08) se
@@ -126,8 +132,11 @@ export async function suggestQboProjectSetup(quoteId: string): Promise<Result<Qb
 export type QboSendInput = {
   numero: string;
   nombre: string;
-  parentId: string;
+  // Cliente existente en QBO… (parentId+parentName)
+  parentId: string | null;
   parentName: string;
+  // …o cliente NUEVO: se crea primero en QBO y el proyecto se cuelga de él.
+  newParentName: string | null;
   email: string | null;
   startDate: string | null; // YYYY-MM-DD
   endDate: string | null;
@@ -136,12 +145,14 @@ export type QboSendInput = {
 
 // Crea el proyecto en QBO y deja todo enlazado. Guards: columnas de la 0022
 // presentes (ANTES de crear nada en QBO), cotización sin enviar todavía.
-export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string }>> {
+export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
   if (!input.numero.trim() || !input.nombre.trim()) return { error: "Número y nombre del proyecto son obligatorios." };
-  if (!input.parentId) return { error: "Elige el cliente de QBO al que pertenece el proyecto." };
+  if (!input.parentId && !input.newParentName?.trim()) {
+    return { error: "Elige el cliente de QBO o escribe el nombre del cliente nuevo." };
+  }
 
   // Probe de la migración 0022 ANTES de tocar QBO: si falta, no queremos crear
   // el proyecto y quedarnos sin dónde registrar el link (doble envío después).
@@ -156,19 +167,39 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
   if (!probe.data) return { error: "Cotización no encontrada" };
   if (probe.data.qbo_job_id) return { error: "Esta cotización ya fue enviada a QBO." };
 
+  // Cliente nuevo: crearlo primero (idempotente — si ya existe con ese nombre,
+  // se reusa) y colgar el proyecto de él.
+  let parentId = input.parentId;
+  let parentName = input.parentName;
+  let parentCreado: string | null = null;
+  if (!parentId && input.newParentName?.trim()) {
+    try {
+      const parent = await createQboParentCustomer({ displayName: input.newParentName.trim(), email: null });
+      parentId = parent.id;
+      parentName = parent.name;
+      parentCreado = parent.name;
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : "QBO no pudo crear el cliente nuevo" };
+    }
+  }
+  if (!parentId) return { error: "Sin cliente de QBO para el proyecto." };
+
   let created: { id: string; name: string };
   try {
     created = await createQboProject({
       displayName: input.nombre.trim(),
-      parentId: input.parentId,
-      parentName: input.parentName,
+      parentId,
+      parentName,
       email: input.email?.trim() || null,
       notes: input.notas?.trim() || null,
       startDate: input.startDate || null,
       endDate: input.endDate || null,
     });
   } catch (e) {
-    return { error: e instanceof Error ? e.message : "QBO no pudo crear el proyecto" };
+    const msg = e instanceof Error ? e.message : "QBO no pudo crear el proyecto";
+    // Si el padre nuevo SÍ se creó, decirlo — para que el reintento use
+    // "cliente existente" y no se pierda el contexto.
+    return { error: parentCreado ? `El cliente "${parentCreado}" se creó en QBO, pero el proyecto no: ${msg}` : msg };
   }
 
   // Link en la cotización (compare-and-set sobre qbo_job_id null: dos clicks
@@ -193,10 +224,10 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
     org_id: c.orgId,
     qb_job_id: created.id,
     name: input.nombre.trim(),
-    full_name: `${input.parentName}:${input.nombre.trim()}`,
+    full_name: `${parentName}:${input.nombre.trim()}`,
     rubro: input.numero.slice(0, 2).toUpperCase(),
     year: yy ? 2000 + Number(yy) : new Date().getFullYear(),
-    client_name: input.parentName,
+    client_name: parentName,
     synced_at: nowIso,
     start_date: input.startDate || null,
     end_date: input.endDate || null,
@@ -215,7 +246,7 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
 
   revalidatePath("/potenciales");
   revalidatePath("/proyectos");
-  return { ok: true, data: { qboJobId: created.id, nombre: created.name } };
+  return { ok: true, data: { qboJobId: created.id, nombre: created.name, parentCreado } };
 }
 
 // ── Seguimiento de enviadas viejas (action points) ────────────────────────────
