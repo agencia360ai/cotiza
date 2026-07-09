@@ -28,7 +28,20 @@ async function ctx() {
   if (!u.user) return { ok: false as const, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
-  return { ok: true as const, supabase, orgId };
+  return { ok: true as const, supabase, orgId, userId: u.user.id };
+}
+
+// Rotar/cambiar el link público del portal usa el admin client (bypassa RLS):
+// exigir rol owner/admin — un viewer no debe poder revocar el link del equipo.
+async function requireAdminRole(c: { supabase: Awaited<ReturnType<typeof createClient>>; orgId: string; userId: string }): Promise<string | null> {
+  const { data } = (await c.supabase
+    .from("org_members")
+    .select("role")
+    .eq("org_id", c.orgId)
+    .eq("user_id", c.userId)
+    .maybeSingle()) as { data: { role: string } | null };
+  if (data?.role === "owner" || data?.role === "admin") return null;
+  return "Solo un owner o admin puede cambiar el link del portal.";
 }
 
 export type CotizadorDraft = DraftBundle;
@@ -189,6 +202,8 @@ export async function getEngineerLink(): Promise<Result<{ url: string | null }>>
 export async function regenerateEngineerLink(): Promise<Result<{ url: string }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
+  const roleErr = await requireAdminRole(c);
+  if (roleErr) return { error: roleErr };
   if (!hasAdminCredentials()) return { error: "SUPABASE_SERVICE_ROLE_KEY no está configurada" };
   const token = randomBytes(24).toString("hex");
   const admin = createAdminClient() as unknown as Db;
@@ -202,10 +217,12 @@ export async function regenerateEngineerLink(): Promise<Result<{ url: string }>>
 export async function setEngineerLinkCode(codeRaw: string): Promise<Result<{ url: string }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
+  const roleErr = await requireAdminRole(c);
+  if (roleErr) return { error: roleErr };
   if (!hasAdminCredentials()) return { error: "SUPABASE_SERVICE_ROLE_KEY no está configurada" };
   const code = codeRaw.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{2,29}$/.test(code)) {
-    return { error: "Usá 3–30 caracteres: letras minúsculas, números o guiones (ej: dicec-cotiza)." };
+    return { error: "Usa 3–30 caracteres: letras minúsculas, números o guiones (ej: dicec-cotiza)." };
   }
   const admin = createAdminClient() as unknown as Db;
   const { data: taken } = (await admin
@@ -215,7 +232,13 @@ export async function setEngineerLinkCode(codeRaw: string): Promise<Result<{ url
     .neq("id", c.orgId)
     .maybeSingle()) as { data: { id: string } | null };
   if (taken) return { error: "Ese código ya está en uso, prueba otro." };
-  const { error } = await admin.from("organizations").update({ cotizador_token: code }).eq("id", c.orgId);
+  const { error } = (await admin.from("organizations").update({ cotizador_token: code }).eq("id", c.orgId)) as {
+    error: { message: string; code?: string } | null;
+  };
+  // 23505 = índice único (migración 0021): otra org ganó el código en la carrera.
+  if (error?.code === "23505" || /duplicate key/i.test(error?.message ?? "")) {
+    return { error: "Ese código ya está en uso, prueba otro." };
+  }
   if (error) return { error: error.message };
   return { ok: true, data: { url: await portalUrl(code) } };
 }

@@ -38,14 +38,14 @@ async function getRootNamespaceId(token: string): Promise<string | null> {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) {
-      rootNsCache = null;
-      return null;
-    }
+    // Fallo transitorio: NO cachear el negativo — si se cacheara, toda la vida
+    // de la instancia operaría sin Path-Root y una cuenta Business fallaría con
+    // path/not_found en cada llamada.
+    if (!res.ok) return null;
     const j = (await res.json()) as { root_info?: { root_namespace_id?: string } };
-    rootNsCache = j.root_info?.root_namespace_id ?? null;
+    rootNsCache = j.root_info?.root_namespace_id ?? null; // resolución REAL → cachear
   } catch {
-    rootNsCache = null;
+    return null;
   }
   return rootNsCache;
 }
@@ -140,17 +140,25 @@ export async function uploadFile(
   return { id: j.id, path: j.path_display ?? destPath, name: j.name };
 }
 
-/** Copia un archivo a otra ruta (autorename si ya existe). */
+/** Copia un archivo a otra ruta. Si el destino ya existe (409), lo trata como
+ *  éxito idempotente y devuelve el path destino — así "Actualizar checklist"
+ *  no acumula "Aviso (1).pdf", "Aviso (2).pdf" en cada corrida. */
 export async function copyFile(fromPath: string, toPath: string): Promise<{ path: string; name: string; id: string }> {
   const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
   const res = await fetch("https://api.dropboxapi.com/2/files/copy_v2", {
     method: "POST",
     headers,
-    body: JSON.stringify({ from_path: fromPath, to_path: toPath, autorename: true }),
+    body: JSON.stringify({ from_path: fromPath, to_path: toPath, autorename: false }),
   });
-  if (!res.ok) throw new Error(`Dropbox copy ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const j = (await res.json()) as { metadata: { path_display?: string; name: string; id: string } };
-  return { path: j.metadata.path_display ?? toPath, name: j.metadata.name, id: j.metadata.id };
+  if (res.ok) {
+    const j = (await res.json()) as { metadata: { path_display?: string; name: string; id: string } };
+    return { path: j.metadata.path_display ?? toPath, name: j.metadata.name, id: j.metadata.id };
+  }
+  const errText = await res.text();
+  if (res.status === 409 && errText.includes("conflict")) {
+    return { path: toPath, name: toPath.split("/").pop() ?? toPath, id: "" }; // ya estaba copiado
+  }
+  throw new Error(`Dropbox copy ${res.status}: ${errText.slice(0, 200)}`);
 }
 
 /** Busca archivos por nombre (recursivo) dentro de una ruta. Más recientes primero. */

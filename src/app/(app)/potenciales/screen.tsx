@@ -73,7 +73,9 @@ const TENDER_STATUSES: TenderStatus[] = ["presentada", "en_revision", "por_parti
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
 const PROJECT_TYPES: ProjectType[] = ["obra", "instalacion", "remodelacion", "otro"];
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Fecha LOCAL de Panamá (UTC-5): toISOString() es UTC y después de las 7pm
+// local ya devuelve "mañana" — corría follow-ups un día antes.
+const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" });
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso + "T00:00:00").toLocaleDateString("es-PA", { day: "2-digit", month: "short", year: "2-digit" });
@@ -667,69 +669,96 @@ function QuoteDrawer({
   const clientLocs = clients.find((c) => c.id === f.client_id)?.locations ?? [];
 
   async function publicar() {
+    if (saving || pubBusy) return; // no publicar mientras un guardado está en vuelo (y viceversa)
     setPubBusy(true);
     setPubErr(null);
-    const r = await publishQuote(quote.id);
-    setPubBusy(false);
-    if ("error" in r) {
-      setPubErr(r.error);
-      return;
+    try {
+      const r = await publishQuote(quote.id);
+      if ("error" in r) {
+        setPubErr(r.error);
+        return;
+      }
+      // Fila optimista desde `quote` (lo PERSISTIDO), no desde `f` (ediciones
+      // sin guardar): publicar no guarda el formulario — mostrarlo como
+      // guardado desincronizaba la tabla de la base.
+      onSaved({ ...quote, status: "enviada", dropbox_shared_url: r.data.url, dropbox_path: r.data.path });
+    } catch (e) {
+      setPubErr(e instanceof Error ? e.message : "Se cortó la publicación — reintenta");
+    } finally {
+      setPubBusy(false);
     }
-    onSaved({ ...f, status: "enviada", dropbox_shared_url: r.data.url, dropbox_path: r.data.path });
   }
 
   async function crearLink() {
+    if (saving || pubBusy) return;
     setPubBusy(true);
     setPubErr(null);
-    const r = await createQuoteSharedLink(quote.id);
-    setPubBusy(false);
-    if ("error" in r) {
-      setPubErr(r.error);
-      return;
+    try {
+      const r = await createQuoteSharedLink(quote.id);
+      if ("error" in r) {
+        setPubErr(r.error);
+        return;
+      }
+      onSaved({ ...quote, dropbox_shared_url: r.data.url });
+    } catch (e) {
+      setPubErr(e instanceof Error ? e.message : "No se pudo crear el link — reintenta");
+    } finally {
+      setPubBusy(false);
     }
-    onSaved({ ...f, dropbox_shared_url: r.data.url });
   }
 
   async function editarCarta() {
+    if (saving || pubBusy) return;
     setPubBusy(true);
     setPubErr(null);
-    const r = await getQuoteLetter(quote.id);
-    setPubBusy(false);
-    if ("error" in r) {
-      setPubErr(r.error);
-      return;
+    try {
+      const r = await getQuoteLetter(quote.id);
+      if ("error" in r) {
+        setPubErr(r.error);
+        return;
+      }
+      onEditLetter?.(r.data);
+    } catch (e) {
+      setPubErr(e instanceof Error ? e.message : "No se pudo abrir la carta — reintenta");
+    } finally {
+      setPubBusy(false);
     }
-    onEditLetter?.(r.data);
   }
 
   async function save() {
+    if (saving || pubBusy) return; // guardar durante un publish podía revertir "enviada" a "borrador"
     setSaving(true);
     setError(null);
-    const r = await updateQuote(quote.id, {
-      quote_number: f.quote_number,
-      sent_date: f.sent_date,
-      amount_usd: f.amount_usd,
-      status: f.status,
-      payment_status: f.payment_status,
-      invoice_status: f.invoice_status,
-      client_name: f.client_name,
-      client_id: f.client_id,
-      location_id: f.location_id,
-      contact_name: f.contact_name,
-      contact_phone: f.contact_phone,
-      contact_email: f.contact_email,
-      description: f.description,
-      notes: f.notes,
-      rubro: f.rubro,
-      follow_up_date: f.follow_up_date,
-      rejection_reason: f.rejection_reason,
-    });
-    setSaving(false);
-    if ("error" in r) {
-      setError(r.error);
-      return;
+    try {
+      const r = await updateQuote(quote.id, {
+        quote_number: f.quote_number,
+        sent_date: f.sent_date,
+        amount_usd: f.amount_usd,
+        status: f.status,
+        payment_status: f.payment_status,
+        invoice_status: f.invoice_status,
+        client_name: f.client_name,
+        client_id: f.client_id,
+        location_id: f.location_id,
+        contact_name: f.contact_name,
+        contact_phone: f.contact_phone,
+        contact_email: f.contact_email,
+        description: f.description,
+        notes: f.notes,
+        rubro: f.rubro,
+        follow_up_date: f.follow_up_date,
+        rejection_reason: f.rejection_reason,
+      });
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      onSaved(f);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Se cortó el guardado — reintenta");
+    } finally {
+      setSaving(false);
     }
-    onSaved(f);
   }
 
   return (
@@ -749,7 +778,7 @@ function QuoteDrawer({
               <button
                 type="button"
                 onClick={editarCarta}
-                disabled={pubBusy}
+                disabled={pubBusy || saving}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
                 title="Abrir la carta en el cotizador para terminarla (renglones, precios, condiciones)"
               >
@@ -758,7 +787,7 @@ function QuoteDrawer({
               <button
                 type="button"
                 onClick={publicar}
-                disabled={pubBusy}
+                disabled={pubBusy || saving}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
                 title="Genera el PDF con membrete y lo sube a la carpeta de cartas en Dropbox"
               >
@@ -771,7 +800,7 @@ function QuoteDrawer({
             <button
               type="button"
               onClick={crearLink}
-              disabled={pubBusy}
+              disabled={pubBusy || saving}
               className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
               title="El PDF ya está en Dropbox — crear el link compartido para WhatsApp/Email"
             >
@@ -1018,7 +1047,7 @@ function QuoteDrawer({
           <button
             type="button"
             onClick={save}
-            disabled={saving}
+            disabled={saving || pubBusy}
             className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : null}
@@ -1026,12 +1055,24 @@ function QuoteDrawer({
           </button>
           <button
             type="button"
+            disabled={saving || pubBusy}
             onClick={async () => {
               if (!confirm(`¿Eliminar la cotización ${quote.quote_number}?`)) return;
-              const r = await deleteQuote(quote.id);
-              if (!("error" in r)) onDeleted(quote.id);
+              setSaving(true);
+              setError(null);
+              try {
+                const r = await deleteQuote(quote.id);
+                // Fallo visible: antes un error se tragaba y el drawer quedaba
+                // ahí sin explicación.
+                if ("error" in r) setError(r.error);
+                else onDeleted(quote.id);
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "No se pudo eliminar — reintenta");
+              } finally {
+                setSaving(false);
+              }
             }}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
           >
             <Trash2 className="size-4" />
             Eliminar
@@ -1072,29 +1113,35 @@ function NewQuoteDrawer({
     }
     setSaving(true);
     setError(null);
-    const r = await createQuote({
-      quote_number: quoteNumber.trim(),
-      year: defaultYear,
-      sent_date: sentDate || null,
-      amount_usd: amount === "" ? null : Number(amount),
-      status,
-      client_name: client || null,
-      contact_name: contactName || null,
-      contact_phone: contactPhone || null,
-      contact_email: contactEmail || null,
-      description: description || null,
-      rubro: rubro || null,
-      follow_up_date: status === "enviada" ? followUp || null : null,
-    });
-    setSaving(false);
-    if ("error" in r) {
-      setError(r.error);
-      return;
-    }
-    onCreated({
-      id: r.data.id,
-      quote_number: quoteNumber.trim(),
-      year: defaultYear,
+    // Año desde la FECHA de envío (no el filtro de año activo): filtrando 2025
+    // y creando con fecha de hoy, la fila quedaba en el año equivocado.
+    const year = sentDate ? Number(sentDate.slice(0, 4)) || defaultYear : defaultYear;
+    // Mayúsculas: los imports y el cotizador normalizan a upper — sin esto un
+    // número tipeado en minúscula nunca matchea el aviso de duplicados.
+    const numero = quoteNumber.trim().toUpperCase();
+    try {
+      const r = await createQuote({
+        quote_number: numero,
+        year,
+        sent_date: sentDate || null,
+        amount_usd: amount === "" ? null : Number(amount),
+        status,
+        client_name: client || null,
+        contact_name: contactName || null,
+        contact_phone: contactPhone || null,
+        contact_email: contactEmail || null,
+        description: description || null,
+        rubro: rubro || null,
+        follow_up_date: status === "enviada" ? followUp || null : null,
+      });
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      onCreated({
+        id: r.data.id,
+        quote_number: numero,
+        year,
       sent_date: sentDate || null,
       amount_usd: amount === "" ? null : Number(amount),
       status,
@@ -1117,7 +1164,12 @@ function NewQuoteDrawer({
       follow_up_date: status === "enviada" ? followUp || null : null,
       rejection_reason: null,
       converted_project_id: null,
-    });
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Se cortó el guardado — reintenta");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (

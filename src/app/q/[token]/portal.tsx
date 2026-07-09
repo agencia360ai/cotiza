@@ -11,7 +11,9 @@ export function PortalCotizador({ token, orgName }: { token: string; orgName: st
 
   const api: CotizadorApi = useMemo(
     () => ({
-      generate: (brief) => portalGenerate(token, brief),
+      // OJO: pasar TAMBIÉN la foto — perderla rompía el flujo "solo foto" y
+      // silenciosamente ignoraba la imagen en "brief + foto".
+      generate: (brief, image) => portalGenerate(token, brief, image),
       save: (input) => portalSave(token, input),
       publish: (id) => portalPublish(token, id),
     }),
@@ -23,8 +25,8 @@ export function PortalCotizador({ token, orgName }: { token: string; orgName: st
       <header className="mb-5 text-center">
         <h1 className="text-xl font-semibold tracking-tight text-slate-900">Cotizador · {orgName}</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Describí el trabajo en una línea, revisá la cotización y publicala — el PDF queda en la carpeta de cartas de
-          Dropbox y podés mandarlo por WhatsApp o Email.
+          Describe el trabajo en una línea, revisa la cotización y publícala — el PDF queda en la carpeta de cartas de
+          Dropbox y puedes mandarlo por WhatsApp o Email.
         </p>
         {doneCount > 0 ? (
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">

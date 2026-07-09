@@ -152,8 +152,10 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
   return res.json().catch(() => null);
 }
 
-// Solo el endpoint de archivos de PanamaCompra (no SSRF a otros hosts).
-const ARCHIVO_URL_RE = /^https:\/\/[a-z0-9.-]*panamacompra\.gob\.pa\/procesos-contratacion-archivos\//i;
+// Solo el endpoint de archivos de PanamaCompra (no SSRF a otros hosts). El
+// hostname debe SER panamacompra.gob.pa o un subdominio real (no un dominio
+// hermano tipo "evilpanamacompra.gob.pa").
+const ARCHIVO_URL_RE = /^https:\/\/(?:[a-z0-9-]+\.)*panamacompra\.gob\.pa\/procesos-contratacion-archivos\//i;
 
 // Descarga un archivo del pliego (PDF/doc) con la sesión de proveedor. Devuelve
 // los bytes + content-type, o null si el archivo no existe (404). Lanza en
@@ -194,9 +196,45 @@ export async function pcDownloadArchivo(
 //      pliego suma exactamente el total del proceso).
 //   3. Último recurso: el primer precio*ref suelto.
 
+// Sanidad: ningún proceso real supera este monto; corta valores que en realidad
+// son timestamps u otros números gigantes que se cuelan por nombre de clave.
+const MAX_MONTO = 1e11;
+
 function parseNum(v: unknown): number | null {
-  const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.]/g, ""));
-  return !Number.isNaN(n) && n > 0 ? n : null;
+  if (typeof v === "number") return Number.isFinite(v) && v > 0 && v < MAX_MONTO ? v : null;
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  // Fechas/horas disfrazadas de "estimado" ("2026-07-31", "31/07/2026", ISO):
+  // jamás son montos.
+  if (/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|T\d{2}:/.test(s)) return null;
+  // "B/. 1,234.56" → el punto de "B/." es espurio: primero quedarse solo con
+  // dígitos y separadores, después decidir cuál separador es el decimal.
+  let t = s.replace(/[^0-9.,]/g, "");
+  if (!/[0-9]/.test(t)) return null;
+  const keepLastAsDecimal = (str: string, dec: "." | ",") => {
+    const other = dec === "." ? "," : ".";
+    let x = str.split(other).join("");
+    const i = x.lastIndexOf(dec);
+    if (i === -1) return x;
+    return x.slice(0, i).split(dec).join("") + "." + x.slice(i + 1);
+  };
+  const lastDot = t.lastIndexOf(".");
+  const lastComma = t.lastIndexOf(",");
+  if (lastDot !== -1 && lastComma !== -1) {
+    t = keepLastAsDecimal(t, lastDot > lastComma ? "." : ",");
+  } else if (lastComma !== -1) {
+    // Solo comas: "1,234,567" = miles; "1234,56" = decimal es-style.
+    const parts = t.split(",");
+    t = parts.length === 2 && parts[1].length <= 2 ? parts.join(".") : parts.join("");
+  } else if (lastDot !== -1) {
+    t = keepLastAsDecimal(t, ".");
+    // "1.234.567" (miles es-style) deja 3 "decimales" → eran miles.
+    const frac = t.split(".")[1];
+    if (frac && frac.length === 3 && s.split(".").length > 2) t = t.replace(".", "");
+  }
+  const n = parseFloat(t);
+  return Number.isFinite(n) && n > 0 && n < MAX_MONTO ? n : null;
 }
 
 function findFirstByKey(node: unknown, keyRe: RegExp, depth = 0): number | null {
@@ -236,25 +274,59 @@ const RE_UNITARIO = /unitari/i;
 // amplía a "presupuesto"/"monto proceso" para no agarrar montos ajenos (partida
 // del depto, etc.) que inflarían el total.
 const RE_PRICE_LIKE = /(precio.*ref|estimad|montoreferencia|totalreferencia)/i;
-const RE_PRICE_EXCLUDE = /(unitari|fianza|garant|porcentaje|itbms|impuesto|partida|saldo|disponible|cantidad|subsan)/i;
+// Excluye montos que no son el precio (fianza, %, ITBMS, partida, cantidades) y
+// claves temporales que contienen "estimad" (fechaEstimada, tiempoEstimado…).
+const RE_PRICE_EXCLUDE = /(unitari|fianza|garant|porcentaje|itbms|impuesto|partida|saldo|disponible|cantidad|subsan|fecha|plazo|tiempo|duracion|dias|hora|vigencia)/i;
 
-// Todos los montos "precio-like" del documento (renglones + total si existe).
-function collectPriceLike(node: unknown, out: { key: string; value: number }[] = [], depth = 0): { key: string; value: number }[] {
-  if (node == null || depth > 12) return out;
-  if (Array.isArray(node)) {
-    for (const it of node) collectPriceLike(it, out, depth + 1);
-    return out;
+// ¿El objeto es una fila "TOTAL" resumen (no un ítem real)? Sus montos duplican
+// la suma de los renglones — hay que excluirlos del cálculo del precio.
+function esFilaTotal(it: Record<string, unknown>): boolean {
+  for (const [k, v] of Object.entries(it)) {
+    if (/descripcion|nombre|detalle/i.test(k) && typeof v === "string" && /^\s*(sub)?total\b/i.test(v)) return true;
   }
-  if (typeof node === "object") {
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      const nk = k.replace(/[_\s]/g, "");
-      if (RE_PRICE_LIKE.test(nk) && !RE_PRICE_EXCLUDE.test(nk)) {
-        const n = parseNum(v);
-        if (n !== null) out.push({ key: k, value: n });
-      }
-      collectPriceLike(v, out, depth + 1);
+  return false;
+}
+
+type PriceEntry = { key: string; value: number; arr: number };
+
+// Todos los montos "precio-like" del documento, cada uno etiquetado con el
+// array que lo contiene (arr) para poder distinguir "renglones hermanos" de un
+// total a nivel proceso. Por objeto: si trae clave *total* se usa SOLO esa
+// (evita contar precioReferencia + precioReferenciaTotal del mismo renglón dos
+// veces); si no, sus valores deduplicados. Filas "TOTAL" resumen se saltan.
+function collectPriceLike(node: unknown): PriceEntry[] {
+  const out: PriceEntry[] = [];
+  let arrSeq = 0;
+  const walk = (n: unknown, arrId: number, depth: number) => {
+    if (n == null || depth > 12) return;
+    if (Array.isArray(n)) {
+      const id = ++arrSeq;
+      for (const it of n) walk(it, id, depth + 1);
+      return;
     }
-  }
+    if (typeof n !== "object") return;
+    const o = n as Record<string, unknown>;
+    if (!esFilaTotal(o)) {
+      const propios: { key: string; nk: string; value: number }[] = [];
+      for (const [k, v] of Object.entries(o)) {
+        const nk = k.replace(/[_\s]/g, "");
+        if (RE_PRICE_LIKE.test(nk) && !RE_PRICE_EXCLUDE.test(nk)) {
+          const num = parseNum(v);
+          if (num !== null) propios.push({ key: k, nk, value: num });
+        }
+      }
+      const totales = propios.filter((p) => /total/i.test(p.nk));
+      const usar = totales.length > 0 ? totales : propios;
+      const vistos = new Set<number>();
+      for (const p of usar) {
+        if (vistos.has(p.value)) continue; // mismo monto repetido en el mismo objeto
+        vistos.add(p.value);
+        out.push({ key: p.key, value: p.value, arr: arrId });
+      }
+    }
+    for (const v of Object.values(o)) walk(v, arrId, depth + 1);
+  };
+  walk(node, 0, 0);
   return out;
 }
 
@@ -331,14 +403,6 @@ function findItemsArray(node: unknown): Record<string, unknown>[] | null {
   return pool[0].objs;
 }
 
-// ¿La descripción del renglón es una fila "TOTAL" resumen (no un ítem real)?
-function esFilaTotal(it: Record<string, unknown>): boolean {
-  for (const [k, v] of Object.entries(it)) {
-    if (/descripcion|nombre|detalle/i.test(k) && typeof v === "string" && /^\s*(sub)?total\b/i.test(v)) return true;
-  }
-  return false;
-}
-
 export type PrecioBreakdown = {
   elegido: number | null;
   metodo: "total_explicito" | "suma_renglones" | "unico" | null;
@@ -355,31 +419,54 @@ export type PrecioBreakdown = {
 // campo aparte → es la SUMA de los renglones. Pero algunos pliegos SÍ traen un
 // total explícito además de los renglones; sumar todo doble-contaría.
 //
-// Regla (sobre los montos precio-like ordenados desc):
-//   - Si el mayor = suma de los demás (y hay ≥2 "demás") → es el total explícito.
-//   - Si no → total = suma de todos los renglones.
+// Regla (con los montos etiquetados por el array que los contiene):
+//   - "Renglones" = el grupo más grande de montos hermanos (mismo array, ≥2).
+//   - Un monto FUERA del grupo ≈ suma del grupo (tolerancia relativa 0.5%) ⇒ es
+//     el total explícito → elegirlo (evita el doble conteo aunque difiera por
+//     centavos de redondeo del gobierno).
+//   - Con grupo de renglones: total = suma del grupo (montos externos que no
+//     matchean son partidas/estimados sueltos: se ignoran, no se suman).
+//   - Sin grupo: 1 valor → único; 2 valores ≈ iguales → total explícito (total +
+//     su único renglón); si no → suma.
 export function extractPrecioBreakdown(node: unknown): PrecioBreakdown {
-  const priceLike = collectPriceLike(node);
-  const candidatos = [...priceLike].sort((a, b) => b.value - a.value).slice(0, 12);
-  const valores = priceLike.map((p) => p.value).sort((a, b) => b - a);
+  const entries = collectPriceLike(node);
+  const candidatos = entries
+    .map(({ key, value }) => ({ key, value }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 12);
   const round2 = (n: number) => Math.round(n * 100) / 100;
+  const valores = entries.map((e) => e.value).sort((a, b) => b - a);
+  const maxRef = valores[0] ?? null;
+  const sumaTodo = valores.length ? round2(valores.reduce((a, b) => a + b, 0)) : null;
+  const base = { maxRef, suma: sumaTodo, nValores: valores.length, candidatos };
 
-  if (valores.length === 0) return { elegido: null, metodo: null, maxRef: null, suma: null, nValores: 0, candidatos };
+  if (valores.length === 0) return { elegido: null, metodo: null, ...base };
+  if (valores.length === 1) return { elegido: valores[0], metodo: "unico", ...base };
 
-  const maxRef = valores[0];
-  const suma = round2(valores.reduce((a, b) => a + b, 0));
+  const tol = (ref: number) => Math.max(0.5, 0.005 * ref);
 
-  if (valores.length === 1) {
-    return { elegido: maxRef, metodo: "unico", maxRef, suma, nValores: 1, candidatos };
+  // Grupo más grande de montos hermanos (renglones de la misma tabla).
+  const porArr = new Map<number, PriceEntry[]>();
+  for (const e of entries) porArr.set(e.arr, [...(porArr.get(e.arr) ?? []), e]);
+  const grupos = [...porArr.values()].sort((a, b) => b.length - a.length);
+  const renglones = grupos[0].length >= 2 ? grupos[0] : null;
+
+  if (renglones) {
+    const sumaRenglones = round2(renglones.reduce((a, e) => a + e.value, 0));
+    const externos = entries.filter((e) => e.arr !== renglones[0].arr);
+    const totalExplicito = externos.find((e) => Math.abs(e.value - sumaRenglones) <= tol(e.value));
+    if (totalExplicito) {
+      return { elegido: totalExplicito.value, metodo: "total_explicito", ...base };
+    }
+    return { elegido: sumaRenglones, metodo: "suma_renglones", ...base };
   }
 
-  const restante = round2(suma - maxRef);
-  // El mayor valor = suma de los demás (≥2 renglones) ⇒ total explícito.
-  if (valores.length >= 3 && Math.abs(maxRef - restante) < 0.5) {
-    return { elegido: maxRef, metodo: "total_explicito", maxRef, suma, nValores: valores.length, candidatos };
+  // Sin tabla de renglones detectable: 2+ montos sueltos.
+  if (valores.length === 2 && Math.abs(valores[0] - valores[1]) <= tol(valores[0])) {
+    // total + su único renglón (mismo monto dos veces) → contar una sola vez.
+    return { elegido: valores[0], metodo: "total_explicito", ...base };
   }
-  // Si no, el total = la suma de todos los renglones.
-  return { elegido: suma, metodo: "suma_renglones", maxRef, suma, nValores: valores.length, candidatos };
+  return { elegido: sumaTodo, metodo: "suma_renglones", ...base };
 }
 
 export function extractPrecioRef(node: unknown): number | null {
@@ -470,7 +557,15 @@ export function extractArchivos(node: unknown): PliegoArchivo[] {
     const u = url.trim();
     if (!u || seen.has(u.toLowerCase())) return;
     seen.add(u.toLowerCase());
-    const name = (nombre ?? "").trim() || decodeURIComponent(u.split("/").pop() ?? "documento");
+    let name = (nombre ?? "").trim();
+    if (!name) {
+      const last = u.split("/").pop() ?? "documento";
+      try {
+        name = decodeURIComponent(last);
+      } catch {
+        name = last; // %-escape malformado en la URL del gobierno: usar crudo
+      }
+    }
     out.push({ nombre: name, url: u });
   };
   const walk = (n: unknown, parentName: string | null, depth: number) => {
@@ -494,13 +589,21 @@ export function extractArchivos(node: unknown): PliegoArchivo[] {
     if (!embebida && nom && RE_DOC_EXT.test(nom)) {
       let uuid: string | null = null;
       let code: string | null = null;
-      for (const v of stringValues(o)) {
+      let codeFallback: string | null = null;
+      for (const [k, v] of Object.entries(o)) {
+        if (typeof v !== "string") continue;
         const m = v.match(RE_UUID);
         if (m && !uuid) uuid = m[0];
         const t = v.trim();
-        if (!code && RE_CODE.test(t) && !RE_UUID.test(t)) code = t;
+        if (RE_CODE.test(t) && !RE_UUID.test(t)) {
+          // El código real vive en claves tipo "codigoArchivo"; un numProceso
+          // ("2026-1-10-…") también matchea el shape — preferir la clave codigo.
+          if (/codigo/i.test(k.replace(/[_\s]/g, "")) && !code) code = t;
+          else if (!codeFallback) codeFallback = t;
+        }
       }
-      if (uuid && code) add(nom, `${ARCHIVO_DL_BASE}download-file-${uuid}-${code}-${code}`);
+      const c = code ?? codeFallback;
+      if (uuid && c) add(nom, `${ARCHIVO_DL_BASE}download-file-${uuid}-${c}-${c}`);
     }
     for (const v of Object.values(o)) walk(v, nom ?? parentName, depth + 1);
   };

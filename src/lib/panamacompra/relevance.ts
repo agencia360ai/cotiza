@@ -94,12 +94,17 @@ NO RELEVANTE (aunque suene parecido):
 
 Regla de oro: si el objeto contratado NO es diseñar/instalar/mantener/reparar el sistema de clima/frío/aire/bombeo HVAC, relevante=false. Categoría "Aires Acondicionados o Climas" ⇒ relevante=true casi siempre.`;
 
+// Lotes de 25 (40 rozaba el tope de max_tokens con motivos largos → parse
+// truncado → el MISMO lote determinístico fallaba corrida tras corrida).
+// deadlineTs: corta entre lotes cuando el sync está por quedarse sin tiempo.
 export async function classifyWithAI(
   items: { i: number; titulo: string }[],
+  deadlineTs?: number,
 ): Promise<Map<number, { relevante: boolean; motivo: string }>> {
   const out = new Map<number, { relevante: boolean; motivo: string }>();
-  for (let start = 0; start < items.length; start += 40) {
-    const batch = items.slice(start, start + 40);
+  for (let start = 0; start < items.length; start += 25) {
+    if (deadlineTs && Date.now() > deadlineTs) break; // lo que falte va en la próxima corrida
+    const batch = items.slice(start, start + 25);
     try {
       const response = await anthropic.messages.parse({
         model: pickModel("micro"),

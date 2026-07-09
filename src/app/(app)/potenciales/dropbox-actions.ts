@@ -138,7 +138,16 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
 
     const isPdf = PDF_RE.test(name);
     const data = await downloadFile(path);
-    const parsed = await parseQuotePdf({ filename: name, data, isPdf, imageMime: isPdf ? undefined : "image/jpeg" });
+    // MIME real según extensión: declarar "jpeg" para un .png hace que la API
+    // de Claude rechace la imagen (bytes ≠ media_type declarado).
+    const imageMime = isPdf
+      ? undefined
+      : /\.png$/i.test(name)
+        ? ("image/png" as const)
+        : /\.webp$/i.test(name)
+          ? ("image/webp" as const)
+          : ("image/jpeg" as const);
+    const parsed = await parseQuotePdf({ filename: name, data, isPdf, imageMime });
 
     const number = (parsed.quote_number?.trim() || guessNumber(name) || name).toUpperCase();
     const year = (parsed.sent_date ? Number(parsed.sent_date.slice(0, 4)) : yearFromNumber(number)) || new Date().getFullYear();
@@ -162,17 +171,20 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
       source: "dropbox" as const,
     };
 
-    // Insert con file-id/path; si la columna no existe (migración 0003 pendiente),
-    // reintenta sin ellas.
+    // Insert con file-id/path; SOLO si la columna no existe (migración 0003
+    // pendiente) se reintenta sin ellas — ante un error real, reintentar sin el
+    // file-id crearía una fila que el dedup por archivo nunca volvería a ver
+    // (el mismo PDF aparecería como "nuevo" y se podría importar dos veces).
     let ins = (await c.supabase
       .from("sales_quotes")
       .insert({ ...base, dropbox_file_id: fileId, dropbox_path: path })
       .select("id")
-      .single()) as { data: { id: string } | null; error: { message: string } | null };
-    if (ins.error) {
+      .single()) as { data: { id: string } | null; error: { message: string; code?: string } | null };
+    const missingCol = ins.error && (ins.error.code === "42703" || /does not exist|could not find|schema cache/i.test(ins.error.message));
+    if (missingCol) {
       ins = (await c.supabase.from("sales_quotes").insert(base).select("id").single()) as {
         data: { id: string } | null;
-        error: { message: string } | null;
+        error: { message: string; code?: string } | null;
       };
     }
     if (ins.error || !ins.data) return { error: ins.error?.message ?? "No se pudo guardar" };

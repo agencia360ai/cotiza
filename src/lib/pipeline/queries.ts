@@ -20,6 +20,24 @@ function isMissingColumn(error: { message?: string; code?: string } | null): boo
 
 const QUOTE_JOIN = "client_id, client:clients(name)";
 const LOC_JOIN = "location_id, location:client_locations(name)";
+
+// PostgREST corta en 1000 filas por request: TODA lista "completa" debe paginar
+// o, pasadas 1000 cotizaciones, el board y los KPIs se calculan sobre un
+// subconjunto silenciosamente (mismo bug ya corregido en gov_tenders).
+const PAGE = 1000;
+type PgErr = { message: string; code?: string } | null;
+async function fetchAll<T>(
+  run: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: PgErr }>,
+): Promise<{ data: T[]; error: PgErr }> {
+  const out: T[] = [];
+  for (let from = 0; from < 100_000; from += PAGE) {
+    const { data, error } = await run(from, from + PAGE - 1);
+    if (error) return { data: out, error };
+    out.push(...(data ?? []));
+    if ((data?.length ?? 0) < PAGE) break;
+  }
+  return { data: out, error: null };
+}
 const QUOTE_COLS =
   `id, quote_number, year, sent_date, amount_usd, status, payment_status, invoice_status, client_name, contact_name, contact_phone, contact_email, description, notes, rubro, progress, follow_up_date, rejection_reason, converted_project_id, ${QUOTE_JOIN}`;
 // Sin columnas de contacto — fallback si la migración 0002 aún no se aplicó.
@@ -32,13 +50,6 @@ const TENDER_COLS =
 export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
   if (!orgId) return [];
   const supabase = await createClient();
-  const run = (cols: string) =>
-    supabase
-      .from("sales_quotes")
-      .select(cols)
-      .eq("org_id", orgId)
-      .order("sent_date", { ascending: false, nullsFirst: false })
-      .order("quote_number", { ascending: false });
   type Raw = Omit<QuoteRow, "client_std_name" | "location_name" | "dropbox_shared_url" | "dropbox_path"> & {
     client: { name: string } | null;
     location?: { name: string } | null;
@@ -46,6 +57,18 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
     dropbox_path?: string | null;
   };
   type Res = { data: Raw[] | null; error: ({ message: string; code?: string }) | null };
+  const run = (cols: string) =>
+    fetchAll<Raw>(
+      (from, to) =>
+        supabase
+          .from("sales_quotes")
+          .select(cols)
+          .eq("org_id", orgId)
+          .order("sent_date", { ascending: false, nullsFirst: false })
+          .order("quote_number", { ascending: false })
+          .order("id", { ascending: true }) // tiebreaker estable entre páginas
+          .range(from, to) as unknown as PromiseLike<{ data: Raw[] | null; error: PgErr }>,
+    );
   let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url, dropbox_path`)) as Res;
   if (isMissingColumn(res.error)) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_path`)) as Res; // sin shared_url (0009 pendiente)
   if (isMissingColumn(res.error)) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res; // sin dropbox_path (0003 pendiente)
@@ -76,16 +99,24 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
     client: { name: string } | null;
     location?: { name: string } | null;
   };
-  type Res = { data: Raw[] | null; error: { message: string } | null };
+  type Res = { data: Raw[] | null; error: PgErr };
   const run = (cols: string) =>
-    supabase
-      .from("tenders")
-      .select(cols)
-      .eq("org_id", orgId)
-      .order("year", { ascending: false, nullsFirst: false })
-      .order("acto_number", { ascending: false });
+    fetchAll<Raw>(
+      (from, to) =>
+        supabase
+          .from("tenders")
+          .select(cols)
+          .eq("org_id", orgId)
+          .order("year", { ascending: false, nullsFirst: false })
+          .order("acto_number", { ascending: false })
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: Raw[] | null; error: PgErr }>,
+    );
   let res = (await run(`${TENDER_COLS}, ${LOC_JOIN}`)) as Res;
-  if (res.error) res = (await run(TENDER_COLS)) as Res; // sin location (0005 pendiente)
+  // Solo degradar si la columna falta (0005 pendiente); un error real (RLS,
+  // conexión) NO debe verse como "0 licitaciones".
+  if (isMissingColumn(res.error)) res = (await run(TENDER_COLS)) as Res;
+  if (res.error) throw new Error(`No se pudieron cargar las licitaciones: ${res.error.message}`);
   return (res.data ?? []).map(({ client, location, ...t }) => ({
     ...t,
     client_id: t.client_id ?? null,
@@ -125,11 +156,16 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
   try {
     const supabase = await createClient();
 
-    const { data: quotes, error: qErr } = (await supabase
-      .from("sales_quotes")
-      .select("quote_number, sent_date, status, amount_usd, invoice_status")
-      .eq("org_id", orgId)
-      .eq("year", year)) as { data: QuoteAggRow[] | null; error: { message: string } | null };
+    const { data: quotes, error: qErr } = await fetchAll<QuoteAggRow>(
+      (from, to) =>
+        supabase
+          .from("sales_quotes")
+          .select("quote_number, sent_date, status, amount_usd, invoice_status")
+          .eq("org_id", orgId)
+          .eq("year", year)
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: QuoteAggRow[] | null; error: PgErr }>,
+    );
     if (qErr) throw new Error(qErr.message);
     if (!quotes || quotes.length === 0) return emptyPipelineData(year);
 
@@ -160,10 +196,15 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
     }
 
     // Licitaciones — todas (no se filtran por año, igual que el resumen DICEC).
-    const { data: tenders } = (await supabase
-      .from("tenders")
-      .select("status, amount_ref_usd, modalidad")
-      .eq("org_id", orgId)) as { data: TenderAggRow[] | null };
+    const { data: tenders } = await fetchAll<TenderAggRow>(
+      (from, to) =>
+        supabase
+          .from("tenders")
+          .select("status, amount_ref_usd, modalidad")
+          .eq("org_id", orgId)
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: TenderAggRow[] | null; error: PgErr }>,
+    );
 
     const porEstatus = emptyByStatus(TENDER_STATUSES);
     const mod = { publica: 0, compraMenor: 0, contratacionMenor: 0 };

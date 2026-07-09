@@ -61,6 +61,11 @@ type DocProgress = { done: number; total: number; current: string; subidos: numb
 // Progreso del armado de "documentos a someter" (búsqueda + copia), por fila.
 type SometerProgress = { done: number; total: number; current: string };
 
+// Guard a nivel módulo contra loops dobles sobre la misma fila: sobrevive a
+// desmontes del board (cambiar de tab no cancela el loop en curso — al volver,
+// el botón NO debe permitir arrancar un segundo loop que duplique subidas).
+const inflightRows = new Set<string>();
+
 function relTime(ts: number): string {
   const m = Math.round((Date.now() - ts) / 60000);
   if (m < 60) return `hace ${Math.max(1, m)} min`;
@@ -729,7 +734,9 @@ function TenderTr({
   onPrepararSometer: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
-  const cerrada = dias !== null && dias < 0;
+  // "Cerrada" por hora exacta (no por día redondeado): una que cerró hace 3h
+  // tiene dias=0 pero ya NO está abierta — no debe decir "cierra hoy".
+  const cerrada = !estaAbierta(r) && !!r.fecha_cierre;
   const urgente = !cerrada && r.relevante === true && dias !== null && dias < 5;
   const siguiendo = !!r.converted_tender_id;
   const cat = categoriaVisual(r);
@@ -923,11 +930,11 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
   const [folderBusy, setFolderBusy] = useState<string | null>(null);
   const [analyzeBusy, setAnalyzeBusy] = useState<string | null>(null);
-  const [docBusy, setDocBusy] = useState<string | null>(null);
-  const [docProgress, setDocProgress] = useState<{ id: string } & DocProgress | null>(null);
-  const [docMsg, setDocMsg] = useState<{ id: string; text: string } | null>(null);
-  const [someterBusy, setSometerBusy] = useState<string | null>(null);
-  const [someterProgress, setSometerProgress] = useState<{ id: string } & SometerProgress | null>(null);
+  // Estado por fila (Record): dos filas pueden tener loops andando a la vez sin
+  // pisarse el progreso ni re-habilitarse los botones entre sí.
+  const [docProgress, setDocProgress] = useState<Record<string, DocProgress>>({});
+  const [docMsg, setDocMsg] = useState<Record<string, string>>({});
+  const [someterProgress, setSometerProgress] = useState<Record<string, SometerProgress>>({});
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
@@ -980,174 +987,229 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // try/finally en TODOS los handlers: una acción que RECHAZA (red caída,
+  // redeploy, función matada a los 300s) no debe dejar el botón girando eterno.
   async function refresh(full = false) {
     setRefreshing(full ? "full" : "inc");
     setError(null);
     setLastRefresh(null);
     setTruncWarn(null);
-    const r = await refreshGovTenders(full);
-    setRefreshing(false);
-    if ("error" in r) {
-      setError(r.error);
-      return;
-    }
-    const desglose = Object.entries(r.data.porTipo)
-      .map(([k, n]) => `${TIPO_SHORT[k] ?? k} ${n}`)
-      .join(" · ");
-    setLastRefresh(
-      `${r.data.total} procesos (${desglose}) · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados` +
-        (r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos traídos` : "") +
-        (r.data.pendientesPrecio > 0 ? ` · quedan ~${r.data.pendientesPrecio} sin monto (toca Actualizar de nuevo)` : ""),
-    );
-    if (r.data.truncados.length > 0) {
-      setTruncWarn(
-        `Hay más páginas en PanamaCompra para: ${r.data.truncados.map((k) => TIPO_SHORT[k] ?? k).join(", ")}. ` +
-          `Corré "Escaneo completo" otra vez para seguir trayendo.`,
+    try {
+      const r = await refreshGovTenders(full);
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      const desglose = Object.entries(r.data.porTipo)
+        .map(([k, n]) => `${TIPO_SHORT[k] ?? k} ${n}`)
+        .join(" · ");
+      setLastRefresh(
+        `${r.data.total} procesos (${desglose}) · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados` +
+          (r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos traídos` : "") +
+          (r.data.pendientesPrecio > 0 ? ` · quedan ~${r.data.pendientesPrecio} sin monto (toca Actualizar de nuevo)` : ""),
       );
+      if (r.data.truncados.length > 0) {
+        setTruncWarn(
+          `Hay más páginas en PanamaCompra para: ${r.data.truncados.map((k) => TIPO_SHORT[k] ?? k).join(", ")}. ` +
+            `Corre "Escaneo completo" otra vez para seguir trayendo.`,
+        );
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Se cortó la actualización — reintenta");
+    } finally {
+      setRefreshing(false);
     }
-    await load();
   }
 
   async function seguir(id: string) {
     setBusy(id);
-    const r = await followGovTender(id);
-    setBusy(null);
-    if ("error" in r) {
-      setError(r.error);
-      return;
+    try {
+      const r = await followGovTender(id);
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, converted_tender_id: r.data.tenderId } : x)));
+      onFollowed?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo seguir — reintenta");
+    } finally {
+      setBusy(null);
     }
-    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, converted_tender_id: r.data.tenderId } : x)));
-    onFollowed?.();
   }
 
   async function enrich(id: string) {
     setEnrichBusy(id);
-    const r = await enrichGovTender(id);
-    setEnrichBusy(null);
-    if ("error" in r) {
-      setError(r.error);
-      return;
+    try {
+      const r = await enrichGovTender(id);
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      setError(null);
+      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, detalle: r.data.detalle } : x)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Se cortó la carga del pliego — reintenta");
+    } finally {
+      setEnrichBusy(null);
     }
-    setError(null);
-    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, detalle: r.data.detalle } : x)));
   }
 
   async function crearCarpeta(id: string) {
     setFolderBusy(id);
-    const r = await createGovTenderFolder(id);
-    setFolderBusy(null);
-    if ("error" in r) {
-      setError(r.error);
-      return;
+    try {
+      const r = await createGovTenderFolder(id);
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      setError(null);
+      setRows((prev) =>
+        prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: r.data.path, dropbox_folder_url: r.data.url } : x)),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo crear la carpeta — reintenta");
+    } finally {
+      setFolderBusy(null);
     }
-    setError(null);
-    setRows((prev) =>
-      prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: r.data.path, dropbox_folder_url: r.data.url } : x)),
-    );
   }
 
   async function analizar(id: string) {
     setAnalyzeBusy(id);
-    const r = await analyzeGovTenderDocs(id);
-    setAnalyzeBusy(null);
-    if ("error" in r) {
-      setError(r.error);
-      return;
+    try {
+      const r = await analyzeGovTenderDocs(id);
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      setError(null);
+      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, doc_analisis: r.data.analisis } : x)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Se cortó el análisis — reintenta");
+    } finally {
+      setAnalyzeBusy(null);
     }
-    setError(null);
-    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, doc_analisis: r.data.analisis } : x)));
   }
+
+  // Helpers de estado por fila.
+  const putDocProgress = (id: string, p: DocProgress) => setDocProgress((m) => ({ ...m, [id]: p }));
+  const clearDocProgress = (id: string) =>
+    setDocProgress((m) => {
+      const { [id]: _drop, ...rest } = m;
+      return rest;
+    });
+  const putSometerProgress = (id: string, p: SometerProgress) => setSometerProgress((m) => ({ ...m, [id]: p }));
+  const clearSometerProgress = (id: string) =>
+    setSometerProgress((m) => {
+      const { [id]: _drop, ...rest } = m;
+      return rest;
+    });
 
   // Baja los documentos del pliego (PanamaCompra → Dropbox) uno por uno, con %.
   // El cliente maneja el loop para poder mostrar el avance sin timeoutear (cada
-  // archivo es una acción corta).
+  // archivo es una acción corta). try/finally: si una acción RECHAZA (red caída,
+  // redeploy), el botón no queda colgado en "Bajando…" para siempre.
   async function descargarDocs(id: string) {
-    setDocBusy(id);
-    setDocMsg(null);
-    setError(null);
-    setDocProgress({ id, done: 0, total: 0, current: "", subidos: 0, saltados: 0 });
-    const listed = await listGovTenderDocs(id);
-    if ("error" in listed) {
-      setError(listed.error);
-      setDocBusy(null);
-      setDocProgress(null);
-      return;
-    }
-    // La carpeta pudo crearse recién: reflejarla en la fila.
-    setRows((prev) =>
-      prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: listed.data.folderPath, dropbox_folder_url: listed.data.folderUrl } : x)),
-    );
-    const docs = listed.data.docs;
-    if (docs.length === 0) {
-      setDocBusy(null);
-      setDocProgress(null);
-      setDocMsg({ id, text: "El pliego no trae documentos descargables. Ábrelo en PanamaCompra y súbelos a la carpeta a mano." });
-      return;
-    }
-    let subidos = 0;
-    let saltados = 0;
-    for (let i = 0; i < docs.length; i++) {
-      const d = docs[i];
-      setDocProgress({ id, done: i, total: docs.length, current: d.nombre, subidos, saltados });
-      if (d.existe) {
-        saltados++;
-      } else {
-        const up = await uploadGovTenderDocToDropbox(id, d.nombre, d.url);
-        if (!("error" in up) && up.data.subido) subidos++;
-      }
-      setDocProgress({ id, done: i + 1, total: docs.length, current: d.nombre, subidos, saltados });
-    }
-    const noBajados = docs.length - subidos - saltados;
-    setDocBusy(null);
-    setDocProgress(null);
-    setDocMsg({
-      id,
-      text:
-        `${subidos} documento${subidos === 1 ? "" : "s"} subido${subidos === 1 ? "" : "s"} a Dropbox` +
-        (saltados > 0 ? ` · ${saltados} ya estaban` : "") +
-        (noBajados > 0 ? ` · ${noBajados} no se pudieron bajar (ábrelos en PanamaCompra)` : ""),
+    const guard = `doc:${id}`;
+    if (inflightRows.has(guard)) return; // ya hay un loop corriendo para esta fila
+    inflightRows.add(guard);
+    setDocMsg((m) => {
+      const { [id]: _drop, ...rest } = m;
+      return rest;
     });
+    setError(null);
+    putDocProgress(id, { done: 0, total: 0, current: "", subidos: 0, saltados: 0 });
+    try {
+      const listed = await listGovTenderDocs(id);
+      if ("error" in listed) {
+        setError(listed.error);
+        return;
+      }
+      // La carpeta pudo crearse recién: reflejarla en la fila.
+      setRows((prev) =>
+        prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: listed.data.folderPath, dropbox_folder_url: listed.data.folderUrl } : x)),
+      );
+      const docs = listed.data.docs;
+      if (docs.length === 0) {
+        setDocMsg((m) => ({ ...m, [id]: "El pliego no trae documentos descargables. Ábrelo en PanamaCompra y súbelos a la carpeta a mano." }));
+        return;
+      }
+      let subidos = 0;
+      let saltados = 0;
+      let primerError: string | null = null;
+      for (let i = 0; i < docs.length; i++) {
+        const d = docs[i];
+        putDocProgress(id, { done: i, total: docs.length, current: d.nombre, subidos, saltados });
+        if (d.existe) {
+          saltados++;
+        } else {
+          const up = await uploadGovTenderDocToDropbox(id, d.nombre, d.url);
+          if ("error" in up) primerError = primerError ?? up.error;
+          else if (up.data.subido) subidos++;
+        }
+        putDocProgress(id, { done: i + 1, total: docs.length, current: d.nombre, subidos, saltados });
+      }
+      const noBajados = docs.length - subidos - saltados;
+      setDocMsg((m) => ({
+        ...m,
+        [id]:
+          `${subidos} documento${subidos === 1 ? "" : "s"} subido${subidos === 1 ? "" : "s"} a Dropbox` +
+          (saltados > 0 ? ` · ${saltados} ya estaban` : "") +
+          (noBajados > 0 ? ` · ${noBajados} no se pudieron bajar${primerError ? ` — ${primerError}` : " (ábrelos en PanamaCompra)"}` : ""),
+      }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Se cortó la descarga — reintenta");
+    } finally {
+      inflightRows.delete(guard);
+      clearDocProgress(id);
+    }
   }
 
   // Arma el checklist de documentos a someter: la IA extrae la lista del pliego,
   // luego se busca/copia cada reutilizable de licitaciones pasadas (con % en vivo).
   async function prepararSometer(id: string) {
-    setSometerBusy(id);
+    const guard = `som:${id}`;
+    if (inflightRows.has(guard)) return;
+    inflightRows.add(guard);
     setError(null);
-    setSometerProgress({ id, done: 0, total: 0, current: "" });
-    const a = await analyzeSubmissionDocs(id);
-    if ("error" in a) {
-      setError(a.error);
-      setSometerBusy(null);
-      setSometerProgress(null);
-      return;
-    }
-    const { resumen, documentos, someterPath } = a.data;
-    const at0 = new Date().toISOString();
-    let working: SubmissionDoc[] = documentos.map((d) => ({ ...d }));
-    const putPlan = (docs: SubmissionDoc[]) =>
-      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: { resumen, someterPath, documentos: docs, at: at0 } } : x)));
-    putPlan(working);
-    for (let i = 0; i < working.length; i++) {
-      const d = working[i];
-      setSometerProgress({ id, done: i, total: working.length, current: d.nombre });
-      if (d.reutilizable) {
-        const res = await resolveSubmissionDoc(id, d);
-        if (!("error" in res)) working = working.map((w, j) => (j === i ? res.data : w));
-      } else {
-        working = working.map((w, j) => (j === i ? { ...w, estado: "por_hacer" as const } : w));
+    putSometerProgress(id, { done: 0, total: 0, current: "" });
+    try {
+      const a = await analyzeSubmissionDocs(id);
+      if ("error" in a) {
+        setError(a.error);
+        return;
       }
+      const { resumen, documentos, someterPath } = a.data;
+      const at0 = new Date().toISOString();
+      let working: SubmissionDoc[] = documentos.map((d) => ({ ...d }));
+      const putPlan = (docs: SubmissionDoc[]) =>
+        setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: { resumen, someterPath, documentos: docs, at: at0 } } : x)));
       putPlan(working);
-      setSometerProgress({ id, done: i + 1, total: working.length, current: d.nombre });
+      for (let i = 0; i < working.length; i++) {
+        const d = working[i];
+        putSometerProgress(id, { done: i, total: working.length, current: d.nombre });
+        if (d.reutilizable) {
+          const res = await resolveSubmissionDoc(id, d);
+          if (!("error" in res)) working = working.map((w, j) => (j === i ? res.data : w));
+        } else {
+          working = working.map((w, j) => (j === i ? { ...w, estado: "por_hacer" as const } : w));
+        }
+        putPlan(working);
+        putSometerProgress(id, { done: i + 1, total: working.length, current: d.nombre });
+      }
+      const saved = await saveSubmissionPlan(id, resumen, working);
+      if ("error" in saved) {
+        setError(saved.error);
+        return;
+      }
+      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: saved.data.plan } : x)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Se cortó el armado del checklist — reintenta");
+    } finally {
+      inflightRows.delete(guard);
+      clearSometerProgress(id);
     }
-    const saved = await saveSubmissionPlan(id, resumen, working);
-    setSometerBusy(null);
-    setSometerProgress(null);
-    if ("error" in saved) {
-      setError(saved.error);
-      return;
-    }
-    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: saved.data.plan } : x)));
   }
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
@@ -1449,11 +1511,11 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       enrichBusy={enrichBusy === r.id}
                       folderBusy={folderBusy === r.id}
                       analyzeBusy={analyzeBusy === r.id}
-                      docBusy={docBusy === r.id}
-                      docProgress={docProgress?.id === r.id ? docProgress : null}
-                      docMsg={docMsg?.id === r.id ? docMsg.text : null}
-                      someterBusy={someterBusy === r.id}
-                      someterProgress={someterProgress?.id === r.id ? someterProgress : null}
+                      docBusy={r.id in docProgress}
+                      docProgress={docProgress[r.id] ?? null}
+                      docMsg={docMsg[r.id] ?? null}
+                      someterBusy={r.id in someterProgress}
+                      someterProgress={someterProgress[r.id] ?? null}
                       onSeguir={() => seguir(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEnrich={() => enrich(r.id)}

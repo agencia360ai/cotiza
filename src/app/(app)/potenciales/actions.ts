@@ -58,12 +58,14 @@ export async function updateQuote(
   if (error) return { error: error.message };
   // Aprende del ajuste manual: guarda el alias (con sucursal si se asignó) para
   // que la próxima importación con ese mismo nombre se auto-linkee.
+  // ignoreDuplicates:false → una CORRECCIÓN (mismo alias, otro cliente) sí
+  // actualiza el mapeo; con DO NOTHING el alias viejo seguía auto-linkeando mal.
   if (patch.client_id && patch.client_name) {
     await c.supabase
       .from("client_aliases")
       .upsert(
         { org_id: c.orgId, client_id: patch.client_id, location_id: patch.location_id ?? null, alias_norm: norm(patch.client_name), source: "manual" },
-        { onConflict: "org_id,alias_norm", ignoreDuplicates: true },
+        { onConflict: "org_id,alias_norm", ignoreDuplicates: false },
       );
   }
   revalidatePath(REVALIDATE);
@@ -189,17 +191,19 @@ export async function convertQuoteToProject(
     .single()) as { data: { id: string } | null; error: { message: string } | null };
   if (pe || !project) return { error: pe?.message ?? "No se pudo crear el proyecto" };
 
-  // Backlink: si falla, borrar el proyecto recién creado para no dejar el par
-  // desincronizado (cotización sin vincular → doble conversión al reintentar).
-  const { error: linkErr } = await c.supabase
+  // Backlink con guarda: .select() para detectar el caso "0 filas actualizadas"
+  // (dos conversiones concurrentes — la otra ganó). Sin el select, un update
+  // vacío pasaba como éxito y quedaba un proyecto huérfano duplicado.
+  const { data: linked, error: linkErr } = (await c.supabase
     .from("sales_quotes")
     .update({ converted_project_id: project.id })
     .eq("id", quoteId)
     .eq("org_id", c.orgId)
-    .is("converted_project_id", null);
-  if (linkErr) {
+    .is("converted_project_id", null)
+    .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
+  if (linkErr || !linked || linked.length === 0) {
     await c.supabase.from("client_projects").delete().eq("id", project.id).eq("org_id", c.orgId);
-    return { error: "No se pudo vincular la cotización al proyecto; reintenta" };
+    return { error: linkErr ? linkErr.message : "Esta cotización ya fue convertida a proyecto" };
   }
 
   revalidatePath(REVALIDATE);

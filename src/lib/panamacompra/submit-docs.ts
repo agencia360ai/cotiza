@@ -62,8 +62,9 @@ Documentos típicos y cómo clasificarlos:
 Sé fiel a los documentos; si algo no se pide, no lo listes. Si un documento aplica pero no estás seguro de la vigencia, márcalo renovable=true.`;
 
 const MAX_FILES = 6;
-const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
+// Base64 infla ×4/3: 20MB crudos ≈ 26.7MB de request (tope API: 32MB).
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
 export async function extractRequiredDocs(input: {
   folderPath: string;

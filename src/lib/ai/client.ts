@@ -1,7 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 
+// El fallback "missing" evita que el constructor TIRE al cargar el módulo si la
+// env var falta: los módulos de acciones que importan IA estáticamente dejarían
+// de cargar y hasta las acciones sin IA (listados puros de DB) fallarían. Con
+// el placeholder, solo las llamadas de IA fallan — con un error claro de auth.
 export const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
+  apiKey: process.env.ANTHROPIC_API_KEY ?? "missing-anthropic-api-key",
 });
 
 // Model routing per Phase 2 plan:
