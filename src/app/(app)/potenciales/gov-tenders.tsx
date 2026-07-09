@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDashed,
+  ClipboardCheck,
+  ClipboardList,
   CloudDownload,
   Droplets,
   ExternalLink,
@@ -20,6 +22,7 @@ import {
   Landmark,
   Loader2,
   Mail,
+  PencilLine,
   Phone,
   Plus,
   RefreshCw,
@@ -29,6 +32,7 @@ import {
   Target,
   User,
   Wind,
+  XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -45,11 +49,17 @@ import {
   listGovTenderDocs,
   uploadGovTenderDocToDropbox,
   analyzeGovTenderDocs,
+  analyzeSubmissionDocs,
+  resolveSubmissionDoc,
+  saveSubmissionPlan,
   type GovTenderRow,
 } from "./gov-actions";
+import type { SubmissionDoc, SubmissionDocEstado } from "@/lib/panamacompra/submit-docs";
 
 // Progreso de la descarga de documentos (pliego → Dropbox), por fila.
 type DocProgress = { done: number; total: number; current: string; subidos: number; saltados: number };
+// Progreso del armado de "documentos a someter" (búsqueda + copia), por fila.
+type SometerProgress = { done: number; total: number; current: string };
 
 function relTime(ts: number): string {
   const m = Math.round((Date.now() - ts) / 60000);
@@ -282,6 +292,121 @@ function DocAnalisisCard({ r, busy, onAnalizar }: { r: GovTenderRow; busy: boole
   );
 }
 
+// Checklist de "documentos a someter": estado por documento.
+const SOMETER_ESTADO: Record<SubmissionDocEstado, { label: string; cls: string; icon: LucideIcon; spin?: boolean }> = {
+  pendiente: { label: "Buscando…", cls: "bg-slate-100 text-slate-500 ring-slate-200", icon: Loader2, spin: true },
+  copiado: { label: "Copiado", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
+  por_renovar: { label: "Verificar / renovar", cls: "bg-amber-50 text-amber-700 ring-amber-600/20", icon: RefreshCw },
+  falta: { label: "Falta — conseguir", cls: "bg-rose-50 text-rose-700 ring-rose-600/20", icon: XCircle },
+  por_hacer: { label: "Hacer a la medida", cls: "bg-indigo-50 text-indigo-700 ring-indigo-600/20", icon: PencilLine },
+};
+
+// Ensamblador de documentos a someter: la IA lee el pliego, arma el checklist y
+// copia de licitaciones pasadas lo reutilizable a la carpeta "DOCUMENTOS A SOMETER".
+function DocsSometerCard({
+  r,
+  busy,
+  progress,
+  onPreparar,
+}: {
+  r: GovTenderRow;
+  busy: boolean;
+  progress: SometerProgress | null;
+  onPreparar: () => void;
+}) {
+  const plan = r.docs_someter;
+  const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const counts = plan
+    ? plan.documentos.reduce<Record<string, number>>((a, d) => ({ ...a, [d.estado]: (a[d.estado] ?? 0) + 1 }), {})
+    : {};
+  return (
+    <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-700">
+          <ClipboardList className="size-3.5" /> Documentos a someter
+        </p>
+        <button
+          type="button"
+          onClick={onPreparar}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
+          title="La IA arma el checklist y copia de licitaciones pasadas lo reutilizable"
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardCheck className="size-3.5" />}
+          {busy ? "Preparando…" : plan ? "Actualizar checklist" : "Preparar documentos a someter"}
+        </button>
+      </div>
+
+      {progress ? (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-slate-600">
+            <span className="truncate">
+              {progress.total > 0 ? `Buscando ${Math.min(progress.done + 1, progress.total)} de ${progress.total}` : "Leyendo el pliego…"}
+              {progress.current ? <span className="text-slate-400"> · {progress.current}</span> : null}
+            </span>
+            <span className="ml-2 shrink-0 font-semibold tabular-nums text-slate-700">{pct}%</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-emerald-100">
+            <div className="h-full rounded-full bg-emerald-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      ) : null}
+
+      {plan ? (
+        <div className="mt-2.5 space-y-2">
+          <p className="text-xs leading-relaxed text-slate-700">{plan.resumen}</p>
+          <ul className="space-y-1">
+            {plan.documentos.map((d, i) => {
+              const meta = SOMETER_ESTADO[d.estado] ?? SOMETER_ESTADO.pendiente;
+              const Icon = meta.icon;
+              return (
+                <li key={i} className="flex items-start gap-2 rounded-lg bg-white px-2.5 py-1.5 ring-1 ring-inset ring-slate-100">
+                  <span className={cn("mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ring-inset", meta.cls)}>
+                    <Icon className={cn("size-3", meta.spin && "animate-spin")} /> {meta.label}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-slate-800">{d.nombre}</p>
+                    {d.copiadoDe || d.notas ? (
+                      <p className="text-[11px] leading-snug text-slate-500">
+                        {d.copiadoDe ? <span className="text-slate-400">de: {d.copiadoDe}</span> : null}
+                        {d.copiadoDe && d.notas ? " · " : null}
+                        {d.notas ?? ""}
+                      </p>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+            {(counts.copiado ?? 0) > 0 ? <span className="text-emerald-700">{counts.copiado} copiado{counts.copiado === 1 ? "" : "s"}</span> : null}
+            {(counts.por_renovar ?? 0) > 0 ? <span className="text-amber-700">{counts.por_renovar} por verificar</span> : null}
+            {(counts.falta ?? 0) > 0 ? <span className="text-rose-700">{counts.falta} falta{counts.falta === 1 ? "" : "n"}</span> : null}
+            {(counts.por_hacer ?? 0) > 0 ? <span className="text-indigo-700">{counts.por_hacer} a la medida</span> : null}
+            <span className="text-slate-400">· {relTime(+new Date(plan.at))}</span>
+          </div>
+          {r.dropbox_folder_url ? (
+            <a
+              href={r.dropbox_folder_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+            >
+              <FolderOpen className="size-3.5" /> Abrir carpeta (DOCUMENTOS A SOMETER adentro)
+            </a>
+          ) : null}
+        </div>
+      ) : !progress ? (
+        <p className="mt-2 text-xs text-slate-500">
+          La IA lee los documentos del pliego, arma el checklist de todo lo que hay que presentar, y copia de licitaciones
+          pasadas lo reutilizable (aviso de operación, idoneidad, etc.) a una carpeta &ldquo;DOCUMENTOS A SOMETER&rdquo;. Lo que
+          falte o haya que renovar queda marcado.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 // Carpeta de Dropbox de la licitación: crear (una vez), abrir, y bajar los
 // documentos del pliego (PanamaCompra → Dropbox) con medidor de %.
 function DropboxBand({
@@ -389,6 +514,9 @@ function DetallePliego({
   docProgress,
   docMsg,
   onDescargarDocs,
+  someterBusy,
+  someterProgress,
+  onPrepararSometer,
 }: {
   r: GovTenderRow;
   busy: boolean;
@@ -401,6 +529,9 @@ function DetallePliego({
   docProgress: DocProgress | null;
   docMsg: string | null;
   onDescargarDocs: () => void;
+  someterBusy: boolean;
+  someterProgress: SometerProgress | null;
+  onPrepararSometer: () => void;
 }) {
   const d = r.detalle;
   const dropbox = (
@@ -414,10 +545,14 @@ function DetallePliego({
       onDescargarDocs={onDescargarDocs}
     />
   );
+  const someter = r.dropbox_folder_path ? (
+    <DocsSometerCard r={r} busy={someterBusy} progress={someterProgress} onPreparar={onPrepararSometer} />
+  ) : null;
   if (!d) {
     return (
       <div className="space-y-3">
         {dropbox}
+        {someter}
         {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
         <div className="rounded-xl border border-slate-100 bg-white p-3.5">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego · ¿podemos licitar?</p>
@@ -445,6 +580,7 @@ function DetallePliego({
   return (
     <div className="space-y-3">
       {dropbox}
+      {someter}
       {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
       <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between">
@@ -561,12 +697,15 @@ function TenderTr({
   docBusy,
   docProgress,
   docMsg,
+  someterBusy,
+  someterProgress,
   onSeguir,
   onToggleExpand,
   onEnrich,
   onCrearCarpeta,
   onAnalizar,
   onDescargarDocs,
+  onPrepararSometer,
 }: {
   r: GovTenderRow;
   tamiz: TamizResult;
@@ -579,12 +718,15 @@ function TenderTr({
   docBusy: boolean;
   docProgress: DocProgress | null;
   docMsg: string | null;
+  someterBusy: boolean;
+  someterProgress: SometerProgress | null;
   onSeguir: () => void;
   onToggleExpand: () => void;
   onEnrich: () => void;
   onCrearCarpeta: () => void;
   onAnalizar: () => void;
   onDescargarDocs: () => void;
+  onPrepararSometer: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
   const cerrada = dias !== null && dias < 0;
@@ -754,6 +896,9 @@ function TenderTr({
               docProgress={docProgress}
               docMsg={docMsg}
               onDescargarDocs={onDescargarDocs}
+              someterBusy={someterBusy}
+              someterProgress={someterProgress}
+              onPrepararSometer={onPrepararSometer}
             />
           </td>
         </tr>
@@ -781,6 +926,8 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [docBusy, setDocBusy] = useState<string | null>(null);
   const [docProgress, setDocProgress] = useState<{ id: string } & DocProgress | null>(null);
   const [docMsg, setDocMsg] = useState<{ id: string; text: string } | null>(null);
+  const [someterBusy, setSometerBusy] = useState<string | null>(null);
+  const [someterProgress, setSometerProgress] = useState<{ id: string } & SometerProgress | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
@@ -960,6 +1107,47 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
         (saltados > 0 ? ` · ${saltados} ya estaban` : "") +
         (noBajados > 0 ? ` · ${noBajados} no se pudieron bajar (ábrelos en PanamaCompra)` : ""),
     });
+  }
+
+  // Arma el checklist de documentos a someter: la IA extrae la lista del pliego,
+  // luego se busca/copia cada reutilizable de licitaciones pasadas (con % en vivo).
+  async function prepararSometer(id: string) {
+    setSometerBusy(id);
+    setError(null);
+    setSometerProgress({ id, done: 0, total: 0, current: "" });
+    const a = await analyzeSubmissionDocs(id);
+    if ("error" in a) {
+      setError(a.error);
+      setSometerBusy(null);
+      setSometerProgress(null);
+      return;
+    }
+    const { resumen, documentos, someterPath } = a.data;
+    const at0 = new Date().toISOString();
+    let working: SubmissionDoc[] = documentos.map((d) => ({ ...d }));
+    const putPlan = (docs: SubmissionDoc[]) =>
+      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: { resumen, someterPath, documentos: docs, at: at0 } } : x)));
+    putPlan(working);
+    for (let i = 0; i < working.length; i++) {
+      const d = working[i];
+      setSometerProgress({ id, done: i, total: working.length, current: d.nombre });
+      if (d.reutilizable) {
+        const res = await resolveSubmissionDoc(id, d);
+        if (!("error" in res)) working = working.map((w, j) => (j === i ? res.data : w));
+      } else {
+        working = working.map((w, j) => (j === i ? { ...w, estado: "por_hacer" as const } : w));
+      }
+      putPlan(working);
+      setSometerProgress({ id, done: i + 1, total: working.length, current: d.nombre });
+    }
+    const saved = await saveSubmissionPlan(id, resumen, working);
+    setSometerBusy(null);
+    setSometerProgress(null);
+    if ("error" in saved) {
+      setError(saved.error);
+      return;
+    }
+    setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: saved.data.plan } : x)));
   }
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
@@ -1264,12 +1452,15 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       docBusy={docBusy === r.id}
                       docProgress={docProgress?.id === r.id ? docProgress : null}
                       docMsg={docMsg?.id === r.id ? docMsg.text : null}
+                      someterBusy={someterBusy === r.id}
+                      someterProgress={someterProgress?.id === r.id ? someterProgress : null}
                       onSeguir={() => seguir(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEnrich={() => enrich(r.id)}
                       onCrearCarpeta={() => crearCarpeta(r.id)}
                       onAnalizar={() => analizar(r.id)}
                       onDescargarDocs={() => descargarDocs(r.id)}
+                      onPrepararSometer={() => prepararSometer(r.id)}
                     />
                   ))}
                   {shown.length === 0 ? (

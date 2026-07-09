@@ -120,17 +120,76 @@ export async function downloadFile(path: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer());
 }
 
-/** Sube un archivo (autorename si ya existe). Devuelve id/path/nombre finales. */
-export async function uploadFile(destPath: string, data: Uint8Array): Promise<{ id: string; path: string; name: string }> {
+/** Sube un archivo. Por defecto autorename si ya existe; con overwrite lo pisa. */
+export async function uploadFile(
+  destPath: string,
+  data: Uint8Array,
+  opts?: { overwrite?: boolean },
+): Promise<{ id: string; path: string; name: string }> {
+  const arg = opts?.overwrite
+    ? { path: destPath, mode: "overwrite", autorename: false, mute: true }
+    : { path: destPath, mode: "add", autorename: true, mute: true };
   const headers = {
     ...(await rpcHeaders()),
-    "Dropbox-API-Arg": asciiHeader({ path: destPath, mode: "add", autorename: true, mute: true }),
+    "Dropbox-API-Arg": asciiHeader(arg),
     "Content-Type": "application/octet-stream",
   };
   const res = await fetch("https://content.dropboxapi.com/2/files/upload", { method: "POST", headers, body: Buffer.from(data) });
   if (!res.ok) throw new Error(`Dropbox upload ${res.status}: ${await res.text()}`);
   const j = (await res.json()) as { id: string; path_display?: string; name: string };
   return { id: j.id, path: j.path_display ?? destPath, name: j.name };
+}
+
+/** Copia un archivo a otra ruta (autorename si ya existe). */
+export async function copyFile(fromPath: string, toPath: string): Promise<{ path: string; name: string; id: string }> {
+  const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
+  const res = await fetch("https://api.dropboxapi.com/2/files/copy_v2", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ from_path: fromPath, to_path: toPath, autorename: true }),
+  });
+  if (!res.ok) throw new Error(`Dropbox copy ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const j = (await res.json()) as { metadata: { path_display?: string; name: string; id: string } };
+  return { path: j.metadata.path_display ?? toPath, name: j.metadata.name, id: j.metadata.id };
+}
+
+/** Busca archivos por nombre (recursivo) dentro de una ruta. Más recientes primero. */
+export async function searchFiles(query: string, opts?: { path?: string; maxResults?: number }): Promise<DbxEntry[]> {
+  const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
+  const options: Record<string, unknown> = {
+    max_results: Math.min(opts?.maxResults ?? 100, 1000),
+    file_status: "active",
+    filename_only: true,
+  };
+  if (opts?.path) options.path = opts.path.trim().replace(/\/+$/, "");
+  const res = await fetch("https://api.dropboxapi.com/2/files/search_v2", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, options }),
+  });
+  if (!res.ok) throw new Error(`Dropbox search ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const j = (await res.json()) as {
+    matches?: {
+      metadata?: {
+        metadata?: { [".tag"]?: string; name?: string; path_display?: string; path_lower?: string; id?: string; server_modified?: string; size?: number };
+      };
+    }[];
+  };
+  const out: DbxEntry[] = [];
+  for (const m of j.matches ?? []) {
+    const md = m.metadata?.metadata;
+    if (!md || md[".tag"] === "folder" || !md.name) continue;
+    out.push({
+      tag: "file",
+      name: md.name,
+      path: md.path_display ?? md.path_lower ?? "",
+      id: md.id ?? "",
+      modified: md.server_modified ?? null,
+      size: md.size ?? 0,
+    });
+  }
+  // Más recientes primero (para reutilizar la copia más nueva de un documento).
+  return out.sort((a, b) => (b.modified ?? "").localeCompare(a.modified ?? ""));
 }
 
 /** Crea una carpeta (idempotente: si ya existe, devuelve su path). */
