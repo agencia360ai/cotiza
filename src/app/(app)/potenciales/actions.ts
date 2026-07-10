@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import type { ProjectType } from "@/lib/projects/types";
-import type { QuoteStatus, Rubro, TenderStatus } from "@/lib/pipeline/types";
+import type { QuoteStatus, Rubro, TenderStatus, TenderRow } from "@/lib/pipeline/types";
+import { listTenders } from "@/lib/pipeline/queries";
 import { matchClientByName } from "@/lib/clients/match";
 import { norm } from "@/lib/clients/normalize";
 
@@ -235,4 +236,26 @@ export async function updateTender(
   if (error) return { error: error.message };
   revalidatePath(REVALIDATE);
   return { ok: true };
+}
+
+// Cambio rápido de estatus (picker inline en Mis Licitaciones).
+export async function setTenderStatus(id: string, status: TenderStatus): Promise<Result> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { error } = await c.supabase.from("tenders").update({ status }).eq("id", id).eq("org_id", c.orgId);
+  if (error) return { error: error.message };
+  revalidatePath(REVALIDATE);
+  return { ok: true };
+}
+
+// Recarga las licitaciones propias (tras participar desde el board del gobierno).
+export async function listMyTenders(): Promise<Result<TenderRow[]>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  try {
+    const tenders = await listTenders(c.orgId);
+    return { ok: true, data: tenders };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudieron cargar las licitaciones" };
+  }
 }

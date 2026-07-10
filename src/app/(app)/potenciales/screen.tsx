@@ -54,6 +54,8 @@ import {
   deleteQuote,
   convertQuoteToProject,
   updateTender,
+  setTenderStatus,
+  listMyTenders,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
 import { GovTendersBoard } from "./gov-tenders";
@@ -1952,7 +1954,14 @@ function LicitacionesTab({
     return (
       <>
         {toggle}
-        <GovTendersBoard onStats={setGovBadge} />
+        <GovTendersBoard
+          onStats={setGovBadge}
+          onParticipated={async () => {
+            setVista("mias"); // migró: mostrar a dónde fue
+            const r = await listMyTenders();
+            if (!("error" in r)) setTenders(r.data);
+          }}
+        />
       </>
     );
   }

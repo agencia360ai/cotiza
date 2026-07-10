@@ -6,6 +6,8 @@ import {
   AlarmClock,
   AlertTriangle,
   Building2,
+  ArrowRight,
+  Check,
   CheckCircle2,
   ChevronDown,
   CircleDashed,
@@ -13,6 +15,7 @@ import {
   ClipboardList,
   CloudDownload,
   Droplets,
+  Flag,
   ExternalLink,
   Fan,
   FileSearch,
@@ -507,58 +510,156 @@ function DropboxBand({
   );
 }
 
+// Paso del proceso: círculo con número o check.
+function StepDot({ done, n }: { done: boolean; n: number }) {
+  return (
+    <span
+      className={cn(
+        "flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
+        done ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-500",
+      )}
+    >
+      {done ? <Check className="size-3.5" /> : n}
+    </span>
+  );
+}
+
+// Proceso de participación: 2 pasos persistidos (derivados de la data) con % —
+// Paso 1 crear carpeta en Dropbox · Paso 2 PARTICIPAR (migra a Mis Licitaciones).
+// La descarga automática de documentos se quitó: no bajaba bien y confundía; el
+// equipo sube los PDFs a la carpeta a mano.
+function ProcesoLicitacion({
+  r,
+  folderBusy,
+  onCrearCarpeta,
+  participarBusy,
+  onParticipar,
+  onVerMisLicitaciones,
+}: {
+  r: GovTenderRow;
+  folderBusy: boolean;
+  onCrearCarpeta: () => void;
+  participarBusy: boolean;
+  onParticipar: () => void;
+  onVerMisLicitaciones: () => void;
+}) {
+  const paso1 = !!r.dropbox_folder_path;
+  const participando = !!r.converted_tender_id;
+  const pct = Math.round(((paso1 ? 1 : 0) + (participando ? 1 : 0)) / 2 * 100);
+  return (
+    <div className={cn("rounded-xl border p-3.5", participando ? "border-emerald-200 bg-emerald-50/40" : "border-slate-100 bg-white")}>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Proceso de participación</p>
+        <span className="text-[11px] font-semibold tabular-nums text-slate-500">{pct}%</span>
+      </div>
+      <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+        <div className={cn("h-full rounded-full transition-all", participando ? "bg-emerald-500" : "bg-indigo-500")} style={{ width: `${pct}%` }} />
+      </div>
+
+      <ol className="mt-3 space-y-2.5">
+        <li className="flex items-center gap-2.5">
+          <StepDot done={paso1} n={1} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-slate-800">Carpeta en Dropbox</p>
+            <p className="text-[11px] text-slate-500">
+              {paso1 ? "Creada — sube ahí los documentos del pliego." : "Crea la carpeta para juntar los documentos de la licitación."}
+            </p>
+          </div>
+          {paso1 ? (
+            r.dropbox_folder_url ? (
+              <a
+                href={r.dropbox_folder_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
+              >
+                <FolderOpen className="size-3.5" /> Abrir
+              </a>
+            ) : (
+              <span className="shrink-0 text-[11px] font-semibold text-emerald-600">Lista</span>
+            )
+          ) : (
+            <button
+              type="button"
+              onClick={onCrearCarpeta}
+              disabled={folderBusy}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+            >
+              {folderBusy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
+              {folderBusy ? "Creando…" : "Crear carpeta"}
+            </button>
+          )}
+        </li>
+
+        <li className="flex items-center gap-2.5">
+          <StepDot done={participando} n={2} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-slate-800">Participar</p>
+            <p className="text-[11px] text-slate-500">
+              {participando
+                ? "Ya está en Mis Licitaciones — ahí armas el análisis, el checklist y el seguimiento."
+                : "Muévela a Mis Licitaciones para el análisis, el checklist y el seguimiento."}
+            </p>
+          </div>
+          {participando ? (
+            <button
+              type="button"
+              onClick={onVerMisLicitaciones}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+            >
+              Ver en Mis Licitaciones <ArrowRight className="size-3.5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onParticipar}
+              disabled={participarBusy}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {participarBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Flag className="size-3.5" />}
+              {participarBusy ? "Participando…" : "Participar"}
+            </button>
+          )}
+        </li>
+      </ol>
+    </div>
+  );
+}
+
 function DetallePliego({
   r,
   busy,
   onCargar,
   folderBusy,
   onCrearCarpeta,
-  analyzeBusy,
-  onAnalizar,
-  docBusy,
-  docProgress,
-  docMsg,
-  onDescargarDocs,
-  someterBusy,
-  someterProgress,
-  onPrepararSometer,
+  participarBusy,
+  onParticipar,
+  onVerMisLicitaciones,
 }: {
   r: GovTenderRow;
   busy: boolean;
   onCargar: () => void;
   folderBusy: boolean;
   onCrearCarpeta: () => void;
-  analyzeBusy: boolean;
-  onAnalizar: () => void;
-  docBusy: boolean;
-  docProgress: DocProgress | null;
-  docMsg: string | null;
-  onDescargarDocs: () => void;
-  someterBusy: boolean;
-  someterProgress: SometerProgress | null;
-  onPrepararSometer: () => void;
+  participarBusy: boolean;
+  onParticipar: () => void;
+  onVerMisLicitaciones: () => void;
 }) {
   const d = r.detalle;
-  const dropbox = (
-    <DropboxBand
+  const proceso = (
+    <ProcesoLicitacion
       r={r}
-      busy={folderBusy}
-      onCrear={onCrearCarpeta}
-      docBusy={docBusy}
-      docProgress={docProgress}
-      docMsg={docMsg}
-      onDescargarDocs={onDescargarDocs}
+      folderBusy={folderBusy}
+      onCrearCarpeta={onCrearCarpeta}
+      participarBusy={participarBusy}
+      onParticipar={onParticipar}
+      onVerMisLicitaciones={onVerMisLicitaciones}
     />
   );
-  const someter = r.dropbox_folder_path ? (
-    <DocsSometerCard r={r} busy={someterBusy} progress={someterProgress} onPreparar={onPrepararSometer} />
-  ) : null;
   if (!d) {
     return (
       <div className="space-y-3">
-        {dropbox}
-        {someter}
-        {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
+        {proceso}
         <div className="rounded-xl border border-slate-100 bg-white p-3.5">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego · ¿podemos licitar?</p>
           <p className="mt-2 text-xs text-slate-500">
@@ -584,9 +685,7 @@ function DetallePliego({
   const hayEntidad = ent.dependencia || ent.unidadCompra || ent.provincia || ent.direccion;
   return (
     <div className="space-y-3">
-      {dropbox}
-      {someter}
-      {r.dropbox_folder_path ? <DocAnalisisCard r={r} busy={analyzeBusy} onAnalizar={onAnalizar} /> : null}
+      {proceso}
       <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego</p>
@@ -698,19 +797,11 @@ function TenderTr({
   expanded,
   enrichBusy,
   folderBusy,
-  analyzeBusy,
-  docBusy,
-  docProgress,
-  docMsg,
-  someterBusy,
-  someterProgress,
-  onSeguir,
+  onParticipar,
   onToggleExpand,
   onEnrich,
   onCrearCarpeta,
-  onAnalizar,
-  onDescargarDocs,
-  onPrepararSometer,
+  onVerMisLicitaciones,
 }: {
   r: GovTenderRow;
   tamiz: TamizResult;
@@ -719,19 +810,11 @@ function TenderTr({
   expanded: boolean;
   enrichBusy: boolean;
   folderBusy: boolean;
-  analyzeBusy: boolean;
-  docBusy: boolean;
-  docProgress: DocProgress | null;
-  docMsg: string | null;
-  someterBusy: boolean;
-  someterProgress: SometerProgress | null;
-  onSeguir: () => void;
+  onParticipar: () => void;
   onToggleExpand: () => void;
   onEnrich: () => void;
   onCrearCarpeta: () => void;
-  onAnalizar: () => void;
-  onDescargarDocs: () => void;
-  onPrepararSometer: () => void;
+  onVerMisLicitaciones: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
   // "Cerrada" por hora exacta (no por día redondeado): una que cerró hace 3h
@@ -747,7 +830,12 @@ function TenderTr({
       <tr
         className={cn(
           "border-b border-slate-50 transition-colors",
-          urgente ? "bg-red-50/40 hover:bg-red-50/70" : "hover:bg-slate-50/60",
+          // Participando: tinte verde + borde izquierdo, denota que ya es de Mis Licitaciones.
+          siguiendo
+            ? "bg-emerald-50/40 shadow-[inset_3px_0_0_0_#10B981] hover:bg-emerald-50/70"
+            : urgente
+              ? "bg-red-50/40 hover:bg-red-50/70"
+              : "hover:bg-slate-50/60",
           cerrada && "opacity-60",
           expanded && "!border-b-0",
         )}
@@ -868,19 +956,24 @@ function TenderTr({
               </a>
             ) : null}
             {siguiendo ? (
-              <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700">
-                <CheckCircle2 className="size-3.5" /> Siguiendo
-              </span>
+              <button
+                type="button"
+                onClick={onVerMisLicitaciones}
+                className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20 transition-colors hover:bg-emerald-100"
+                title="Ya está en Mis Licitaciones — abrir"
+              >
+                <CheckCircle2 className="size-3.5" /> En Mis Licit.
+              </button>
             ) : (
               <button
                 type="button"
-                onClick={onSeguir}
+                onClick={onParticipar}
                 disabled={busy}
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
-                title="Copiarla a tus licitaciones (pipeline propio)"
+                className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-indigo-600 px-2 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+                title="Participar: mover a Mis Licitaciones"
               >
-                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-                Seguir
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Flag className="size-3.5" />}
+                Participar
               </button>
             )}
           </div>
@@ -890,22 +983,16 @@ function TenderTr({
       {expanded ? (
         <tr className={cn("border-b border-slate-100", urgente ? "bg-red-50/30" : "bg-slate-50/50")}>
           <td colSpan={7} className="px-4 pb-4 pt-2">
-            {/* Detalle del pliego + documentos: la data real. */}
+            {/* Proceso de participación + detalle del pliego. */}
             <DetallePliego
               r={r}
               busy={enrichBusy}
               onCargar={onEnrich}
               folderBusy={folderBusy}
               onCrearCarpeta={onCrearCarpeta}
-              analyzeBusy={analyzeBusy}
-              onAnalizar={onAnalizar}
-              docBusy={docBusy}
-              docProgress={docProgress}
-              docMsg={docMsg}
-              onDescargarDocs={onDescargarDocs}
-              someterBusy={someterBusy}
-              someterProgress={someterProgress}
-              onPrepararSometer={onPrepararSometer}
+              participarBusy={busy}
+              onParticipar={onParticipar}
+              onVerMisLicitaciones={onVerMisLicitaciones}
             />
           </td>
         </tr>
@@ -914,7 +1001,15 @@ function TenderTr({
   );
 }
 
-export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => void; onStats?: (relevantesAbiertas: number) => void }) {
+export function GovTendersBoard({
+  onFollowed,
+  onStats,
+  onParticipated,
+}: {
+  onFollowed?: () => void;
+  onStats?: (relevantesAbiertas: number) => void;
+  onParticipated?: () => void; // migró a Mis Licitaciones → cambiar de sub-tab
+}) {
   const [rows, setRows] = useState<GovTenderRow[]>([]);
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -929,12 +1024,6 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
   const [folderBusy, setFolderBusy] = useState<string | null>(null);
-  const [analyzeBusy, setAnalyzeBusy] = useState<string | null>(null);
-  // Estado por fila (Record): dos filas pueden tener loops andando a la vez sin
-  // pisarse el progreso ni re-habilitarse los botones entre sí.
-  const [docProgress, setDocProgress] = useState<Record<string, DocProgress>>({});
-  const [docMsg, setDocMsg] = useState<Record<string, string>>({});
-  const [someterProgress, setSometerProgress] = useState<Record<string, SometerProgress>>({});
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [truncWarn, setTruncWarn] = useState<string | null>(null);
 
@@ -1022,7 +1111,9 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     }
   }
 
-  async function seguir(id: string) {
+  // Participar = migrar a Mis Licitaciones (crea el tender). onParticipated
+  // cambia a la sub-vista "mias" para que el usuario vea a dónde fue.
+  async function participar(id: string) {
     setBusy(id);
     try {
       const r = await followGovTender(id);
@@ -1032,8 +1123,9 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
       }
       setRows((prev) => prev.map((x) => (x.id === id ? { ...x, converted_tender_id: r.data.tenderId } : x)));
       onFollowed?.();
+      onParticipated?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo seguir — reintenta");
+      setError(e instanceof Error ? e.message : "No se pudo participar — reintenta");
     } finally {
       setBusy(null);
     }
@@ -1075,142 +1167,6 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
     }
   }
 
-  async function analizar(id: string) {
-    setAnalyzeBusy(id);
-    try {
-      const r = await analyzeGovTenderDocs(id);
-      if ("error" in r) {
-        setError(r.error);
-        return;
-      }
-      setError(null);
-      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, doc_analisis: r.data.analisis } : x)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Se cortó el análisis — reintenta");
-    } finally {
-      setAnalyzeBusy(null);
-    }
-  }
-
-  // Helpers de estado por fila.
-  const putDocProgress = (id: string, p: DocProgress) => setDocProgress((m) => ({ ...m, [id]: p }));
-  const clearDocProgress = (id: string) =>
-    setDocProgress((m) => {
-      const { [id]: _drop, ...rest } = m;
-      return rest;
-    });
-  const putSometerProgress = (id: string, p: SometerProgress) => setSometerProgress((m) => ({ ...m, [id]: p }));
-  const clearSometerProgress = (id: string) =>
-    setSometerProgress((m) => {
-      const { [id]: _drop, ...rest } = m;
-      return rest;
-    });
-
-  // Baja los documentos del pliego (PanamaCompra → Dropbox) uno por uno, con %.
-  // El cliente maneja el loop para poder mostrar el avance sin timeoutear (cada
-  // archivo es una acción corta). try/finally: si una acción RECHAZA (red caída,
-  // redeploy), el botón no queda colgado en "Bajando…" para siempre.
-  async function descargarDocs(id: string) {
-    const guard = `doc:${id}`;
-    if (inflightRows.has(guard)) return; // ya hay un loop corriendo para esta fila
-    inflightRows.add(guard);
-    setDocMsg((m) => {
-      const { [id]: _drop, ...rest } = m;
-      return rest;
-    });
-    setError(null);
-    putDocProgress(id, { done: 0, total: 0, current: "", subidos: 0, saltados: 0 });
-    try {
-      const listed = await listGovTenderDocs(id);
-      if ("error" in listed) {
-        setError(listed.error);
-        return;
-      }
-      // La carpeta pudo crearse recién: reflejarla en la fila.
-      setRows((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: listed.data.folderPath, dropbox_folder_url: listed.data.folderUrl } : x)),
-      );
-      const docs = listed.data.docs;
-      if (docs.length === 0) {
-        setDocMsg((m) => ({ ...m, [id]: "El pliego no trae documentos descargables. Ábrelo en PanamaCompra y súbelos a la carpeta a mano." }));
-        return;
-      }
-      let subidos = 0;
-      let saltados = 0;
-      let primerError: string | null = null;
-      for (let i = 0; i < docs.length; i++) {
-        const d = docs[i];
-        putDocProgress(id, { done: i, total: docs.length, current: d.nombre, subidos, saltados });
-        if (d.existe) {
-          saltados++;
-        } else {
-          const up = await uploadGovTenderDocToDropbox(id, d.nombre, d.url);
-          if ("error" in up) primerError = primerError ?? up.error;
-          else if (up.data.subido) subidos++;
-        }
-        putDocProgress(id, { done: i + 1, total: docs.length, current: d.nombre, subidos, saltados });
-      }
-      const noBajados = docs.length - subidos - saltados;
-      setDocMsg((m) => ({
-        ...m,
-        [id]:
-          `${subidos} documento${subidos === 1 ? "" : "s"} subido${subidos === 1 ? "" : "s"} a Dropbox` +
-          (saltados > 0 ? ` · ${saltados} ya estaban` : "") +
-          (noBajados > 0 ? ` · ${noBajados} no se pudieron bajar${primerError ? ` — ${primerError}` : " (ábrelos en PanamaCompra)"}` : ""),
-      }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Se cortó la descarga — reintenta");
-    } finally {
-      inflightRows.delete(guard);
-      clearDocProgress(id);
-    }
-  }
-
-  // Arma el checklist de documentos a someter: la IA extrae la lista del pliego,
-  // luego se busca/copia cada reutilizable de licitaciones pasadas (con % en vivo).
-  async function prepararSometer(id: string) {
-    const guard = `som:${id}`;
-    if (inflightRows.has(guard)) return;
-    inflightRows.add(guard);
-    setError(null);
-    putSometerProgress(id, { done: 0, total: 0, current: "" });
-    try {
-      const a = await analyzeSubmissionDocs(id);
-      if ("error" in a) {
-        setError(a.error);
-        return;
-      }
-      const { resumen, documentos, someterPath } = a.data;
-      const at0 = new Date().toISOString();
-      let working: SubmissionDoc[] = documentos.map((d) => ({ ...d }));
-      const putPlan = (docs: SubmissionDoc[]) =>
-        setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: { resumen, someterPath, documentos: docs, at: at0 } } : x)));
-      putPlan(working);
-      for (let i = 0; i < working.length; i++) {
-        const d = working[i];
-        putSometerProgress(id, { done: i, total: working.length, current: d.nombre });
-        if (d.reutilizable) {
-          const res = await resolveSubmissionDoc(id, d);
-          if (!("error" in res)) working = working.map((w, j) => (j === i ? res.data : w));
-        } else {
-          working = working.map((w, j) => (j === i ? { ...w, estado: "por_hacer" as const } : w));
-        }
-        putPlan(working);
-        putSometerProgress(id, { done: i + 1, total: working.length, current: d.nombre });
-      }
-      const saved = await saveSubmissionPlan(id, resumen, working);
-      if ("error" in saved) {
-        setError(saved.error);
-        return;
-      }
-      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: saved.data.plan } : x)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Se cortó el armado del checklist — reintenta");
-    } finally {
-      inflightRows.delete(guard);
-      clearSometerProgress(id);
-    }
-  }
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
   const stats = useMemo(() => {
@@ -1510,19 +1466,11 @@ export function GovTendersBoard({ onFollowed, onStats }: { onFollowed?: () => vo
                       expanded={expandedId === r.id}
                       enrichBusy={enrichBusy === r.id}
                       folderBusy={folderBusy === r.id}
-                      analyzeBusy={analyzeBusy === r.id}
-                      docBusy={r.id in docProgress}
-                      docProgress={docProgress[r.id] ?? null}
-                      docMsg={docMsg[r.id] ?? null}
-                      someterBusy={r.id in someterProgress}
-                      someterProgress={someterProgress[r.id] ?? null}
-                      onSeguir={() => seguir(r.id)}
+                      onParticipar={() => participar(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEnrich={() => enrich(r.id)}
                       onCrearCarpeta={() => crearCarpeta(r.id)}
-                      onAnalizar={() => analizar(r.id)}
-                      onDescargarDocs={() => descargarDocs(r.id)}
-                      onPrepararSometer={() => prepararSometer(r.id)}
+                      onVerMisLicitaciones={() => onParticipated?.()}
                     />
                   ))}
                   {shown.length === 0 ? (
