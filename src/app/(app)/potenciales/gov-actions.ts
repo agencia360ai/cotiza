@@ -19,6 +19,66 @@ import {
 import { hasDropboxConfig, createFolder, getSharedLink, listFolder, uploadFile, copyFile, searchFiles, type DbxEntry } from "@/lib/dropbox/client";
 import { analyzeTenderDocs, type GovDocAnalisis } from "@/lib/panamacompra/docs";
 import { extractRequiredDocs, type SubmissionDoc, type SubmissionDocEstado, type SubmissionPlan } from "@/lib/panamacompra/submit-docs";
+
+// ── Puente Mis Licitaciones ↔ gov_tenders (para el análisis/checklist) ────────
+// Una licitación propia (tender) creada al PARTICIPAR guarda el back-link en
+// gov_tenders.converted_tender_id. Desde el tender resolvemos su gov_tender para
+// mostrar/editar el análisis y el checklist en Mis Licitaciones.
+export type GovForTender = {
+  govId: string;
+  dropboxFolderPath: string | null;
+  dropboxFolderUrl: string | null;
+  docAnalisis: import("@/lib/panamacompra/docs").GovDocAnalisis | null;
+  docsSometer: SubmissionPlan | null;
+};
+export async function getGovTenderForTender(tenderId: string): Promise<{ error: string } | { ok: true; data: GovForTender | null }> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const run = (cols: string) =>
+    c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).eq("converted_tender_id", tenderId).maybeSingle();
+  let res = (await run("id, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter")) as {
+    data: { id: string; dropbox_folder_path: string | null; dropbox_folder_url: string | null; doc_analisis: unknown; docs_someter: unknown } | null;
+    error: { message: string; code?: string } | null;
+  };
+  if (isMissingColumn(res.error)) res = (await run("id, dropbox_folder_path, dropbox_folder_url")) as typeof res;
+  if (res.error) return { error: res.error.message };
+  if (!res.data) return { ok: true, data: null }; // tender manual (no vino del gobierno)
+  return {
+    ok: true,
+    data: {
+      govId: res.data.id,
+      dropboxFolderPath: res.data.dropbox_folder_path ?? null,
+      dropboxFolderUrl: res.data.dropbox_folder_url ?? null,
+      docAnalisis: (res.data.doc_analisis ?? null) as GovForTender["docAnalisis"],
+      docsSometer: (res.data.docs_someter ?? null) as SubmissionPlan | null,
+    },
+  };
+}
+
+// Cambia el estado de UN documento del checklist (interacción del usuario).
+export async function setSubmissionDocEstado(
+  govId: string,
+  index: number,
+  estado: SubmissionDocEstado,
+): Promise<Result<{ docs_someter: SubmissionPlan }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { data, error } = (await c.supabase
+    .from("gov_tenders")
+    .select("docs_someter")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { docs_someter: SubmissionPlan | null } | null; error: { message: string; code?: string } | null };
+  if (error) return { error: error.message };
+  const plan = data?.docs_someter;
+  if (!plan || !Array.isArray(plan.documentos)) return { error: "Todavía no hay checklist para editar." };
+  if (index < 0 || index >= plan.documentos.length) return { error: "Documento fuera de rango." };
+  plan.documentos[index] = { ...plan.documentos[index], estado };
+  const { error: upErr } = await c.supabase.from("gov_tenders").update({ docs_someter: plan }).eq("id", govId).eq("org_id", c.orgId);
+  if (upErr) return { error: upErr.message };
+  revalidatePath("/potenciales");
+  return { ok: true, data: { docs_someter: plan } };
+}
 import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
 
 // Carpeta base en Dropbox donde viven las licitaciones (override por env).
