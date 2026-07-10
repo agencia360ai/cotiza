@@ -63,9 +63,12 @@ import { listGovTenders } from "./gov-actions";
 import {
   suggestQboProjectSetup,
   sendQuoteToQbo,
+  suggestQboProjectSetupForTender,
+  sendTenderToQbo,
   dismissSeguimiento,
   restoreSeguimiento,
   type QboSendSuggestion,
+  type QboSendInput,
 } from "./qbo-send-actions";
 import { groupRevisions, parseRev } from "@/lib/pipeline/revisions";
 import { CotizadorDialog } from "./cotizador";
@@ -80,6 +83,9 @@ type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent
 type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["presentada", "en_revision", "por_partir", "ganada", "no_ganada"];
+// Los 4 estatus del pipeline propio (Participada = presentada). "por_partir" es
+// legacy y se muestra solo si una fila ya lo tiene.
+const TENDER_STATUS_PICKER: TenderStatus[] = ["presentada", "en_revision", "no_ganada", "ganada"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
 
 // Fecha LOCAL de Panamá (UTC-5): toISOString() es UTC y después de las 7pm
@@ -809,10 +815,44 @@ function CotizacionesTab({
 
       {sendingQbo ? (
         <SendToQboDialog
-          quote={sendingQbo}
           onClose={() => setSendingQbo(null)}
-          onSent={(patch) => {
-            setQuotes((prev) => prev.map((x) => (x.id === sendingQbo.id ? { ...x, ...patch } : x)));
+          adapter={{
+            titulo: `Cotización ${sendingQbo.quote_number}`,
+            amount: sendingQbo.amount_usd,
+            clientName: sendingQbo.client_std_name ?? sendingQbo.client_name,
+            emailDefault: sendingQbo.contact_email,
+            newParentDefault: sendingQbo.client_std_name ?? sendingQbo.client_name,
+            suggest: () => suggestQboProjectSetup(sendingQbo.id),
+            send: (input) => sendQuoteToQbo(sendingQbo.id, input),
+            onSent: (r) =>
+              setQuotes((prev) =>
+                prev.map((x) =>
+                  x.id === sendingQbo.id
+                    ? { ...x, status: "aprobada", qbo_job_id: r.qboJobId, qbo_sent_at: new Date().toISOString() }
+                    : x,
+                ),
+              ),
+            tracking: sendingQbo.converted_project_id
+              ? undefined
+              : {
+                  alreadyLinked: false,
+                  run: async (nombre) => {
+                    const clientName = sendingQbo.client_std_name ?? sendingQbo.client_name;
+                    if (!sendingQbo.client_id && !clientName) {
+                      return { error: "Sin cliente identificado — crea el tracking desde Proyectos." };
+                    }
+                    const cr = await convertQuoteToProject(sendingQbo.id, {
+                      clientId: sendingQbo.client_id,
+                      newClientName: sendingQbo.client_id ? null : clientName,
+                      name: nombre,
+                      projectType: suggestType(sendingQbo.rubro),
+                      locationLabel: sendingQbo.location_name,
+                    });
+                    if ("error" in cr) return { error: cr.error };
+                    setQuotes((prev) => prev.map((x) => (x.id === sendingQbo.id ? { ...x, converted_project_id: cr.data.projectId } : x)));
+                    return { projectId: cr.data.projectId };
+                  },
+                },
           }}
         />
       ) : null}
@@ -1526,23 +1566,31 @@ function NewQuoteDrawer({
 // cliente padre, y crea el proyecto con los campos del formulario de QBO
 // (nombre, email, fechas, notas). Opcional: crear también el proyecto de
 // tracking en Reportme (fotos/hitos).
-function SendToQboDialog({
-  quote,
-  onClose,
-  onSent,
-}: {
-  quote: QuoteRow;
-  onClose: () => void;
-  onSent: (patch: Partial<QuoteRow>) => void;
-}) {
+type QboResult<T> = { error: string } | { ok: true; data: T };
+type QboSentData = { qboJobId: string; nombre: string; parentCreado: string | null };
+// Adapter: el diálogo sirve para cotizaciones Y licitaciones ganadas.
+type QboSendAdapter = {
+  titulo: string; // header (ej. "Cotización COT DC 26-08" o "Licitación 2026-…")
+  amount: number | null;
+  clientName: string | null;
+  emailDefault: string | null;
+  newParentDefault: string | null;
+  suggest: () => Promise<QboResult<QboSendSuggestion>>;
+  send: (input: QboSendInput) => Promise<QboResult<QboSentData>>;
+  onSent: (r: QboSentData) => void;
+  // Tracking opcional en Reportme (solo cotizaciones por ahora).
+  tracking?: { alreadyLinked: boolean; run: (nombre: string) => Promise<{ projectId: string } | { error: string }> };
+};
+
+function SendToQboDialog({ adapter, onClose }: { adapter: QboSendAdapter; onClose: () => void }) {
   const [sug, setSug] = useState<QboSendSuggestion | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [numero, setNumero] = useState("");
   const [nombre, setNombre] = useState("");
   const [parentId, setParentId] = useState("");
   const [parentMode, setParentMode] = useState<"existente" | "nuevo">("existente");
-  const [newParent, setNewParent] = useState(quote.client_std_name ?? quote.client_name ?? "");
-  const [email, setEmail] = useState(quote.contact_email ?? "");
+  const [newParent, setNewParent] = useState(adapter.newParentDefault ?? "");
+  const [email, setEmail] = useState(adapter.emailDefault ?? "");
   const [startDate, setStartDate] = useState(today());
   const [endDate, setEndDate] = useState("");
   const [notas, setNotas] = useState("");
@@ -1555,7 +1603,7 @@ function SendToQboDialog({
     setLoadErr(null);
     setSug(null);
     try {
-      const r = await suggestQboProjectSetup(quote.id);
+      const r = await adapter.suggest();
       if ("error" in r) {
         setLoadErr(r.error);
         return;
@@ -1596,7 +1644,7 @@ function SendToQboDialog({
     setBusy(true);
     setErr(null);
     try {
-      const r = await sendQuoteToQbo(quote.id, {
+      const r = await adapter.send({
         numero: numero.trim(),
         nombre: nombre.trim(),
         parentId: parent?.id ?? null,
@@ -1611,31 +1659,13 @@ function SendToQboDialog({
         setErr(r.error);
         return;
       }
-      const patch: Partial<QuoteRow> = {
-        status: "aprobada",
-        qbo_job_id: r.data.qboJobId,
-        qbo_sent_at: new Date().toISOString(),
-      };
-      // Tracking opcional en Reportme (mejor esfuerzo: si falla, el proyecto de
-      // QBO ya quedó creado y se avisa en el panel de éxito).
+      adapter.onSent(r.data);
+      // Tracking opcional en Reportme (mejor esfuerzo).
       let trackingWarn: string | null = null;
-      if (alsoTracking && !quote.converted_project_id) {
-        const clientName = quote.client_std_name ?? quote.client_name;
-        if (quote.client_id || clientName) {
-          const cr = await convertQuoteToProject(quote.id, {
-            clientId: quote.client_id,
-            newClientName: quote.client_id ? null : clientName,
-            name: nombre.trim().slice(0, 80),
-            projectType: suggestType(quote.rubro),
-            locationLabel: quote.location_name,
-          });
-          if ("error" in cr) trackingWarn = cr.error;
-          else patch.converted_project_id = cr.data.projectId;
-        } else {
-          trackingWarn = "Sin cliente identificado — crea el tracking desde Proyectos.";
-        }
+      if (alsoTracking && adapter.tracking && !adapter.tracking.alreadyLinked) {
+        const cr = await adapter.tracking.run(nombre.trim().slice(0, 80));
+        if ("error" in cr) trackingWarn = cr.error;
       }
-      onSent(patch);
       setDone(
         `${r.data.nombre}${r.data.parentCreado ? ` (cliente "${r.data.parentCreado}" creado en QBO)` : ""}${trackingWarn ? ` · Tracking: ${trackingWarn}` : ""}`,
       );
@@ -1649,8 +1679,7 @@ function SendToQboDialog({
   return (
     <Modal title="Enviar a proyectos (QuickBooks)" onClose={onClose}>
       <p className="mb-3 text-sm text-slate-600">
-        Cotización <strong>{quote.quote_number}</strong> · {formatMoneyExact(quote.amount_usd)} ·{" "}
-        {quote.client_std_name ?? quote.client_name ?? "sin cliente"}
+        <strong>{adapter.titulo}</strong> · {formatMoneyExact(adapter.amount)} · {adapter.clientName ?? "sin cliente"}
       </p>
 
       {done ? (
@@ -1768,10 +1797,12 @@ function SendToQboDialog({
           <Field label="Notas (van al proyecto en QBO)">
             <textarea rows={2} className={inputCls} value={notas} onChange={(e) => setNotas(e.target.value)} />
           </Field>
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
-            <input type="checkbox" checked={alsoTracking} onChange={(e) => setAlsoTracking(e.target.checked)} className="size-4 rounded border-slate-300" />
-            Crear también el proyecto de tracking en Reportme (fotos e hitos)
-          </label>
+          {adapter.tracking && !adapter.tracking.alreadyLinked ? (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+              <input type="checkbox" checked={alsoTracking} onChange={(e) => setAlsoTracking(e.target.checked)} className="size-4 rounded border-slate-300" />
+              Crear también el proyecto de tracking en Reportme (fotos e hitos)
+            </label>
+          ) : null}
           {err ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p> : null}
           <div className="flex items-center gap-2 pt-1">
             <button
@@ -1876,6 +1907,18 @@ function LicitacionesTab({
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortState<TSortKey>>({ key: "amount_ref_usd", dir: "desc" });
   const [editing, setEditing] = useState<TenderRow | null>(null);
+  const [sendingTenderQbo, setSendingTenderQbo] = useState<TenderRow | null>(null);
+
+  // Cambio rápido de estatus desde la fila (optimista + revierte si falla).
+  async function changeTenderStatus(t: TenderRow, next: TenderStatus) {
+    setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: next } : x)));
+    try {
+      const r = await setTenderStatus(t.id, next);
+      if ("error" in r) setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
+    } catch {
+      setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
+    }
+  }
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -2044,8 +2087,39 @@ function LicitacionesTab({
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
                       {x.amount_ref_usd === null ? "—" : formatMoneyExact(x.amount_ref_usd)}
                     </td>
-                    <td className="px-3 py-2.5">
-                      <StatusChip color={TENDER_STATUS_COLOR[x.status]} label={TENDER_STATUS_LABEL[x.status]} />
+                    <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={x.status}
+                          onChange={(e) => changeTenderStatus(x, e.target.value as TenderStatus)}
+                          aria-label="Cambiar estatus"
+                          className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                          style={{ color: TENDER_STATUS_COLOR[x.status] }}
+                        >
+                          {(TENDER_STATUS_PICKER.includes(x.status) ? TENDER_STATUS_PICKER : [x.status, ...TENDER_STATUS_PICKER]).map((s) => (
+                            <option key={s} value={s} className="text-slate-900">
+                              {TENDER_STATUS_LABEL[s]}
+                            </option>
+                          ))}
+                        </select>
+                        {x.qbo_job_id ? (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-1 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
+                            title="Proyecto creado en QBO"
+                          >
+                            <CheckCircle2 className="size-3" /> QBO
+                          </span>
+                        ) : x.status === "ganada" ? (
+                          <button
+                            type="button"
+                            onClick={() => setSendingTenderQbo(x)}
+                            className="inline-flex items-center gap-0.5 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-1 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                            title="Ganada: crear el proyecto en QuickBooks"
+                          >
+                            <ArrowUpRight className="size-3" /> Proyecto
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="hidden px-3 py-2.5 sm:table-cell">{x.rubro ? <RubroChip rubro={x.rubro} /> : "—"}</td>
                   </tr>
@@ -2064,6 +2138,27 @@ function LicitacionesTab({
           onSaved={(u) => {
             setTenders((prev) => prev.map((x) => (x.id === u.id ? u : x)));
             setEditing(null);
+          }}
+        />
+      ) : null}
+
+      {sendingTenderQbo ? (
+        <SendToQboDialog
+          onClose={() => setSendingTenderQbo(null)}
+          adapter={{
+            titulo: `Licitación ${sendingTenderQbo.acto_number ?? sendingTenderQbo.entity ?? ""}`,
+            amount: sendingTenderQbo.amount_ref_usd,
+            clientName: sendingTenderQbo.client_std_name ?? sendingTenderQbo.entity,
+            emailDefault: null,
+            newParentDefault: sendingTenderQbo.client_std_name ?? sendingTenderQbo.entity,
+            suggest: () => suggestQboProjectSetupForTender(sendingTenderQbo.id),
+            send: (input) => sendTenderToQbo(sendingTenderQbo.id, input),
+            onSent: (r) =>
+              setTenders((prev) =>
+                prev.map((x) =>
+                  x.id === sendingTenderQbo.id ? { ...x, qbo_job_id: r.qboJobId, qbo_sent_at: new Date().toISOString() } : x,
+                ),
+              ),
           }}
         />
       ) : null}

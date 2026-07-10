@@ -45,6 +45,7 @@ const QUOTE_COLS_BASE =
   `id, quote_number, year, sent_date, amount_usd, status, payment_status, invoice_status, client_name, description, notes, rubro, progress, follow_up_date, rejection_reason, converted_project_id, ${QUOTE_JOIN}`;
 const TENDER_COLS =
   "id, acto_number, year, modalidad, entity, location_text, objeto, status, execution_status, amount_ref_usd, delivery_date, notes, folder_url, rubro, progress, converted_project_id, client_id, client:clients(name)";
+const TENDER_QBO_COLS = "qbo_job_id, qbo_sent_at";
 
 /** Todas las cotizaciones de la org (ambos años) para la tabla editable. */
 export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
@@ -108,9 +109,11 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
 export async function listTenders(orgId: string): Promise<TenderRow[]> {
   if (!orgId) return [];
   const supabase = await createClient();
-  type Raw = Omit<TenderRow, "client_std_name" | "location_name"> & {
+  type Raw = Omit<TenderRow, "client_std_name" | "location_name" | "qbo_job_id" | "qbo_sent_at"> & {
     client: { name: string } | null;
     location?: { name: string } | null;
+    qbo_job_id?: string | null;
+    qbo_sent_at?: string | null;
   };
   type Res = { data: Raw[] | null; error: PgErr };
   const run = (cols: string) =>
@@ -125,7 +128,8 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
           .order("id", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{ data: Raw[] | null; error: PgErr }>,
     );
-  let res = (await run(`${TENDER_COLS}, ${LOC_JOIN}`)) as Res;
+  let res = (await run(`${TENDER_COLS}, ${LOC_JOIN}, ${TENDER_QBO_COLS}`)) as Res;
+  if (isMissingColumn(res.error)) res = (await run(`${TENDER_COLS}, ${LOC_JOIN}`)) as Res; // sin 0024
   // Solo degradar si la columna falta (0005 pendiente); un error real (RLS,
   // conexión) NO debe verse como "0 licitaciones".
   if (isMissingColumn(res.error)) res = (await run(TENDER_COLS)) as Res;
@@ -136,6 +140,8 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
     client_std_name: client?.name ?? null,
     location_id: t.location_id ?? null,
     location_name: location?.name ?? null,
+    qbo_job_id: t.qbo_job_id ?? null,
+    qbo_sent_at: t.qbo_sent_at ?? null,
     amount_ref_usd: t.amount_ref_usd === null ? null : Number(t.amount_ref_usd),
   }));
 }
