@@ -38,9 +38,9 @@ export type TenderStatus = "ganada" | "no_ganada" | "presentada" | "en_revision"
 export const TENDER_STATUS_LABEL: Record<TenderStatus, string> = {
   ganada: "Ganada",
   no_ganada: "No ganada",
-  presentada: "Presentada",
+  presentada: "Participada",
   en_revision: "En revisión",
-  por_partir: "Por partir",
+  por_partir: "Participada", // legacy: se unifica con "presentada"
 };
 export const TENDER_STATUS_COLOR: Record<TenderStatus, string> = {
   ganada: "#10B981",

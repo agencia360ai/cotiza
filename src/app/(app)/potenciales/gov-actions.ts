@@ -593,7 +593,7 @@ export async function followGovTender(govId: string): Promise<Result<{ tenderId:
   if (!c.ok) return { error: c.error };
   const { data: g } = (await c.supabase
     .from("gov_tenders")
-    .select("num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, converted_tender_id")
+    .select("num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, converted_tender_id, dropbox_folder_url")
     .eq("id", govId)
     .eq("org_id", c.orgId)
     .maybeSingle()) as {
@@ -606,10 +606,11 @@ export async function followGovTender(govId: string): Promise<Result<{ tenderId:
       precio_ref: number | null;
       url: string | null;
       converted_tender_id: string | null;
+      dropbox_folder_url: string | null;
     } | null;
   };
   if (!g) return { error: "No encontrada" };
-  if (g.converted_tender_id) return { error: "Ya la estás siguiendo" };
+  if (g.converted_tender_id) return { error: "Ya la estás participando" };
 
   const modalidad =
     g.tipo === "licitacion_publica" ? "licitacion_publica" : g.tipo?.startsWith("compra_menor") ? "compra_menor" : "otro";
@@ -623,11 +624,13 @@ export async function followGovTender(govId: string): Promise<Result<{ tenderId:
       modalidad,
       entity: g.entidad,
       objeto: g.titulo,
-      status: "por_partir",
+      // "presentada" = Participada (el primer estado del pipeline propio).
+      status: "presentada",
       amount_ref_usd: g.precio_ref,
       delivery_date: g.fecha_cierre ? String(g.fecha_cierre).slice(0, 10) : null,
-      folder_url: g.url,
-      notes: "Importada de PanamaCompra",
+      // Carpeta de Dropbox si ya existe (paso 1); si no, el link a PanamaCompra.
+      folder_url: g.dropbox_folder_url ?? g.url,
+      notes: `Participada desde PanamaCompra${g.url ? ` · ${g.url}` : ""}`,
       source: "panamacompra",
     })
     .select("id")
