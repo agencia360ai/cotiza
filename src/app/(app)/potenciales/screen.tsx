@@ -59,7 +59,17 @@ import {
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
 import { GovTendersBoard } from "./gov-tenders";
-import { listGovTenders } from "./gov-actions";
+import {
+  listGovTenders,
+  getGovTenderForTender,
+  setSubmissionDocEstado,
+  analyzeGovTenderDocs,
+  analyzeSubmissionDocs,
+  resolveSubmissionDoc,
+  saveSubmissionPlan,
+  type GovForTender,
+} from "./gov-actions";
+import type { SubmissionDoc, SubmissionDocEstado } from "@/lib/panamacompra/submit-docs";
 import {
   suggestQboProjectSetup,
   sendQuoteToQbo,
@@ -2166,6 +2176,220 @@ function LicitacionesTab({
   );
 }
 
+// Opciones de estado del checklist (editables por el usuario).
+const SOMETER_ESTADO_OPTS: { v: SubmissionDocEstado; label: string; cls: string }[] = [
+  { v: "copiado", label: "✓ Copiado / conseguido", cls: "text-emerald-700" },
+  { v: "por_renovar", label: "⚠ Verificar / renovar", cls: "text-amber-700" },
+  { v: "por_hacer", label: "✍ Hacer a la medida", cls: "text-indigo-700" },
+  { v: "falta", label: "✗ Falta", cls: "text-rose-700" },
+  { v: "pendiente", label: "· Pendiente", cls: "text-slate-500" },
+];
+const SOMETER_ESTADO_CLS: Record<SubmissionDocEstado, string> = {
+  copiado: "text-emerald-700",
+  por_renovar: "text-amber-700",
+  por_hacer: "text-indigo-700",
+  falta: "text-rose-700",
+  pendiente: "text-slate-500",
+};
+
+// Panel de análisis IA + checklist interactivo para una licitación propia que
+// vino de PanamaCompra (busca su gov_tender ligado). El equipo sube los PDFs a
+// la carpeta de Dropbox y desde acá corre el análisis y arma el checklist,
+// cambiando el estado de cada rubro a mano.
+function GovLicitacionPanel({ tenderId }: { tenderId: string }) {
+  const [gov, setGov] = useState<GovForTender | null | "loading">("loading");
+  const [analyzeBusy, setAnalyzeBusy] = useState(false);
+  const [someterBusy, setSometerBusy] = useState(false);
+  const [prog, setProg] = useState<{ done: number; total: number; current: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void getGovTenderForTender(tenderId).then((r) => {
+      if (!alive) return;
+      if ("error" in r) {
+        setErr(r.error);
+        setGov(null);
+      } else setGov(r.data);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [tenderId]);
+
+  if (gov === "loading") return <div className="h-16 animate-pulse rounded-xl bg-slate-100" />;
+  if (!gov) return null; // tender manual: sin pliego del gobierno
+
+  const g = gov; // narrow
+
+  async function analizar() {
+    setAnalyzeBusy(true);
+    setErr(null);
+    try {
+      const r = await analyzeGovTenderDocs(g.govId);
+      if ("error" in r) setErr(r.error);
+      else setGov({ ...g, docAnalisis: r.data.analisis });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Se cortó el análisis — reintenta");
+    } finally {
+      setAnalyzeBusy(false);
+    }
+  }
+
+  async function preparar() {
+    setSometerBusy(true);
+    setErr(null);
+    setProg({ done: 0, total: 0, current: "" });
+    try {
+      const a = await analyzeSubmissionDocs(g.govId);
+      if ("error" in a) {
+        setErr(a.error);
+        return;
+      }
+      const at0 = new Date().toISOString();
+      let working: SubmissionDoc[] = a.data.documentos.map((d) => ({ ...d }));
+      const put = (docs: SubmissionDoc[]) =>
+        setGov((prev) =>
+          prev && prev !== "loading" ? { ...prev, docsSometer: { resumen: a.data.resumen, someterPath: a.data.someterPath, documentos: docs, at: at0 } } : prev,
+        );
+      put(working);
+      for (let i = 0; i < working.length; i++) {
+        setProg({ done: i, total: working.length, current: working[i].nombre });
+        if (working[i].reutilizable) {
+          const res = await resolveSubmissionDoc(g.govId, working[i]);
+          if (!("error" in res)) working = working.map((w, j) => (j === i ? res.data : w));
+        } else {
+          working = working.map((w, j) => (j === i ? { ...w, estado: "por_hacer" as const } : w));
+        }
+        put(working);
+      }
+      const saved = await saveSubmissionPlan(g.govId, a.data.resumen, working);
+      if (!("error" in saved)) put(saved.data.plan.documentos);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Se cortó la preparación — reintenta");
+    } finally {
+      setSometerBusy(false);
+      setProg(null);
+    }
+  }
+
+  async function cambiarEstado(index: number, estado: SubmissionDocEstado) {
+    if (!g.docsSometer) return;
+    const prevPlan = g.docsSometer;
+    const nuevo = { ...prevPlan, documentos: prevPlan.documentos.map((d, i) => (i === index ? { ...d, estado } : d)) };
+    setGov({ ...g, docsSometer: nuevo });
+    try {
+      const r = await setSubmissionDocEstado(g.govId, index, estado);
+      if ("error" in r) {
+        setGov((prev) => (prev && prev !== "loading" ? { ...prev, docsSometer: prevPlan } : prev));
+        setErr(r.error);
+      }
+    } catch {
+      setGov((prev) => (prev && prev !== "loading" ? { ...prev, docsSometer: prevPlan } : prev));
+    }
+  }
+
+  const plan = g.docsSometer;
+  const a = g.docAnalisis;
+  const pct = prog && prog.total > 0 ? Math.round((prog.done / prog.total) * 100) : 0;
+
+  return (
+    <div className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/30 p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">Análisis y checklist del pliego</p>
+        {g.dropboxFolderUrl ? (
+          <a href={g.dropboxFolderUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 hover:underline">
+            <ExternalLink className="size-3" /> Carpeta Dropbox
+          </a>
+        ) : (
+          <span className="text-[11px] text-amber-600">Crea la carpeta desde el board del gobierno.</span>
+        )}
+      </div>
+      {err ? <p className="rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{err}</p> : null}
+
+      {/* Análisis IA */}
+      <div className="rounded-lg bg-white p-2.5 ring-1 ring-inset ring-slate-100">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Análisis (IA)</span>
+          <button
+            type="button"
+            onClick={analizar}
+            disabled={analyzeBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+          >
+            {analyzeBusy ? <Loader2 className="size-3 animate-spin" /> : null}
+            {analyzeBusy ? "Leyendo PDFs…" : a ? "Re-analizar" : "Analizar documentos"}
+          </button>
+        </div>
+        {a ? (
+          <div className="mt-2 space-y-1.5 text-xs text-slate-600">
+            <p>{a.resumen}</p>
+            {a.plazo ? <p><span className="font-semibold text-slate-700">Plazo:</span> {a.plazo}</p> : null}
+            {a.garantias ? <p><span className="font-semibold text-slate-700">Garantías:</span> {a.garantias}</p> : null}
+          </div>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-slate-400">Sube los PDFs del pliego a la carpeta y la IA extrae requisitos, plazos y garantías.</p>
+        )}
+      </div>
+
+      {/* Checklist interactivo */}
+      <div className="rounded-lg bg-white p-2.5 ring-1 ring-inset ring-slate-100">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Documentos a someter</span>
+          <button
+            type="button"
+            onClick={preparar}
+            disabled={someterBusy}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {someterBusy ? <Loader2 className="size-3 animate-spin" /> : null}
+            {someterBusy ? "Preparando…" : plan ? "Actualizar checklist" : "Preparar checklist"}
+          </button>
+        </div>
+        {prog ? (
+          <div className="mt-2">
+            <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+              <span className="truncate">{prog.total > 0 ? `${Math.min(prog.done + 1, prog.total)} de ${prog.total}` : "Leyendo el pliego…"} · {prog.current}</span>
+              <span className="tabular-nums">{pct}%</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-emerald-100">
+              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        ) : null}
+        {plan ? (
+          <ul className="mt-2 space-y-1">
+            {plan.documentos.map((d, i) => (
+              <li key={i} className="flex items-center justify-between gap-2 rounded-md bg-slate-50 px-2 py-1.5">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-slate-800">{d.nombre}</p>
+                  {d.copiadoDe ? <p className="truncate text-[10px] text-slate-400">de: {d.copiadoDe}</p> : null}
+                </div>
+                <select
+                  value={d.estado}
+                  onChange={(e) => cambiarEstado(i, e.target.value as SubmissionDocEstado)}
+                  aria-label={`Estado de ${d.nombre}`}
+                  className={cn("shrink-0 cursor-pointer rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[11px] font-semibold focus:outline-none", SOMETER_ESTADO_CLS[d.estado])}
+                >
+                  {SOMETER_ESTADO_OPTS.map((o) => (
+                    <option key={o.v} value={o.v} className="text-slate-900">
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-slate-400">
+            &ldquo;Preparar checklist&rdquo; lee los PDFs, arma la lista de documentos a presentar y copia de licitaciones pasadas lo reutilizable.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TenderDrawer({
   tender,
   clients,
@@ -2213,6 +2437,9 @@ function TenderDrawer({
       <div className="space-y-3">
         {f.objeto ? <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{f.objeto}</p> : null}
         {f.acto_number ? <p className="text-xs text-slate-400">Acto: {f.acto_number}</p> : null}
+
+        {/* Análisis IA + checklist interactivo (si vino de PanamaCompra). */}
+        <GovLicitacionPanel tenderId={tender.id} />
         <Field label="Cliente" hint="entidad estandarizada">
           <select
             className={inputCls}
