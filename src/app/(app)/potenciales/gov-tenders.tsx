@@ -11,23 +11,17 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDashed,
-  ClipboardCheck,
-  ClipboardList,
-  CloudDownload,
   Droplets,
   Flag,
   ExternalLink,
   Fan,
-  FileSearch,
   FileText,
   FolderOpen,
   FolderPlus,
   Landmark,
   Loader2,
   Mail,
-  PencilLine,
   Phone,
-  Plus,
   RefreshCw,
   ScanSearch,
   Search,
@@ -35,7 +29,6 @@ import {
   Target,
   User,
   Wind,
-  XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -49,25 +42,8 @@ import {
   followGovTender,
   enrichGovTender,
   createGovTenderFolder,
-  listGovTenderDocs,
-  uploadGovTenderDocToDropbox,
-  analyzeGovTenderDocs,
-  analyzeSubmissionDocs,
-  resolveSubmissionDoc,
-  saveSubmissionPlan,
   type GovTenderRow,
 } from "./gov-actions";
-import type { SubmissionDoc, SubmissionDocEstado } from "@/lib/panamacompra/submit-docs";
-
-// Progreso de la descarga de documentos (pliego → Dropbox), por fila.
-type DocProgress = { done: number; total: number; current: string; subidos: number; saltados: number };
-// Progreso del armado de "documentos a someter" (búsqueda + copia), por fila.
-type SometerProgress = { done: number; total: number; current: string };
-
-// Guard a nivel módulo contra loops dobles sobre la misma fila: sobrevive a
-// desmontes del board (cambiar de tab no cancela el loop en curso — al volver,
-// el botón NO debe permitir arrancar un segundo loop que duplique subidas).
-const inflightRows = new Set<string>();
 
 function relTime(ts: number): string {
   const m = Math.round((Date.now() - ts) / 60000);
@@ -211,301 +187,6 @@ function MiniKpi({
           <p className="truncate text-[11px] text-slate-400">{sub}</p>
         </div>
       </div>
-    </div>
-  );
-}
-
-// Detalle del pliego (renglones + contacto + entidad) para evaluar si podemos
-// licitar. Se muestra en procesos de alto puntaje; se carga bajo demanda.
-function CumpleBadge({ v }: { v: "si" | "parcial" | "no" }) {
-  const meta =
-    v === "si"
-      ? { icon: CheckCircle2, cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", label: "Cumplimos" }
-      : v === "parcial"
-        ? { icon: AlertTriangle, cls: "bg-amber-50 text-amber-700 ring-amber-600/20", label: "Parcial" }
-        : { icon: AlertTriangle, cls: "bg-rose-50 text-rose-700 ring-rose-600/20", label: "No cumplimos" };
-  const Icon = meta.icon;
-  return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset", meta.cls)}>
-      <Icon className="size-3" /> {meta.label}
-    </span>
-  );
-}
-
-// Análisis IA de los DOCUMENTOS reales del pliego (PDFs en la carpeta de Dropbox).
-function DocAnalisisCard({ r, busy, onAnalizar }: { r: GovTenderRow; busy: boolean; onAnalizar: () => void }) {
-  const a = r.doc_analisis;
-  return (
-    <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-3.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-violet-700">
-          <FileSearch className="size-3.5" /> Análisis de documentos (IA)
-        </p>
-        <div className="flex items-center gap-2">
-          {a ? <CumpleBadge v={a.cumplimos} /> : null}
-          <button
-            type="button"
-            onClick={onAnalizar}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-50"
-          >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FileSearch className="size-3.5" />}
-            {busy ? "Leyendo PDFs…" : a ? "Re-analizar" : "Analizar documentos"}
-          </button>
-        </div>
-      </div>
-      {a ? (
-        <div className="mt-2.5 space-y-2 text-sm">
-          <p className="text-xs leading-relaxed text-slate-700">{a.resumen}</p>
-          {a.requisitos.length > 0 ? (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Requisitos clave</p>
-              <ul className="mt-1 space-y-0.5">
-                {a.requisitos.map((req, i) => (
-                  <li key={i} className="flex items-start gap-1.5 text-xs text-slate-600">
-                    <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-slate-300" /> {req}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          <div className="grid gap-2 sm:grid-cols-3">
-            {a.plazo ? <Campo label="Plazo">{a.plazo}</Campo> : null}
-            {a.garantias ? <Campo label="Garantías">{a.garantias}</Campo> : null}
-            {a.criterios ? <Campo label="Evaluación">{a.criterios}</Campo> : null}
-          </div>
-          <p className="text-xs leading-relaxed text-slate-600">
-            <span className="font-semibold text-slate-700">Veredicto:</span> {a.motivo}
-          </p>
-          {a.banderas.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {a.banderas.map((b, i) => (
-                <span key={i} className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                  {b}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <p className="text-[10px] text-slate-400">
-            {a.docsLeidos} documento{a.docsLeidos === 1 ? "" : "s"} leído{a.docsLeidos === 1 ? "" : "s"} · {relTime(+new Date(a.at))}
-          </p>
-        </div>
-      ) : (
-        <p className="mt-2 text-xs text-slate-500">
-          Baja los documentos del pliego a la carpeta de Dropbox y la IA (Sonnet) los lee para extraer requisitos, plazos,
-          garantías y si DICEC puede cumplir — con la data real, no solo el título.
-        </p>
-      )}
-    </div>
-  );
-}
-
-// Checklist de "documentos a someter": estado por documento.
-const SOMETER_ESTADO: Record<SubmissionDocEstado, { label: string; cls: string; icon: LucideIcon; spin?: boolean }> = {
-  pendiente: { label: "Buscando…", cls: "bg-slate-100 text-slate-500 ring-slate-200", icon: Loader2, spin: true },
-  copiado: { label: "Copiado", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
-  por_renovar: { label: "Verificar / renovar", cls: "bg-amber-50 text-amber-700 ring-amber-600/20", icon: RefreshCw },
-  falta: { label: "Falta — conseguir", cls: "bg-rose-50 text-rose-700 ring-rose-600/20", icon: XCircle },
-  por_hacer: { label: "Hacer a la medida", cls: "bg-indigo-50 text-indigo-700 ring-indigo-600/20", icon: PencilLine },
-};
-
-// Ensamblador de documentos a someter: la IA lee el pliego, arma el checklist y
-// copia de licitaciones pasadas lo reutilizable a la carpeta "DOCUMENTOS A SOMETER".
-function DocsSometerCard({
-  r,
-  busy,
-  progress,
-  onPreparar,
-}: {
-  r: GovTenderRow;
-  busy: boolean;
-  progress: SometerProgress | null;
-  onPreparar: () => void;
-}) {
-  const plan = r.docs_someter;
-  const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
-  const counts = plan
-    ? plan.documentos.reduce<Record<string, number>>((a, d) => ({ ...a, [d.estado]: (a[d.estado] ?? 0) + 1 }), {})
-    : {};
-  return (
-    <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-emerald-700">
-          <ClipboardList className="size-3.5" /> Documentos a someter
-        </p>
-        <button
-          type="button"
-          onClick={onPreparar}
-          disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
-          title="La IA arma el checklist y copia de licitaciones pasadas lo reutilizable"
-        >
-          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardCheck className="size-3.5" />}
-          {busy ? "Preparando…" : plan ? "Actualizar checklist" : "Preparar documentos a someter"}
-        </button>
-      </div>
-
-      {progress ? (
-        <div className="mt-3">
-          <div className="mb-1 flex items-center justify-between text-[11px] text-slate-600">
-            <span className="truncate">
-              {progress.total > 0 ? `Buscando ${Math.min(progress.done + 1, progress.total)} de ${progress.total}` : "Leyendo el pliego…"}
-              {progress.current ? <span className="text-slate-400"> · {progress.current}</span> : null}
-            </span>
-            <span className="ml-2 shrink-0 font-semibold tabular-nums text-slate-700">{pct}%</span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-emerald-100">
-            <div className="h-full rounded-full bg-emerald-500 transition-all duration-300" style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-      ) : null}
-
-      {plan ? (
-        <div className="mt-2.5 space-y-2">
-          <p className="text-xs leading-relaxed text-slate-700">{plan.resumen}</p>
-          <ul className="space-y-1">
-            {plan.documentos.map((d, i) => {
-              const meta = SOMETER_ESTADO[d.estado] ?? SOMETER_ESTADO.pendiente;
-              const Icon = meta.icon;
-              return (
-                <li key={i} className="flex items-start gap-2 rounded-lg bg-white px-2.5 py-1.5 ring-1 ring-inset ring-slate-100">
-                  <span className={cn("mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ring-inset", meta.cls)}>
-                    <Icon className={cn("size-3", meta.spin && "animate-spin")} /> {meta.label}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-800">{d.nombre}</p>
-                    {d.copiadoDe || d.notas ? (
-                      <p className="text-[11px] leading-snug text-slate-500">
-                        {d.copiadoDe ? <span className="text-slate-400">de: {d.copiadoDe}</span> : null}
-                        {d.copiadoDe && d.notas ? " · " : null}
-                        {d.notas ?? ""}
-                      </p>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-            {(counts.copiado ?? 0) > 0 ? <span className="text-emerald-700">{counts.copiado} copiado{counts.copiado === 1 ? "" : "s"}</span> : null}
-            {(counts.por_renovar ?? 0) > 0 ? <span className="text-amber-700">{counts.por_renovar} por verificar</span> : null}
-            {(counts.falta ?? 0) > 0 ? <span className="text-rose-700">{counts.falta} falta{counts.falta === 1 ? "" : "n"}</span> : null}
-            {(counts.por_hacer ?? 0) > 0 ? <span className="text-indigo-700">{counts.por_hacer} a la medida</span> : null}
-            <span className="text-slate-400">· {relTime(+new Date(plan.at))}</span>
-          </div>
-          {r.dropbox_folder_url ? (
-            <a
-              href={r.dropbox_folder_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
-            >
-              <FolderOpen className="size-3.5" /> Abrir carpeta (DOCUMENTOS A SOMETER adentro)
-            </a>
-          ) : null}
-        </div>
-      ) : !progress ? (
-        <p className="mt-2 text-xs text-slate-500">
-          La IA lee los documentos del pliego, arma el checklist de todo lo que hay que presentar, y copia de licitaciones
-          pasadas lo reutilizable (aviso de operación, idoneidad, etc.) a una carpeta &ldquo;DOCUMENTOS A SOMETER&rdquo;. Lo que
-          falte o haya que renovar queda marcado.
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-// Carpeta de Dropbox de la licitación: crear (una vez), abrir, y bajar los
-// documentos del pliego (PanamaCompra → Dropbox) con medidor de %.
-function DropboxBand({
-  r,
-  busy,
-  onCrear,
-  docBusy,
-  docProgress,
-  docMsg,
-  onDescargarDocs,
-}: {
-  r: GovTenderRow;
-  busy: boolean;
-  onCrear: () => void;
-  docBusy: boolean;
-  docProgress: DocProgress | null;
-  docMsg: string | null;
-  onDescargarDocs: () => void;
-}) {
-  const has = !!r.dropbox_folder_path;
-  const pct = docProgress && docProgress.total > 0 ? Math.round((docProgress.done / docProgress.total) * 100) : 0;
-  return (
-    <div className="rounded-xl border border-sky-100 bg-sky-50/50 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-sky-100 text-sky-600">
-            <FolderOpen className="size-4" />
-          </span>
-          <div>
-            <p className="text-xs font-bold text-slate-800">Documentos en Dropbox</p>
-            <p className="text-[11px] text-slate-500">
-              {has
-                ? "Baja los documentos del pliego a la carpeta con un clic."
-                : "Crea una carpeta y baja ahí los documentos de esta licitación."}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {has ? (
-            <button
-              type="button"
-              onClick={onDescargarDocs}
-              disabled={docBusy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
-              title="Baja los PDFs del pliego de PanamaCompra y los sube a esta carpeta"
-            >
-              {docBusy ? <Loader2 className="size-3.5 animate-spin" /> : <CloudDownload className="size-3.5" />}
-              {docBusy ? "Bajando…" : "Bajar documentos del pliego"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onCrear}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
-            >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
-              {busy ? "Creando…" : "Crear carpeta en Dropbox"}
-            </button>
-          )}
-          {has && r.dropbox_folder_url ? (
-            <a
-              href={r.dropbox_folder_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-sky-700"
-            >
-              <FolderOpen className="size-3.5" /> Abrir
-            </a>
-          ) : null}
-        </div>
-      </div>
-
-      {docProgress ? (
-        <div className="mt-3">
-          <div className="mb-1 flex items-center justify-between text-[11px] text-slate-600">
-            <span className="truncate">
-              {docProgress.total > 0 ? `Bajando ${Math.min(docProgress.done + 1, docProgress.total)} de ${docProgress.total}` : "Leyendo el pliego…"}
-              {docProgress.current ? <span className="text-slate-400"> · {docProgress.current}</span> : null}
-            </span>
-            <span className="ml-2 shrink-0 font-semibold tabular-nums text-slate-700">{pct}%</span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-sky-100">
-            <div className="h-full rounded-full bg-sky-500 transition-all duration-300" style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-      ) : null}
-
-      {docMsg && !docProgress ? (
-        <p className="mt-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px] text-slate-600 ring-1 ring-inset ring-sky-100">{docMsg}</p>
-      ) : null}
     </div>
   );
 }
