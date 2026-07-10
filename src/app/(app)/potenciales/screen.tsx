@@ -39,7 +39,6 @@ import {
   TENDER_STATUS_LABEL,
   TENDER_STATUS_COLOR,
   MODALIDAD_LABEL,
-  formatMoney,
   formatMoneyExact,
   type QuoteRow,
   type TenderRow,
@@ -327,8 +326,8 @@ function CotizacionesTab({
   return (
     <>
       <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="En juego" value={formatMoney(kpis.enviadaMonto)} sub="enviadas sin cerrar" icon={Clock} accent="#F59E0B" />
-        <Kpi label="Aprobadas" value={String(kpis.aprobadaCount)} sub={formatMoney(kpis.aprobadaMonto)} icon={CheckCircle2} accent="#10B981" />
+        <Kpi label="En juego" value={formatMoneyExact(kpis.enviadaMonto)} sub="enviadas sin cerrar" icon={Clock} accent="#F59E0B" />
+        <Kpi label="Aprobadas" value={String(kpis.aprobadaCount)} sub={formatMoneyExact(kpis.aprobadaMonto)} icon={CheckCircle2} accent="#10B981" />
         <Kpi label="Por cobrar" value={String(kpis.porCobrar)} sub="aprobadas sin pago" icon={DollarSign} accent="#2563EB" />
         <Kpi label="Tasa de cierre" value={`${kpis.cierre}%`} sub={`${kpis.rechazadaCount} rechazadas`} icon={TrendingUp} accent="#6366F1" />
       </section>
@@ -1285,7 +1284,8 @@ function QuoteDrawer({
         {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-          {!f.qbo_job_id ? (
+          {/* Rechazada no va a proyectos: solo se guarda. */}
+          {!f.qbo_job_id && f.status !== "rechazada" ? (
             <button
               type="button"
               onClick={guardarYEnviar}
@@ -1303,7 +1303,8 @@ function QuoteDrawer({
             disabled={saving || pubBusy}
             className={cn(
               "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-50",
-              f.qbo_job_id
+              // Primario cuando no hay botón de enviar (ya en QBO o rechazada).
+              f.qbo_job_id || f.status === "rechazada"
                 ? "bg-slate-900 text-white hover:bg-slate-800"
                 : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
             )}
@@ -1961,9 +1962,9 @@ function LicitacionesTab({
       {toggle}
       <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Vivas" value={String(kpis.vivas)} sub="presentadas / en revisión" icon={Clock} accent="#2563EB" />
-        <Kpi label="Ganadas" value={String(kpis.ganadas)} sub={formatMoney(kpis.montoGanadas)} icon={CheckCircle2} accent="#10B981" />
-        <Kpi label="Registradas" value={String(filtered.length)} sub={`${formatMoney(kpis.montoRef)} ref.`} icon={Gavel} accent="#6366F1" />
-        <Kpi label="Monto referencial" value={formatMoney(kpis.montoRef)} sub="suma filtrada" icon={DollarSign} accent="#F59E0B" />
+        <Kpi label="Ganadas" value={String(kpis.ganadas)} sub={formatMoneyExact(kpis.montoGanadas)} icon={CheckCircle2} accent="#10B981" />
+        <Kpi label="Registradas" value={String(filtered.length)} sub={`${formatMoneyExact(kpis.montoRef)} ref.`} icon={Gavel} accent="#6366F1" />
+        <Kpi label="Monto referencial" value={formatMoneyExact(kpis.montoRef)} sub="suma filtrada" icon={DollarSign} accent="#F59E0B" />
       </section>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -2002,7 +2003,7 @@ function LicitacionesTab({
                 <SortTh label="Entidad" k="entity" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Objeto</th>
                 <SortTh label="Modalidad" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
-                <SortTh label="Ref. (B/.)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
+                <SortTh label="Ref. ($)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estatus" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold sm:table-cell">Rubro</th>
               </tr>
