@@ -215,6 +215,7 @@ function CotizacionesTab({
   const [sendingQbo, setSendingQbo] = useState<QuoteRow | null>(null);
   const [dismissing, setDismissing] = useState<QuoteRow | null>(null);
   const [showDescartadas, setShowDescartadas] = useState(false);
+  const [verTodasSeg, setVerTodasSeg] = useState(false);
   const [showDropbox, setShowDropbox] = useState(false);
   const [showCotizador, setShowCotizador] = useState(false);
   const [showEngineerLink, setShowEngineerLink] = useState(false);
@@ -366,8 +367,14 @@ function CotizacionesTab({
           </div>
 
           {seguimiento.pend.length > 0 ? (
-            <ul className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-              {seguimiento.pend.slice(0, 6).map(({ q: x, days }) => (
+            <ul
+              className={cn(
+                "mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3",
+                // Expandida: scroll interno para que 40 tarjetas no se coman la página.
+                verTodasSeg && "max-h-[26rem] overflow-y-auto pr-1",
+              )}
+            >
+              {(verTodasSeg ? seguimiento.pend : seguimiento.pend.slice(0, 6)).map(({ q: x, days }) => (
                 <li
                   key={x.id}
                   className="flex items-center justify-between gap-2 rounded-xl border border-amber-100 bg-white px-3 py-2.5 shadow-sm"
@@ -412,9 +419,20 @@ function CotizacionesTab({
             <p className="mt-2 text-xs text-slate-500">Nada pendiente — todas las enviadas viejas están descartadas o resueltas.</p>
           )}
           {seguimiento.pend.length > 6 ? (
-            <p className="mt-2 text-[11px] text-slate-500">
-              +{seguimiento.pend.length - 6} más — filtra por estado &ldquo;Enviada&rdquo; y ordena por fecha para verlas todas.
-            </p>
+            <button
+              type="button"
+              onClick={() => setVerTodasSeg((v) => !v)}
+              className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20 transition-colors hover:bg-amber-100"
+            >
+              {verTodasSeg ? (
+                <>Ver menos</>
+              ) : (
+                <>
+                  Ver las {seguimiento.pend.length}
+                  <ChevronDown className="size-3.5" />
+                </>
+              )}
+            </button>
           ) : null}
 
           {showDescartadas && seguimiento.descartadas.length > 0 ? (
