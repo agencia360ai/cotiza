@@ -6,8 +6,11 @@ import {
   Loader2,
   AlertTriangle,
   Building2,
+  CalendarRange,
+  Check,
   TrendingUp,
   FileSignature,
+  Search,
   Wrench,
   Hammer,
   Package,
@@ -16,8 +19,9 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectProgress, type QboProjectsResult } from "./qbo-actions";
+import { getQboProjects, setProjectStatus, setProjectProgress, setProjectDates, type QboProjectsResult } from "./qbo-actions";
 import type { QboProject, ProjectBizStatus } from "@/lib/quickbooks/projects";
+import { effectiveDates, overlapFraction, type DateRange } from "@/lib/quickbooks/prorate";
 
 // Identidad visual por rubro (misma paleta que el donut del Inicio):
 // DC índigo · DM sky · DS esmeralda · DV ámbar. Ícono + color, nunca solo color.
@@ -38,11 +42,12 @@ const STATUS_META: Record<ProjectBizStatus, { label: string; dot: string; text: 
 };
 const STATUS_ORDER: ProjectBizStatus[] = ["activo", "por_cobrar", "cerrado"];
 
+// Mismo $ que el resto de la app (los "B/." viejos desentonaban con el Inicio).
 function bal(n: number): string {
-  return "B/. " + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function balCompact(n: number): string {
-  return "B/. " + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 function relTime(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -59,20 +64,99 @@ function marginTextColor(m: number): string {
   return "text-rose-600";
 }
 
+const hoyPanama = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" });
+const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+function fmtCorta(iso: string): string {
+  const [y, m] = iso.split("-").map(Number);
+  return `${MESES_CORTOS[(m ?? 1) - 1]} ${String(y).slice(2)}`;
+}
+function shiftDays(iso: string, days: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// ── Rangos de fecha (presets + custom) ────────────────────────────────────────
+type RangeKey = "year" | "3m" | "6m" | "lastyear" | "all" | "custom";
+const RANGE_LABEL: Record<RangeKey, string> = {
+  year: "Este año",
+  "3m": "Últimos 3 meses",
+  "6m": "Últimos 6 meses",
+  lastyear: "Año pasado",
+  all: "Todo",
+  custom: "Personalizado",
+};
+const RANGE_ORDER: RangeKey[] = ["year", "3m", "6m", "lastyear", "all", "custom"];
+
+function rangeFor(key: RangeKey, customFrom: string, customTo: string): DateRange | null {
+  const hoy = hoyPanama();
+  const y = Number(hoy.slice(0, 4));
+  switch (key) {
+    case "year":
+      return { from: `${y}-01-01`, to: `${y}-12-31` };
+    case "3m":
+      return { from: shiftDays(hoy, -90), to: hoy };
+    case "6m":
+      return { from: shiftDays(hoy, -180), to: hoy };
+    case "lastyear":
+      return { from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
+    case "all":
+      return null;
+    case "custom": {
+      const from = customFrom || "2000-01-01";
+      const to = customTo || hoy;
+      return from <= to ? { from, to } : { from: to, to: from };
+    }
+  }
+}
+
+type SortKey = "nombre" | "cliente" | "cobro" | "gasto" | "margen" | "avance" | "fin";
+const SORT_LABEL: Record<SortKey, string> = {
+  nombre: "Nombre A-Z",
+  cliente: "Cliente A-Z",
+  cobro: "Cobro (mayor)",
+  gasto: "Gasto (mayor)",
+  margen: "Margen (mayor)",
+  avance: "Avance (mayor)",
+  fin: "Fecha de fin",
+};
+
+// Proyección de un proyecto dentro del rango activo.
+type Enriched = {
+  p: QboProject;
+  eff: { start: string; end: string; asumidas: boolean } | null;
+  fraction: number; // 0..1 dentro del rango (1 sin rango o sin fechas)
+  inRange: boolean;
+  totalBase: number | null; // contrato (o cobro real como fallback)
+  usaContrato: boolean;
+  enRango: number | null; // totalBase × fraction
+  gastoRango: number | null; // gasto × fraction
+};
+
 export function QboProjectsBoard() {
   const [res, setRes] = useState<QboProjectsResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<string>("all");
   const [statusOv, setStatusOv] = useState<Map<string, ProjectBizStatus>>(new Map());
   const [progressOv, setProgressOv] = useState<Map<string, number>>(new Map());
+  const [datesOv, setDatesOv] = useState<Map<string, { startDate: string | null; endDate: string | null; contractTotal: number | null }>>(new Map());
   const [rowError, setRowError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  // Filtros / orden / búsqueda / rango.
+  const [q, setQ] = useState("");
+  const [statusFiltro, setStatusFiltro] = useState<ProjectBizStatus | "all">("all");
+  const [sort, setSort] = useState<SortKey>("cobro");
+  const [rangeKey, setRangeKey] = useState<RangeKey>("year");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [editingDates, setEditingDates] = useState<string | null>(null);
 
   async function load(force = false) {
     setLoading(true);
     setRefreshError(null);
     try {
-      const r = await getQboProjects(force ? { force: true } : undefined);
+      const r = await getQboProjects({ force, allYears: true });
       const teniaData = res?.ok && res.projects.length > 0;
       if (!r.ok && teniaData) {
         setRefreshError(r.error); // conservar el board; solo avisar
@@ -85,13 +169,11 @@ export function QboProjectsBoard() {
         return;
       }
       setRes(r);
-      // Solo limpiar los overrides cuando llegó data fresca que ya los trae:
-      // limpiarlos tras un fallo revertía visualmente un avance YA guardado.
+      // Solo limpiar los overrides cuando llegó data fresca que ya los trae.
       setStatusOv(new Map());
       setProgressOv(new Map());
+      setDatesOv(new Map());
     } catch (e) {
-      // La action RECHAZÓ (red caída, función matada): sin esto el spinner
-      // quedaba girando para siempre.
       setRefreshError(e instanceof Error ? e.message : "Se cortó la actualización — reintenta");
     } finally {
       setLoading(false);
@@ -99,13 +181,20 @@ export function QboProjectsBoard() {
   }
   const statusOf = (p: QboProject) => statusOv.get(p.id) ?? p.status;
   const progressOf = (p: QboProject) => progressOv.get(p.id) ?? p.progress ?? 0;
+  const datesOf = (p: QboProject) => {
+    const ov = datesOv.get(p.id);
+    return {
+      startDate: ov ? ov.startDate : p.startDate,
+      endDate: ov ? ov.endDate : p.endDate,
+      contractTotal: ov ? ov.contractTotal : p.contractTotal,
+    };
+  };
   async function changeStatus(p: QboProject, next: ProjectBizStatus) {
     const prev = statusOf(p);
     setStatusOv((m) => new Map(m).set(p.id, next));
     try {
       const r = await setProjectStatus(p.id, next);
       if (!r.ok) {
-        // revertir: no mostrar un status que NO se guardó
         setStatusOv((m) => new Map(m).set(p.id, prev));
         setRowError(r.error);
       } else {
@@ -122,7 +211,6 @@ export function QboProjectsBoard() {
     try {
       const r = await setProjectProgress(p.id, v);
       if (!r.ok) {
-        // revertir para no mostrar un valor que NO se guardó
         setProgressOv((m) => new Map(m).set(p.id, prev));
         setRowError(r.error);
       } else {
@@ -133,47 +221,145 @@ export function QboProjectsBoard() {
       setRowError(e instanceof Error ? e.message : "No se pudo guardar el avance — reintenta");
     }
   }
+  async function saveDates(p: QboProject, v: { startDate: string | null; endDate: string | null; contractTotal: number | null }) {
+    try {
+      const r = await setProjectDates(p.id, v);
+      if (!r.ok) {
+        setRowError(r.error);
+        return false;
+      }
+      setDatesOv((m) => new Map(m).set(p.id, v));
+      setRowError(null);
+      return true;
+    } catch (e) {
+      setRowError(e instanceof Error ? e.message : "No se pudieron guardar las fechas — reintenta");
+      return false;
+    }
+  }
   useEffect(() => {
     void load(); // lee de la base: abrir la página NO consulta QBO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const projects = res?.ok ? res.projects : [];
+  const range = useMemo(() => rangeFor(rangeKey, customFrom, customTo), [rangeKey, customFrom, customTo]);
 
-  // Resumen financiero por rubro (para las cards de filtro).
+  // Proyección con prorrateo: cada proyecto con su fracción dentro del rango.
+  const enriched: Enriched[] = useMemo(() => {
+    return projects.map((p) => {
+      const d = datesOf(p);
+      const eff = effectiveDates({ startDate: d.startDate, endDate: d.endDate, year: p.year });
+      let fraction = 1;
+      let inRange = true;
+      if (range) {
+        if (eff) {
+          fraction = overlapFraction(eff.start, eff.end, range);
+          inRange = fraction > 0;
+        } // sin ninguna pista de fechas: se muestra siempre (no se puede juzgar)
+      }
+      const contractTotal = d.contractTotal;
+      const usaContrato = contractTotal !== null;
+      const totalBase = contractTotal ?? p.income;
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      return {
+        p,
+        eff,
+        fraction,
+        inRange,
+        totalBase,
+        usaContrato,
+        enRango: totalBase === null ? null : round2(totalBase * fraction),
+        gastoRango: p.cost === null ? null : round2(p.cost * fraction),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, range, datesOv]);
+
+  // Búsqueda: nombre, cliente, número — y montos si escribes dígitos.
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const digits = needle.replace(/[^0-9]/g, "");
+    return enriched.filter((e) => {
+      if (!e.inRange) return false;
+      if (tab !== "all" && e.p.rubro !== tab) return false;
+      if (statusFiltro !== "all" && statusOf(e.p) !== statusFiltro) return false;
+      if (!needle) return true;
+      const hay = `${e.p.fullName} ${e.p.name} ${e.p.clientName}`.toLowerCase();
+      if (hay.includes(needle)) return true;
+      if (digits.length >= 3) {
+        const montos = [e.p.income, e.p.cost, e.totalBase, e.enRango]
+          .filter((n): n is number => n !== null)
+          .map((n) => String(Math.round(n)));
+        if (montos.some((m) => m.includes(digits))) return true;
+      }
+      return false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enriched, q, tab, statusFiltro, statusOv]);
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    const val = (e: Enriched): string | number => {
+      switch (sort) {
+        case "nombre":
+          return e.p.fullName.toLowerCase();
+        case "cliente":
+          return e.p.clientName.toLowerCase();
+        case "cobro":
+          return -(e.enRango ?? -1);
+        case "gasto":
+          return -(e.gastoRango ?? -1);
+        case "margen":
+          return -(e.p.margin ?? -9);
+        case "avance":
+          return -progressOf(e.p);
+        case "fin":
+          return e.eff?.end ?? "9999";
+      }
+    };
+    arr.sort((a, b) => {
+      // Cerrados siempre al final.
+      const ca = Number(statusOf(a.p) === "cerrado");
+      const cb = Number(statusOf(b.p) === "cerrado");
+      if (ca !== cb) return ca - cb;
+      const va = val(a);
+      const vb = val(b);
+      if (typeof va === "number" && typeof vb === "number") return va - vb;
+      return String(va).localeCompare(String(vb));
+    });
+    return arr;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, sort, statusOv, progressOv]);
+
+  // Resumen por rubro (sobre lo filtrado por rango/búsqueda/status, NO por tab —
+  // las cards son el filtro de rubro). Montos PRORRATEADOS al rango.
   const porRubro = useMemo(() => {
     const m = new Map<string, { count: number; cobro: number; gasto: number }>();
     for (const key of RUBRO_ORDER) m.set(key, { count: 0, cobro: 0, gasto: 0 });
-    for (const p of projects) {
-      const key = p.rubro && RUBRO_META[p.rubro] ? p.rubro : "otro";
+    for (const e of enriched) {
+      if (!e.inRange) continue;
+      const key = e.p.rubro && RUBRO_META[e.p.rubro] ? e.p.rubro : "otro";
       const b = m.get(key) ?? { count: 0, cobro: 0, gasto: 0 };
       b.count++;
-      b.cobro += p.income ?? 0;
-      b.gasto += p.cost ?? 0;
+      b.cobro += e.enRango ?? 0;
+      b.gasto += e.gastoRango ?? 0;
       m.set(key, b);
     }
     return m;
-  }, [projects]);
+  }, [enriched]);
 
-  const shown = useMemo(
-    () =>
-      (tab === "all" ? projects : projects.filter((p) => p.rubro === tab))
-        .slice()
-        .sort((a, b) => Number(statusOf(a) === "cerrado") - Number(statusOf(b) === "cerrado")),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projects, tab, statusOv],
-  );
-
-  // Totales de la vista actual (gasto vs cobro).
+  // Totales de la vista actual (prorrateados al rango activo).
   const vista = useMemo(() => {
     let cobro = 0;
     let gasto = 0;
-    for (const p of shown) {
-      cobro += p.income ?? 0;
-      gasto += p.cost ?? 0;
+    let prorrateados = 0;
+    for (const e of sorted) {
+      cobro += e.enRango ?? 0;
+      gasto += e.gastoRango ?? 0;
+      if (e.fraction < 1) prorrateados++;
     }
-    return { cobro, gasto, margen: cobro > 0 ? (cobro - gasto) / cobro : null };
-  }, [shown]);
+    return { cobro, gasto, prorrateados, margen: cobro > 0 ? (cobro - gasto) / cobro : null };
+  }, [sorted]);
 
   const hasProjects = projects.length > 0;
 
@@ -184,7 +370,7 @@ export function QboProjectsBoard() {
           <TrendingUp className="size-4 text-emerald-600" />
           <div>
             <h2 className="text-sm font-semibold text-slate-900">
-              Proyectos en QuickBooks {res?.ok ? <span className="text-slate-400">· {res.year}</span> : null}
+              Proyectos en QuickBooks <span className="text-slate-400">· {RANGE_LABEL[rangeKey]}</span>
             </h2>
             {res?.ok && res.syncedAt ? <p className="text-[11px] text-slate-400">Actualizado {relTime(res.syncedAt)}</p> : null}
           </div>
@@ -201,7 +387,7 @@ export function QboProjectsBoard() {
         </button>
       </div>
 
-      {/* Filtros grandes por rubro (con cobro total). */}
+      {/* Filtros grandes por rubro (con cobro prorrateado al rango). */}
       {hasProjects ? (
         <div className="mb-3 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
           {RUBRO_ORDER.map((key) => {
@@ -215,7 +401,7 @@ export function QboProjectsBoard() {
                 type="button"
                 onClick={() => setTab(active ? "all" : key)}
                 className={cn(
-                  "group rounded-2xl border bg-white p-3.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  "group cursor-pointer rounded-2xl border bg-white p-3.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
                   active ? cn("border-transparent ring-2", meta.ring) : "border-slate-100",
                 )}
               >
@@ -226,27 +412,120 @@ export function QboProjectsBoard() {
                   <span className="text-lg font-bold tabular-nums text-slate-900">{b.count}</span>
                 </div>
                 <p className="mt-2 text-sm font-semibold text-slate-800">{meta.label}</p>
-                <p className="mt-0.5 text-xs tabular-nums text-slate-500">{b.cobro > 0 ? `${balCompact(b.cobro)} facturado` : "—"}</p>
+                <p className="mt-0.5 text-xs tabular-nums text-slate-500">{b.cobro > 0 ? `${balCompact(b.cobro)} en el rango` : "—"}</p>
               </button>
             );
           })}
         </div>
       ) : null}
 
+      {/* Toolbar: búsqueda + rango de fechas + status + orden */}
+      {hasProjects ? (
+        <div className="mb-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[200px] flex-1">
+              <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Buscar por proyecto, cliente o monto…"
+                className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-3 text-sm focus:border-slate-400 focus:outline-none"
+              />
+            </div>
+            <select
+              value={statusFiltro}
+              onChange={(e) => setStatusFiltro(e.target.value as ProjectBizStatus | "all")}
+              aria-label="Filtrar por estado"
+              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
+            >
+              <option value="all">Todos los estados</option>
+              {STATUS_ORDER.map((s) => (
+                <option key={s} value={s}>
+                  {STATUS_META[s].label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey)}
+              aria-label="Ordenar por"
+              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
+            >
+              {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
+                <option key={k} value={k}>
+                  Ordenar: {SORT_LABEL[k]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <CalendarRange className="size-3.5 text-slate-400" />
+            {RANGE_ORDER.map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setRangeKey(k)}
+                className={cn(
+                  "cursor-pointer rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
+                  rangeKey === k ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                )}
+              >
+                {RANGE_LABEL[k]}
+              </button>
+            ))}
+            {rangeKey === "custom" ? (
+              <span className="inline-flex items-center gap-1.5">
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                  aria-label="Desde"
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none"
+                />
+                <span className="text-xs text-slate-400">→</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                  aria-label="Hasta"
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none"
+                />
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-        {/* Barra de resumen de la vista: cobro vs gasto vs margen. */}
+        {/* Barra de resumen de la vista: cobro vs gasto vs margen (prorrateado). */}
         {hasProjects ? (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-slate-100 px-4 py-2.5 text-xs">
             <span className="font-semibold text-slate-700">
               {tab === "all" ? "Todos" : RUBRO_META[tab]?.label ?? tab}
-              <span className="ml-1 tabular-nums text-slate-400">{shown.length}</span>
+              <span className="ml-1 tabular-nums text-slate-400">{sorted.length}</span>
             </span>
-            {tab !== "all" ? (
-              <button type="button" onClick={() => setTab("all")} className="text-slate-400 hover:text-slate-700">
-                Ver todos
+            {tab !== "all" || q || statusFiltro !== "all" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setTab("all");
+                  setQ("");
+                  setStatusFiltro("all");
+                }}
+                className="cursor-pointer text-slate-400 hover:text-slate-700"
+              >
+                Limpiar filtros
               </button>
             ) : null}
             <span className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1">
+              {vista.prorrateados > 0 ? (
+                <span
+                  className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-600/20"
+                  title={`${vista.prorrateados} proyecto${vista.prorrateados === 1 ? "" : "s"} multi-período: se muestra solo la porción del contrato dentro del rango`}
+                >
+                  {vista.prorrateados} prorrateado{vista.prorrateados === 1 ? "" : "s"}
+                </span>
+              ) : null}
               <span className="text-slate-500">
                 Gasto <span className="font-semibold tabular-nums text-rose-600">{balCompact(vista.gasto)}</span>
               </span>
@@ -297,18 +576,30 @@ export function QboProjectsBoard() {
               </button>
             </div>
           ) : (
-            <p className="px-4 py-10 text-center text-sm text-slate-500">No hay proyectos {res?.ok ? res.year : ""} en QuickBooks.</p>
+            <p className="px-4 py-10 text-center text-sm text-slate-500">No hay proyectos en QuickBooks.</p>
           )
+        ) : sorted.length === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-slate-500">
+            Nada matchea los filtros{range ? ` en “${RANGE_LABEL[rangeKey]}”` : ""}.
+          </p>
         ) : (
           <ul className="divide-y divide-slate-50 px-2 py-2">
-            {shown.map((p) => (
+            {sorted.map((e) => (
               <ProjectRow
-                key={p.id}
-                p={p}
-                status={statusOf(p)}
-                progress={progressOf(p)}
-                onSaveProgress={(v) => saveProgress(p, v)}
-                onChangeStatus={(s) => changeStatus(p, s)}
+                key={e.p.id}
+                e={e}
+                rangeActive={!!range}
+                status={statusOf(e.p)}
+                progress={progressOf(e.p)}
+                dates={datesOf(e.p)}
+                editing={editingDates === e.p.id}
+                onToggleEdit={() => setEditingDates((prev) => (prev === e.p.id ? null : e.p.id))}
+                onSaveProgress={(v) => saveProgress(e.p, v)}
+                onChangeStatus={(s) => changeStatus(e.p, s)}
+                onSaveDates={async (v) => {
+                  const ok = await saveDates(e.p, v);
+                  if (ok) setEditingDates(null);
+                }}
               />
             ))}
           </ul>
@@ -366,7 +657,7 @@ function StatusPicker({ value, onChange }: { value: ProjectBizStatus; onChange: 
   );
 }
 
-// Input de avance: escribís el número (0-100) y se guarda al salir del campo
+// Input de avance: escribes el número (0-100) y se guarda al salir del campo
 // o con Enter. Sin slider (arrastrar sin confirmar perdía el valor).
 function ProgressInput({ value, onSave, label }: { value: number; onSave: (v: number) => void; label: string }) {
   const [draft, setDraft] = useState(String(value));
@@ -415,71 +706,182 @@ function ProgressInput({ value, onSave, label }: { value: number; onSave: (v: nu
   );
 }
 
+// Editor inline de fechas del contrato + monto total (base del prorrateo).
+function DatesEditor({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: { startDate: string | null; endDate: string | null; contractTotal: number | null };
+  onSave: (v: { startDate: string | null; endDate: string | null; contractTotal: number | null }) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [start, setStart] = useState(initial.startDate ?? "");
+  const [end, setEnd] = useState(initial.endDate ?? "");
+  const [total, setTotal] = useState(initial.contractTotal !== null ? String(initial.contractTotal) : "");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 p-2.5">
+      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Inicio
+        <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="mt-0.5 block rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-normal normal-case tracking-normal focus:outline-none" />
+      </label>
+      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Fin
+        <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="mt-0.5 block rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-normal normal-case tracking-normal focus:outline-none" />
+      </label>
+      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Contrato total $
+        <input
+          inputMode="decimal"
+          value={total}
+          onChange={(e) => setTotal(e.target.value.replace(/[^0-9.]/g, ""))}
+          placeholder="24000"
+          className="mt-0.5 block w-24 rounded-md border border-slate-200 bg-white px-2 py-1 text-right text-xs font-normal normal-case tabular-nums tracking-normal focus:outline-none"
+        />
+      </label>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onSave({
+              startDate: start || null,
+              endDate: end || null,
+              contractTotal: total.trim() === "" ? null : Number(total),
+            });
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+      >
+        {busy ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} Guardar
+      </button>
+      <button type="button" onClick={onCancel} disabled={busy} className="cursor-pointer rounded-md px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-100">
+        Cancelar
+      </button>
+    </div>
+  );
+}
+
 function ProjectRow({
-  p,
+  e,
+  rangeActive,
   status,
   progress,
+  dates,
+  editing,
+  onToggleEdit,
   onSaveProgress,
   onChangeStatus,
+  onSaveDates,
 }: {
-  p: QboProject;
+  e: Enriched;
+  rangeActive: boolean;
   status: ProjectBizStatus;
   progress: number;
+  dates: { startDate: string | null; endDate: string | null; contractTotal: number | null };
+  editing: boolean;
+  onToggleEdit: () => void;
   onSaveProgress: (v: number) => void;
   onChangeStatus: (s: ProjectBizStatus) => void;
+  onSaveDates: (v: { startDate: string | null; endDate: string | null; contractTotal: number | null }) => Promise<void>;
 }) {
+  const p = e.p;
   const meta = (p.rubro && RUBRO_META[p.rubro]) || RUBRO_FALLBACK;
   const RubroIcon = meta.icon;
   const cerrado = status === "cerrado";
+  const prorrateado = rangeActive && e.fraction < 1;
   return (
-    <li className={cn("flex flex-wrap items-center gap-3 rounded-lg px-2 py-3 hover:bg-slate-50/60 sm:flex-nowrap", cerrado && "opacity-60")}>
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", meta.chip)} title={meta.label}>
-        <RubroIcon className="size-4" />
-      </span>
+    <li className={cn("rounded-lg px-2 py-3 hover:bg-slate-50/60", cerrado && "opacity-60")}>
+      <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
+        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", meta.chip)} title={meta.label}>
+          <RubroIcon className="size-4" />
+        </span>
 
-      <div className="min-w-0 flex-1 basis-full sm:basis-0">
-        <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
-        <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">
-          <Building2 className="size-3 shrink-0 text-slate-400" />
-          {p.clientName || meta.label}
-        </p>
-      </div>
+        <div className="min-w-0 flex-1 basis-full sm:basis-0">
+          <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <Building2 className="size-3 shrink-0 text-slate-400" />
+              <span className="truncate">{p.clientName || meta.label}</span>
+            </span>
+            <button
+              type="button"
+              onClick={onToggleEdit}
+              className={cn(
+                "inline-flex cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset transition-colors",
+                e.eff
+                  ? e.eff.asumidas
+                    ? "bg-amber-50 text-amber-700 ring-amber-600/20 hover:bg-amber-100"
+                    : "bg-slate-100 text-slate-600 ring-slate-200 hover:bg-slate-200"
+                  : "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100",
+              )}
+              title={
+                e.eff
+                  ? e.eff.asumidas
+                    ? "Fechas asumidas (año del proyecto) — haz clic para poner las reales"
+                    : "Fechas del contrato — haz clic para editar"
+                  : "Sin fechas — haz clic para agregarlas"
+              }
+            >
+              <CalendarRange className="size-3" />
+              {e.eff ? `${fmtCorta(e.eff.start)} → ${fmtCorta(e.eff.end)}` : "fechas"}
+              {e.eff?.asumidas ? "*" : ""}
+            </button>
+          </p>
+        </div>
 
-      {/* Avance manual — escribí el número y se guarda solo */}
-      <div className="w-24 shrink-0 sm:w-28">
-        <ProgressInput value={progress} onSave={onSaveProgress} label={`Avance de ${p.name}`} />
-      </div>
+        {/* Avance manual — escribe el número y se guarda solo */}
+        <div className="w-24 shrink-0 sm:w-28">
+          <ProgressInput value={progress} onSave={onSaveProgress} label={`Avance de ${p.name}`} />
+        </div>
 
-      {/* Financiero — gasto vs cobro + barra de rentabilidad */}
-      <div className="w-40 shrink-0 sm:w-48">
-        {p.income !== null ? (
-          <>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[11px] text-slate-400">Cobro</span>
-              <span className="text-sm font-bold tabular-nums text-slate-900">{bal(p.income)}</span>
-            </div>
-            <div className="mt-0.5 flex items-baseline justify-between gap-2">
-              <span className="text-[11px] text-rose-400">Gasto</span>
-              <span className="text-xs font-semibold tabular-nums text-rose-600">{p.cost !== null ? bal(p.cost) : "—"}</span>
-            </div>
-            <div className="mt-1.5">
-              <ProfitBar income={p.income} cost={p.cost ?? 0} />
-              {p.margin !== null ? (
-                <p className={cn("mt-1 text-right text-[10px] font-semibold tabular-nums", marginTextColor(p.margin))}>
-                  {Math.round(p.margin * 100)}% margen
-                </p>
+        {/* Financiero — prorrateado al rango cuando el proyecto lo cruza */}
+        <div className="w-44 shrink-0 sm:w-52">
+          {e.enRango !== null || p.income !== null ? (
+            <>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[11px] text-slate-400">{prorrateado ? "En rango" : "Cobro"}</span>
+                <span className="text-sm font-bold tabular-nums text-slate-900">{bal(e.enRango ?? p.income ?? 0)}</span>
+              </div>
+              {prorrateado && e.totalBase !== null ? (
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-[10px] text-slate-400">{e.usaContrato ? "Contrato total" : "Total"}</span>
+                  <span className="text-[11px] font-semibold tabular-nums text-slate-500">
+                    {bal(e.totalBase)} <span className="text-slate-400">({Math.round(e.fraction * 100)}%)</span>
+                  </span>
+                </div>
               ) : null}
-            </div>
-          </>
-        ) : (
-          <p className="text-right text-[11px] italic text-slate-300">{cerrado ? "—" : "sin datos de QBO"}</p>
-        )}
+              <div className="mt-0.5 flex items-baseline justify-between gap-2">
+                <span className="text-[11px] text-rose-400">{prorrateado ? "Gasto (prorr.)" : "Gasto"}</span>
+                <span className="text-xs font-semibold tabular-nums text-rose-600">
+                  {e.gastoRango !== null ? bal(e.gastoRango) : p.cost !== null ? bal(p.cost) : "—"}
+                </span>
+              </div>
+              <div className="mt-1.5">
+                <ProfitBar income={e.enRango ?? p.income ?? 0} cost={e.gastoRango ?? p.cost ?? 0} />
+                {p.margin !== null ? (
+                  <p className={cn("mt-1 text-right text-[10px] font-semibold tabular-nums", marginTextColor(p.margin))}>
+                    {Math.round(p.margin * 100)}% margen
+                  </p>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <p className="text-right text-[11px] italic text-slate-300">{cerrado ? "—" : "sin datos de QBO"}</p>
+          )}
+        </div>
+
+        {/* Status — cambio fácil */}
+        <div className="shrink-0">
+          <StatusPicker value={status} onChange={onChangeStatus} />
+        </div>
       </div>
 
-      {/* Status — cambio fácil */}
-      <div className="shrink-0">
-        <StatusPicker value={status} onChange={onChangeStatus} />
-      </div>
+      {editing ? <DatesEditor initial={dates} onSave={onSaveDates} onCancel={onToggleEdit} /> : null}
     </li>
   );
 }

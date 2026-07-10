@@ -158,10 +158,13 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
   // el proyecto y quedarnos sin dónde registrar el link (doble envío después).
   const probe = (await c.supabase
     .from("sales_quotes")
-    .select("id, qbo_job_id, status")
+    .select("id, qbo_job_id, status, amount_usd")
     .eq("id", quoteId)
     .eq("org_id", c.orgId)
-    .maybeSingle()) as { data: { id: string; qbo_job_id: string | null; status: string } | null; error: { message: string; code?: string } | null };
+    .maybeSingle()) as {
+    data: { id: string; qbo_job_id: string | null; status: string; amount_usd: number | null } | null;
+    error: { message: string; code?: string } | null;
+  };
   if (isMissingColumn(probe.error)) return { error: "Falta la migración 0022 (qbo_job_id) — corre el SQL y reintenta." };
   if (probe.error) return { error: probe.error.message };
   if (!probe.data) return { error: "Cotización no encontrada" };
@@ -232,13 +235,17 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
     start_date: input.startDate || null,
     end_date: input.endDate || null,
     notes: input.notas?.trim() || null,
+    // Monto de contrato = el monto de la cotización: base del prorrateo
+    // multi-año en el board (editable después).
+    contract_total: probe.data.amount_usd === null ? null : Number(probe.data.amount_usd),
   };
   let up = await c.supabase.from("qbo_project_state").upsert(stateRow, { onConflict: "org_id,qb_job_id" });
   if (isMissingColumn(up.error)) {
-    // 0022 en qbo_project_state pendiente: guardar sin fechas/notas.
+    // 0022/0023 en qbo_project_state pendientes: guardar sin fechas/notas/contrato.
     delete stateRow.start_date;
     delete stateRow.end_date;
     delete stateRow.notes;
+    delete stateRow.contract_total;
     up = await c.supabase.from("qbo_project_state").upsert(stateRow, { onConflict: "org_id,qb_job_id" });
   }
   // Un fallo acá no invalida el envío (el refresh lo trae igual) — no se reporta

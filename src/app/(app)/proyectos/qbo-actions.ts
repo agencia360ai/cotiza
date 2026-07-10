@@ -25,7 +25,10 @@ function isMissingColumn(error: { message?: string; code?: string } | null): boo
 const inflight = new Map<string, Promise<QboProjectsResult>>();
 
 // ── Abrir la página: leer SOLO de la base. Cero llamadas a QBO. ───────────────
-async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<QboProjectsResult> {
+// allYears=true (el board con filtro de fechas): trae TODOS los años — un
+// contrato jun-2025→jun-2026 debe aparecer al filtrar 2026 aunque su fila viva
+// en year=2025. Paginado (PostgREST corta en 1000).
+async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = false): Promise<QboProjectsResult> {
   type Row = {
     qb_job_id: string;
     name: string | null;
@@ -39,27 +42,29 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
     synced_at: string | null;
     progress?: number | null;
     status?: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    contract_total?: number | null;
   };
-  const run = (cols: string) =>
-    supabase.from("qbo_project_state").select(cols).eq("org_id", orgId).eq("year", year);
-  let res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at, progress, status")) as {
-    data: Row[] | null;
-    error: ({ message: string; code?: string }) | null;
+  type Res = { data: Row[] | null; error: ({ message: string; code?: string }) | null };
+  const run = async (cols: string): Promise<Res> => {
+    const all: Row[] = [];
+    for (let from = 0; from < 30_000; from += 1000) {
+      let q = supabase.from("qbo_project_state").select(cols).eq("org_id", orgId);
+      if (!allYears) q = q.eq("year", year);
+      const r = (await q.order("qb_job_id").range(from, from + 999)) as unknown as Res;
+      if (r.error) return r;
+      all.push(...(r.data ?? []));
+      if ((r.data?.length ?? 0) < 1000) break;
+    }
+    return { data: all, error: null };
   };
-  if (isMissingColumn(res.error)) {
-    // migración 0016 pendiente: sin columna status
-    res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at, progress")) as {
-      data: Row[] | null;
-      error: ({ message: string; code?: string }) | null;
-    };
-  }
-  if (isMissingColumn(res.error)) {
-    // migración 0012 pendiente: sin columna progress
-    res = (await run("qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at")) as {
-      data: Row[] | null;
-      error: ({ message: string; code?: string }) | null;
-    };
-  }
+  const BASE_COLS = "qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at";
+  let res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total`);
+  if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date`); // 0023 pendiente
+  if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status`); // 0022 pendiente
+  if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress`); // 0016 pendiente
+  if (isMissingColumn(res.error)) res = await run(BASE_COLS); // 0012 pendiente
   // Un error real (RLS/conexión) NO se traga como "no hay proyectos".
   if (res.error) return { ok: false, error: res.error.message };
   const rows = res.data ?? [];
@@ -85,6 +90,9 @@ async function loadFromDb(supabase: DB, orgId: string, year: number): Promise<Qb
         // status derivado si la migración 0016 aún no corrió.
         status: (r.status ?? (r.closed ? "cerrado" : "activo")) as ProjectBizStatus,
         progress: r.progress ?? null,
+        startDate: r.start_date ?? null,
+        endDate: r.end_date ?? null,
+        contractTotal: r.contract_total === null || r.contract_total === undefined ? null : Number(r.contract_total),
       };
     })
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -102,7 +110,17 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // PAGINADO: PostgREST corta en 1000 filas — pasado ese punto, cerrados fuera
   // de la ventana se tratarían como abiertos y sus números congelados se
   // pisarían con data fresca de QBO.
-  type StRow = { qb_job_id: string; closed: boolean; income: number | null; cost: number | null; progress?: number | null; status?: string | null };
+  type StRow = {
+    qb_job_id: string;
+    closed: boolean;
+    income: number | null;
+    cost: number | null;
+    progress?: number | null;
+    status?: string | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    contract_total?: number | null;
+  };
   type StRes = { data: StRow[] | null; error: ({ message: string; code?: string }) | null };
   const readState = async (cols: string): Promise<StRes> => {
     const all: StRow[] = [];
@@ -119,7 +137,8 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     }
     return { data: all, error: null };
   };
-  let st = await readState("qb_job_id, closed, income, cost, progress, status");
+  let st = await readState("qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total");
+  if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress, status");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost");
   // Si el estado no se pudo leer por un error real, abortar antes de pisar los
@@ -135,6 +154,9 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       p.income = s.income === null ? null : Number(s.income);
       p.cost = s.cost === null ? null : Number(s.cost);
       p.margin = marginOf(p.income, p.cost);
+      p.startDate = s.start_date ?? null;
+      p.endDate = s.end_date ?? null;
+      p.contractTotal = s.contract_total === null || s.contract_total === undefined ? null : Number(s.contract_total);
     }
   }
 
@@ -217,7 +239,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   return { ok: true, projects: list.sort((a, b) => a.fullName.localeCompare(b.fullName)), financialsOk, year, syncedAt: Date.now() };
 }
 
-export async function getQboProjects(opts?: { force?: boolean }): Promise<QboProjectsResult> {
+export async function getQboProjects(opts?: { force?: boolean; allYears?: boolean }): Promise<QboProjectsResult> {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return { ok: false, error: "Sesión expirada" };
@@ -227,14 +249,19 @@ export async function getQboProjects(opts?: { force?: boolean }): Promise<QboPro
   // board ya saltaba al año siguiente (vacío).
   const year = Number(new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }).slice(0, 4));
 
-  if (!opts?.force) return loadFromDb(supabase, orgId, year); // abrir la página = base, sin QBO
+  if (!opts?.force) return loadFromDb(supabase, orgId, year, opts?.allYears); // abrir la página = base, sin QBO
 
   if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
   const inf = inflight.get(orgId);
   if (inf) return inf;
   const p: Promise<QboProjectsResult> = (async () => {
     try {
-      return await refresh(supabase, orgId, year);
+      const r = await refresh(supabase, orgId, year);
+      // El refresh trae el año actual de QBO; con allYears el board también
+      // muestra contratos arrastrados de años previos → releer TODO de la base
+      // (ya actualizada) para no perderlos tras "Actualizar".
+      if (r.ok && opts?.allYears) return loadFromDb(supabase, orgId, year, true);
+      return r;
     } catch (e) {
       return { ok: false as const, error: e instanceof Error ? e.message : "Error trayendo proyectos de QBO" };
     } finally {
@@ -288,6 +315,35 @@ export async function setProjectProgress(qbJobId: string, progress: number): Pro
   // Distinguir migración pendiente de un error real (antes TODO fallo decía
   // "falta la migración 0012" aunque fuera RLS o red).
   if (isMissingColumn(error)) return { ok: false, error: "Falta la migración 0012 (progress) — corre el SQL y reintenta" };
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+// Fechas del contrato + monto total (para el prorrateo multi-año). Manuales o
+// sembradas al enviar la cotización a QBO; no vienen de QuickBooks.
+export async function setProjectDates(
+  qbJobId: string,
+  input: { startDate: string | null; endDate: string | null; contractTotal: number | null },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Sesión expirada" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { ok: false, error: "Sin organización" };
+  if (input.startDate && input.endDate && input.endDate < input.startDate) {
+    return { ok: false, error: "La fecha de fin no puede ser antes del inicio." };
+  }
+  const total =
+    input.contractTotal === null || !Number.isFinite(input.contractTotal)
+      ? null
+      : Math.round(Math.max(0, input.contractTotal) * 100) / 100;
+  const { error } = (await supabase
+    .from("qbo_project_state")
+    .upsert(
+      { org_id: orgId, qb_job_id: qbJobId, start_date: input.startDate, end_date: input.endDate, contract_total: total },
+      { onConflict: "org_id,qb_job_id" },
+    )) as { error: { message: string; code?: string } | null };
+  if (isMissingColumn(error)) return { ok: false, error: "Faltan las migraciones 0022/0023 — corre el SQL y reintenta" };
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }

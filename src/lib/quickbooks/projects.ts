@@ -19,6 +19,9 @@ export type QboProject = {
   closed: boolean; // derivado: status === 'cerrado' → no se re-consulta a QBO
   status: ProjectBizStatus; // status de negocio editable en Reportme
   progress: number | null; // avance manual 0-100 (lo setea el equipo, no QBO)
+  startDate: string | null; // inicio del contrato (0022) — para prorrateo
+  endDate: string | null; // fin del contrato
+  contractTotal: number | null; // monto total del contrato (0023) — se prorratea
 };
 
 export type ProjectBizStatus = "activo" | "por_cobrar" | "cerrado";
@@ -73,6 +76,9 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         closed: false,
         status: "activo" as ProjectBizStatus,
         progress: null,
+        startDate: null,
+        endDate: null,
+        contractTotal: null,
       };
     });
 
