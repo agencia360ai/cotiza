@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectProgress, setProjectDates, type QboProjectsResult } from "./qbo-actions";
+import { getQboProjects, setProjectStatus, setProjectDates, type QboProjectsResult } from "./qbo-actions";
 import type { QboProject, ProjectBizStatus } from "@/lib/quickbooks/projects";
 import { effectiveDates, overlapFraction, type DateRange } from "@/lib/quickbooks/prorate";
 
@@ -110,14 +110,13 @@ function rangeFor(key: RangeKey, customFrom: string, customTo: string): DateRang
   }
 }
 
-type SortKey = "nombre" | "cliente" | "cobro" | "gasto" | "margen" | "avance" | "fin";
+type SortKey = "nombre" | "cliente" | "cobro" | "gasto" | "margen" | "fin";
 const SORT_LABEL: Record<SortKey, string> = {
   nombre: "Nombre A-Z",
   cliente: "Cliente A-Z",
   cobro: "Cobro (mayor)",
   gasto: "Gasto (mayor)",
   margen: "Margen (mayor)",
-  avance: "Avance (mayor)",
   fin: "Fecha de fin",
 };
 
@@ -138,7 +137,6 @@ export function QboProjectsBoard() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<string>("all");
   const [statusOv, setStatusOv] = useState<Map<string, ProjectBizStatus>>(new Map());
-  const [progressOv, setProgressOv] = useState<Map<string, number>>(new Map());
   const [datesOv, setDatesOv] = useState<Map<string, { startDate: string | null; endDate: string | null; contractTotal: number | null }>>(new Map());
   const [rowError, setRowError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -171,7 +169,6 @@ export function QboProjectsBoard() {
       setRes(r);
       // Solo limpiar los overrides cuando llegó data fresca que ya los trae.
       setStatusOv(new Map());
-      setProgressOv(new Map());
       setDatesOv(new Map());
     } catch (e) {
       setRefreshError(e instanceof Error ? e.message : "Se cortó la actualización — reintenta");
@@ -180,7 +177,6 @@ export function QboProjectsBoard() {
     }
   }
   const statusOf = (p: QboProject) => statusOv.get(p.id) ?? p.status;
-  const progressOf = (p: QboProject) => progressOv.get(p.id) ?? p.progress ?? 0;
   const datesOf = (p: QboProject) => {
     const ov = datesOv.get(p.id);
     return {
@@ -203,22 +199,6 @@ export function QboProjectsBoard() {
     } catch (e) {
       setStatusOv((m) => new Map(m).set(p.id, prev));
       setRowError(e instanceof Error ? e.message : "No se pudo guardar el estado — reintenta");
-    }
-  }
-  async function saveProgress(p: QboProject, v: number) {
-    const prev = progressOf(p);
-    setProgressOv((m) => new Map(m).set(p.id, v)); // optimista
-    try {
-      const r = await setProjectProgress(p.id, v);
-      if (!r.ok) {
-        setProgressOv((m) => new Map(m).set(p.id, prev));
-        setRowError(r.error);
-      } else {
-        setRowError(null);
-      }
-    } catch (e) {
-      setProgressOv((m) => new Map(m).set(p.id, prev));
-      setRowError(e instanceof Error ? e.message : "No se pudo guardar el avance — reintenta");
     }
   }
   async function saveDates(p: QboProject, v: { startDate: string | null; endDate: string | null; contractTotal: number | null }) {
@@ -311,8 +291,6 @@ export function QboProjectsBoard() {
           return -(e.gastoRango ?? -1);
         case "margen":
           return -(e.p.margin ?? -9);
-        case "avance":
-          return -progressOf(e.p);
         case "fin":
           return e.eff?.end ?? "9999";
       }
@@ -329,7 +307,7 @@ export function QboProjectsBoard() {
     });
     return arr;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, sort, statusOv, progressOv]);
+  }, [filtered, sort, statusOv]);
 
   // Resumen por rubro (sobre lo filtrado por rango/búsqueda/status, NO por tab —
   // las cards son el filtro de rubro). Montos PRORRATEADOS al rango.
@@ -590,11 +568,9 @@ export function QboProjectsBoard() {
                 e={e}
                 rangeActive={!!range}
                 status={statusOf(e.p)}
-                progress={progressOf(e.p)}
                 dates={datesOf(e.p)}
                 editing={editingDates === e.p.id}
                 onToggleEdit={() => setEditingDates((prev) => (prev === e.p.id ? null : e.p.id))}
-                onSaveProgress={(v) => saveProgress(e.p, v)}
                 onChangeStatus={(s) => changeStatus(e.p, s)}
                 onSaveDates={async (v) => {
                   const ok = await saveDates(e.p, v);
@@ -653,55 +629,6 @@ function StatusPicker({ value, onChange }: { value: ProjectBizStatus; onChange: 
           </option>
         ))}
       </select>
-    </div>
-  );
-}
-
-// Input de avance: escribes el número (0-100) y se guarda al salir del campo
-// o con Enter. Sin slider (arrastrar sin confirmar perdía el valor).
-function ProgressInput({ value, onSave, label }: { value: number; onSave: (v: number) => void; label: string }) {
-  const [draft, setDraft] = useState(String(value));
-  const [focused, setFocused] = useState(false);
-  // Sincronizar cuando el valor guardado cambia (tras guardar o Actualizar).
-  useEffect(() => {
-    if (!focused) setDraft(String(value));
-  }, [value, focused]);
-  const shown = Math.min(100, Math.max(0, Number(draft) || 0));
-  function commit() {
-    setFocused(false);
-    // Campo vacío o basura ("e", "-") = SIN CAMBIO, no 0: borrar y salir del
-    // campo no debe poner en cero un avance guardado.
-    const n = draft.trim() === "" ? NaN : Number(draft);
-    if (!Number.isFinite(n)) {
-      setDraft(String(value));
-      return;
-    }
-    const v = Math.min(100, Math.max(0, Math.round(n)));
-    setDraft(String(v));
-    if (v !== value) onSave(v);
-  }
-  return (
-    <div>
-      <div className="flex items-center gap-1">
-        <input
-          type="number"
-          min={0}
-          max={100}
-          value={draft}
-          onFocus={() => setFocused(true)}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          }}
-          aria-label={label}
-          className="w-12 rounded-md border border-slate-200 px-1.5 py-1 text-right text-sm font-bold tabular-nums text-slate-900 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-        />
-        <span className="text-xs font-semibold text-slate-400">%</span>
-      </div>
-      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-        <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${shown}%` }} />
-      </div>
     </div>
   );
 }
@@ -770,22 +697,18 @@ function ProjectRow({
   e,
   rangeActive,
   status,
-  progress,
   dates,
   editing,
   onToggleEdit,
-  onSaveProgress,
   onChangeStatus,
   onSaveDates,
 }: {
   e: Enriched;
   rangeActive: boolean;
   status: ProjectBizStatus;
-  progress: number;
   dates: { startDate: string | null; endDate: string | null; contractTotal: number | null };
   editing: boolean;
   onToggleEdit: () => void;
-  onSaveProgress: (v: number) => void;
   onChangeStatus: (s: ProjectBizStatus) => void;
   onSaveDates: (v: { startDate: string | null; endDate: string | null; contractTotal: number | null }) => Promise<void>;
 }) {
@@ -832,11 +755,6 @@ function ProjectRow({
               {e.eff?.asumidas ? "*" : ""}
             </button>
           </p>
-        </div>
-
-        {/* Avance manual — escribe el número y se guarda solo */}
-        <div className="w-24 shrink-0 sm:w-28">
-          <ProgressInput value={progress} onSave={onSaveProgress} label={`Avance de ${p.name}`} />
         </div>
 
         {/* Financiero — prorrateado al rango cuando el proyecto lo cruza */}
