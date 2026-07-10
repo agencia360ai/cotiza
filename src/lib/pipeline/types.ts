@@ -113,6 +113,8 @@ export type TenderRow = {
   rubro: Rubro | null;
   progress: number | null;
   converted_project_id: string | null;
+  qbo_job_id: string | null; // proyecto QBO creado desde una licitación ganada
+  qbo_sent_at: string | null;
 };
 
 export function formatMoney(n: number): string {

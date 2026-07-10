@@ -44,39 +44,17 @@ export type QboSendSuggestion = {
   yaEnviada: { qboJobId: string; at: string | null } | null;
 };
 
-// Sugerencia para el diálogo: correlativo + clientes padre + preselección.
-export async function suggestQboProjectSetup(quoteId: string): Promise<Result<QboSendSuggestion>> {
-  const c = await ctx();
-  if (!c.ok) return { error: c.error };
-  type Q = {
-    rubro: string | null;
-    year: number | null;
-    client_name: string | null;
-    client_std_name?: string | null;
-    description: string | null;
-    qbo_job_id?: string | null;
-    qbo_sent_at?: string | null;
-  };
-  const run = (cols: string) =>
-    c.supabase.from("sales_quotes").select(cols).eq("id", quoteId).eq("org_id", c.orgId).maybeSingle();
-  let res = (await run("rubro, year, client_name, description, qbo_job_id, qbo_sent_at, client:clients(name)")) as {
-    data: (Q & { client: { name: string } | null }) | null;
-    error: { message: string; code?: string } | null;
-  };
-  if (isMissingColumn(res.error)) {
-    res = (await run("rubro, year, client_name, description, client:clients(name)")) as typeof res;
-  }
-  if (res.error) return { error: res.error.message };
-  const q = res.data;
-  if (!q) return { error: "Cotización no encontrada" };
+type Ctx = { supabase: Awaited<ReturnType<typeof createClient>>; orgId: string };
 
-  // El rubro de contrato en QBO es DC o DM (los DS/DV no suelen ser proyectos);
-  // se respeta el rubro de la cotización con default DC.
-  const rubro = q.rubro === "DM" ? "DM" : "DC";
-  const year = q.year ?? new Date().getFullYear();
-  const clientName = q.client?.name ?? q.client_std_name ?? q.client_name ?? "";
-
-  let numero: string;
+// Núcleo de la sugerencia (compartido entre cotizaciones y licitaciones):
+// correlativo DC/DM desde QBO (o fallback a la base) + clientes padre + preselección.
+async function buildSuggestion(
+  c: Ctx,
+  src: { rubro: string | null; year: number | null; clientName: string; description: string | null; qboJobId: string | null; qboSentAt: string | null },
+): Promise<QboSendSuggestion> {
+  const rubro = src.rubro === "DM" ? "DM" : "DC"; // contrato QBO = DC o DM
+  const year = src.year ?? new Date().getFullYear();
+  let numero = "";
   let parents: QboParentOption[] = [];
   let desdeQbo = false;
   if (hasQboConfig()) {
@@ -88,11 +66,8 @@ export async function suggestQboProjectSetup(quoteId: string): Promise<Result<Qb
     } catch {
       numero = "";
     }
-  } else {
-    numero = "";
   }
   if (!numero) {
-    // Fallback: correlativo desde lo último sincronizado en la base.
     const { data: st } = (await c.supabase
       .from("qbo_project_state")
       .select("full_name, name")
@@ -102,9 +77,7 @@ export async function suggestQboProjectSetup(quoteId: string): Promise<Result<Qb
     const names = (st ?? []).map((r) => r.full_name ?? r.name ?? "").filter(Boolean);
     numero = nextContractNumber(names, rubro, year).numero;
   }
-
-  // Preselección del padre por nombre del cliente (contains en ambos sentidos).
-  const cn = norm(clientName);
+  const cn = norm(src.clientName);
   const matched =
     cn.length > 1
       ? parents.find((p) => {
@@ -112,21 +85,60 @@ export async function suggestQboProjectSetup(quoteId: string): Promise<Result<Qb
           return pn === cn || pn.includes(cn) || cn.includes(pn);
         })
       : undefined;
-
-  const desc = (q.description ?? "").trim();
-  const nombre = [numero, desc, clientName ? `- ${clientName}` : null].filter(Boolean).join(" ").slice(0, 100);
-
+  const desc = (src.description ?? "").trim();
+  const nombre = [numero, desc, src.clientName ? `- ${src.clientName}` : null].filter(Boolean).join(" ").slice(0, 100);
   return {
-    ok: true,
-    data: {
-      numero,
-      nombre,
-      parents,
-      matchedParentId: matched?.id ?? null,
-      desdeQbo,
-      yaEnviada: q.qbo_job_id ? { qboJobId: q.qbo_job_id, at: q.qbo_sent_at ?? null } : null,
-    },
+    numero,
+    nombre,
+    parents,
+    matchedParentId: matched?.id ?? null,
+    desdeQbo,
+    yaEnviada: src.qboJobId ? { qboJobId: src.qboJobId, at: src.qboSentAt } : null,
   };
+}
+
+// Sugerencia para el diálogo (cotización).
+export async function suggestQboProjectSetup(quoteId: string): Promise<Result<QboSendSuggestion>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  type Q = { rubro: string | null; year: number | null; client_name: string | null; description: string | null; qbo_job_id?: string | null; qbo_sent_at?: string | null; client: { name: string } | null };
+  const run = (cols: string) => c.supabase.from("sales_quotes").select(cols).eq("id", quoteId).eq("org_id", c.orgId).maybeSingle();
+  let res = (await run("rubro, year, client_name, description, qbo_job_id, qbo_sent_at, client:clients(name)")) as { data: Q | null; error: { message: string; code?: string } | null };
+  if (isMissingColumn(res.error)) res = (await run("rubro, year, client_name, description, client:clients(name)")) as typeof res;
+  if (res.error) return { error: res.error.message };
+  const q = res.data;
+  if (!q) return { error: "Cotización no encontrada" };
+  const data = await buildSuggestion(c, {
+    rubro: q.rubro,
+    year: q.year,
+    clientName: q.client?.name ?? q.client_name ?? "",
+    description: q.description,
+    qboJobId: q.qbo_job_id ?? null,
+    qboSentAt: q.qbo_sent_at ?? null,
+  });
+  return { ok: true, data };
+}
+
+// Sugerencia para el diálogo (licitación ganada).
+export async function suggestQboProjectSetupForTender(tenderId: string): Promise<Result<QboSendSuggestion>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  type T = { rubro: string | null; year: number | null; entity: string | null; objeto: string | null; qbo_job_id?: string | null; qbo_sent_at?: string | null; client: { name: string } | null };
+  const run = (cols: string) => c.supabase.from("tenders").select(cols).eq("id", tenderId).eq("org_id", c.orgId).maybeSingle();
+  let res = (await run("rubro, year, entity, objeto, qbo_job_id, qbo_sent_at, client:clients(name)")) as { data: T | null; error: { message: string; code?: string } | null };
+  if (isMissingColumn(res.error)) res = (await run("rubro, year, entity, objeto, client:clients(name)")) as typeof res;
+  if (res.error) return { error: res.error.message };
+  const t = res.data;
+  if (!t) return { error: "Licitación no encontrada" };
+  const data = await buildSuggestion(c, {
+    rubro: t.rubro,
+    year: t.year,
+    clientName: t.client?.name ?? t.entity ?? "",
+    description: t.objeto,
+    qboJobId: t.qbo_job_id ?? null,
+    qboSentAt: t.qbo_sent_at ?? null,
+  });
+  return { ok: true, data };
 }
 
 export type QboSendInput = {
@@ -143,35 +155,14 @@ export type QboSendInput = {
   notas: string | null;
 };
 
-// Crea el proyecto en QBO y deja todo enlazado. Guards: columnas de la 0022
-// presentes (ANTES de crear nada en QBO), cotización sin enviar todavía.
-export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null }>> {
-  const c = await ctx();
-  if (!c.ok) return { error: c.error };
-  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
-  if (!input.numero.trim() || !input.nombre.trim()) return { error: "Número y nombre del proyecto son obligatorios." };
-  if (!input.parentId && !input.newParentName?.trim()) {
-    return { error: "Elige el cliente de QBO o escribe el nombre del cliente nuevo." };
-  }
-
-  // Probe de la migración 0022 ANTES de tocar QBO: si falta, no queremos crear
-  // el proyecto y quedarnos sin dónde registrar el link (doble envío después).
-  const probe = (await c.supabase
-    .from("sales_quotes")
-    .select("id, qbo_job_id, status, amount_usd")
-    .eq("id", quoteId)
-    .eq("org_id", c.orgId)
-    .maybeSingle()) as {
-    data: { id: string; qbo_job_id: string | null; status: string; amount_usd: number | null } | null;
-    error: { message: string; code?: string } | null;
-  };
-  if (isMissingColumn(probe.error)) return { error: "Falta la migración 0022 (qbo_job_id) — corre el SQL y reintenta." };
-  if (probe.error) return { error: probe.error.message };
-  if (!probe.data) return { error: "Cotización no encontrada" };
-  if (probe.data.qbo_job_id) return { error: "Esta cotización ya fue enviada a QBO." };
-
-  // Cliente nuevo: crearlo primero (idempotente — si ya existe con ese nombre,
-  // se reusa) y colgar el proyecto de él.
+// Crea (cliente padre nuevo si aplica +) el proyecto en QBO y siembra
+// qbo_project_state. NO enlaza la tabla de origen — eso lo hace cada caller.
+// Compartido entre cotizaciones y licitaciones.
+async function createQboAndSyncState(
+  c: Ctx,
+  input: QboSendInput,
+  contractTotal: number | null,
+): Promise<{ error: string } | { ok: true; created: { id: string; name: string }; parentName: string; parentCreado: string | null; nowIso: string }> {
   let parentId = input.parentId;
   let parentName = input.parentName;
   let parentCreado: string | null = null;
@@ -200,28 +191,10 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "QBO no pudo crear el proyecto";
-    // Si el padre nuevo SÍ se creó, decirlo — para que el reintento use
-    // "cliente existente" y no se pierda el contexto.
     return { error: parentCreado ? `El cliente "${parentCreado}" se creó en QBO, pero el proyecto no: ${msg}` : msg };
   }
 
-  // Link en la cotización (compare-and-set sobre qbo_job_id null: dos clicks
-  // concurrentes no crean dos links; el segundo ve el guard y reporta).
   const nowIso = new Date().toISOString();
-  const { data: linked, error: linkErr } = (await c.supabase
-    .from("sales_quotes")
-    .update({ status: "aprobada", qbo_job_id: created.id, qbo_sent_at: nowIso })
-    .eq("id", quoteId)
-    .eq("org_id", c.orgId)
-    .is("qbo_job_id", null)
-    .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
-  if (linkErr) return { error: `El proyecto se creó en QBO (${created.name}) pero no se pudo enlazar: ${linkErr.message}` };
-  if (!linked || linked.length === 0) {
-    return { error: `Otro envío ganó la carrera — revisa el proyecto ${created.name} en QBO (puede haber quedado duplicado).` };
-  }
-
-  // Aparece en el board YA (sin esperar "Actualizar"): upsert del estado con lo
-  // que sabemos. income/cost null hasta el próximo refresh.
   const yy = input.numero.match(/(\d{2})\s*-/)?.[1];
   const stateRow: Record<string, unknown> = {
     org_id: c.orgId,
@@ -235,25 +208,110 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
     start_date: input.startDate || null,
     end_date: input.endDate || null,
     notes: input.notas?.trim() || null,
-    // Monto de contrato = el monto de la cotización: base del prorrateo
-    // multi-año en el board (editable después).
-    contract_total: probe.data.amount_usd === null ? null : Number(probe.data.amount_usd),
+    contract_total: contractTotal,
   };
   let up = await c.supabase.from("qbo_project_state").upsert(stateRow, { onConflict: "org_id,qb_job_id" });
   if (isMissingColumn(up.error)) {
-    // 0022/0023 en qbo_project_state pendientes: guardar sin fechas/notas/contrato.
     delete stateRow.start_date;
     delete stateRow.end_date;
     delete stateRow.notes;
     delete stateRow.contract_total;
     up = await c.supabase.from("qbo_project_state").upsert(stateRow, { onConflict: "org_id,qb_job_id" });
   }
-  // Un fallo acá no invalida el envío (el refresh lo trae igual) — no se reporta
-  // como error del flujo.
+  return { ok: true, created, parentName, parentCreado, nowIso };
+}
+
+// Crea el proyecto en QBO y deja todo enlazado. Guards: columnas de la 0022
+// presentes (ANTES de crear nada en QBO), cotización sin enviar todavía.
+export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
+  if (!input.numero.trim() || !input.nombre.trim()) return { error: "Número y nombre del proyecto son obligatorios." };
+  if (!input.parentId && !input.newParentName?.trim()) {
+    return { error: "Elige el cliente de QBO o escribe el nombre del cliente nuevo." };
+  }
+
+  // Probe de la migración 0022 ANTES de tocar QBO: si falta, no queremos crear
+  // el proyecto y quedarnos sin dónde registrar el link (doble envío después).
+  const probe = (await c.supabase
+    .from("sales_quotes")
+    .select("id, qbo_job_id, status, amount_usd")
+    .eq("id", quoteId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as {
+    data: { id: string; qbo_job_id: string | null; status: string; amount_usd: number | null } | null;
+    error: { message: string; code?: string } | null;
+  };
+  if (isMissingColumn(probe.error)) return { error: "Falta la migración 0022 (qbo_job_id) — corre el SQL y reintenta." };
+  if (probe.error) return { error: probe.error.message };
+  if (!probe.data) return { error: "Cotización no encontrada" };
+  if (probe.data.qbo_job_id) return { error: "Esta cotización ya fue enviada a QBO." };
+
+  const r = await createQboAndSyncState(c, input, probe.data.amount_usd === null ? null : Number(probe.data.amount_usd));
+  if ("error" in r) return { error: r.error };
+
+  // Link en la cotización (compare-and-set sobre qbo_job_id null: dos clicks
+  // concurrentes no crean dos links; el segundo ve el guard y reporta).
+  const { data: linked, error: linkErr } = (await c.supabase
+    .from("sales_quotes")
+    .update({ status: "aprobada", qbo_job_id: r.created.id, qbo_sent_at: r.nowIso })
+    .eq("id", quoteId)
+    .eq("org_id", c.orgId)
+    .is("qbo_job_id", null)
+    .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
+  if (linkErr) return { error: `El proyecto se creó en QBO (${r.created.name}) pero no se pudo enlazar: ${linkErr.message}` };
+  if (!linked || linked.length === 0) {
+    return { error: `Otro envío ganó la carrera — revisa el proyecto ${r.created.name} en QBO (puede haber quedado duplicado).` };
+  }
 
   revalidatePath("/potenciales");
   revalidatePath("/proyectos");
-  return { ok: true, data: { qboJobId: created.id, nombre: created.name, parentCreado } };
+  return { ok: true, data: { qboJobId: r.created.id, nombre: r.created.name, parentCreado: r.parentCreado } };
+}
+
+// Licitación GANADA → proyecto en QBO (mismo flujo que las cotizaciones).
+export async function sendTenderToQbo(tenderId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
+  if (!input.numero.trim() || !input.nombre.trim()) return { error: "Número y nombre del proyecto son obligatorios." };
+  if (!input.parentId && !input.newParentName?.trim()) {
+    return { error: "Elige el cliente de QBO o escribe el nombre del cliente nuevo." };
+  }
+
+  const probe = (await c.supabase
+    .from("tenders")
+    .select("id, qbo_job_id, amount_ref_usd")
+    .eq("id", tenderId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as {
+    data: { id: string; qbo_job_id: string | null; amount_ref_usd: number | null } | null;
+    error: { message: string; code?: string } | null;
+  };
+  if (isMissingColumn(probe.error)) return { error: "Falta la migración 0024 (qbo_job_id en tenders) — corre el SQL y reintenta." };
+  if (probe.error) return { error: probe.error.message };
+  if (!probe.data) return { error: "Licitación no encontrada" };
+  if (probe.data.qbo_job_id) return { error: "Esta licitación ya fue enviada a QBO." };
+
+  const r = await createQboAndSyncState(c, input, probe.data.amount_ref_usd === null ? null : Number(probe.data.amount_ref_usd));
+  if ("error" in r) return { error: r.error };
+
+  const { data: linked, error: linkErr } = (await c.supabase
+    .from("tenders")
+    .update({ qbo_job_id: r.created.id, qbo_sent_at: r.nowIso })
+    .eq("id", tenderId)
+    .eq("org_id", c.orgId)
+    .is("qbo_job_id", null)
+    .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
+  if (linkErr) return { error: `El proyecto se creó en QBO (${r.created.name}) pero no se pudo enlazar: ${linkErr.message}` };
+  if (!linked || linked.length === 0) {
+    return { error: `Otro envío ganó la carrera — revisa el proyecto ${r.created.name} en QBO (puede haber quedado duplicado).` };
+  }
+
+  revalidatePath("/potenciales");
+  revalidatePath("/proyectos");
+  return { ok: true, data: { qboJobId: r.created.id, nombre: r.created.name, parentCreado: r.parentCreado } };
 }
 
 // ── Seguimiento de enviadas viejas (action points) ────────────────────────────
