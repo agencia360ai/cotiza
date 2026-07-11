@@ -520,7 +520,15 @@ export function QboProjectsBoard() {
         {refreshError ? (
           <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-            <span>No se pudo actualizar desde QuickBooks ({refreshError}). Se muestran los últimos datos guardados.</span>
+            <span className="flex-1">No se pudo actualizar desde QuickBooks ({refreshError}). Se muestran los últimos datos guardados.</span>
+            <button
+              type="button"
+              onClick={() => load(true)}
+              disabled={loading}
+              className="shrink-0 rounded-md bg-amber-100 px-2 py-1 font-semibold text-amber-800 hover:bg-amber-200 disabled:opacity-50"
+            >
+              Reintentar
+            </button>
           </div>
         ) : null}
         {rowError ? (

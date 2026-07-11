@@ -7,6 +7,9 @@ const nextConfig: NextConfig = {
   experimental: {
     serverActions: { bodySizeLimit: "8mb" },
   },
+  // El cliente MCP de QBO usa undici directo (connect timeout configurable);
+  // dejarlo sin bundlear para que use la copia real de node_modules.
+  serverExternalPackages: ["undici"],
   // El renderer del PDF (pdf-lib) lee el membrete del filesystem en runtime;
   // hay que incluirlo explícitamente en el bundle serverless de esas rutas.
   outputFileTracingIncludes: {

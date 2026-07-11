@@ -137,7 +137,7 @@ function AgingChip({ days, compact, neutral }: { days: number; compact?: boolean
       title={`Enviada hace ${days} día${days === 1 ? "" : "s"}${neutral ? "" : " sin respuesta"}`}
     >
       <Clock className="size-3" />
-      {days === 0 ? "hoy" : `hace ${days} d`}
+      {days === 0 ? "hoy" : compact ? `${days} d` : `hace ${days} d`}
     </span>
   );
 }
@@ -594,12 +594,12 @@ function CotizacionesTab({
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
                 <SortTh label="Nº" k="quote_number" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Cliente" k="client_name" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
-                <th className="hidden px-3 py-2.5 font-semibold lg:table-cell">Sucursal</th>
-                <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Descripción</th>
+                <th className="hidden px-3 py-2.5 font-semibold 2xl:table-cell">Sucursal</th>
+                <th className="hidden px-3 py-2.5 font-semibold xl:table-cell">Descripción</th>
                 <th className="px-3 py-2.5 font-semibold">Rubro</th>
                 <SortTh label="Monto" k="amount_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estado" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
-                <SortTh label="Fecha de envío" k="sent_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} className="hidden sm:table-cell" />
+                <SortTh label="Fecha de envío" k="sent_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
                 <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
@@ -627,42 +627,46 @@ function CotizacionesTab({
                       onClick={() => setEditing(x)}
                       className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
                     >
+                      {/* Nº en una línea y los chips debajo: en línea inflaban la
+                          columna ~80px y empujaban Fecha de envío fuera de la tarjeta. */}
                       <td className="whitespace-nowrap px-3 py-2.5 font-medium text-slate-900">
-                        <span className="inline-flex items-center gap-1.5">
-                          {x.quote_number}
-                          {rev > 0 ? (
-                            <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 ring-1 ring-inset ring-blue-600/20">
-                              Rev {rev}
-                            </span>
-                          ) : null}
-                          {g.older.length > 0 ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleExpand(x.id);
-                              }}
-                              className={cn(
-                                "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
-                                g.dupCount > 0
-                                  ? "bg-amber-50 text-amber-700 ring-amber-600/20 hover:bg-amber-100"
-                                  : "bg-slate-100 text-slate-500 ring-slate-200 hover:bg-slate-200",
-                              )}
-                              title={g.dupCount > 0 ? "Incluye posibles duplicados" : "Ver versiones anteriores"}
-                            >
-                              <ChevronDown className={cn("size-3 transition-transform", isOpen && "rotate-180")} />
-                              {g.older.length}
-                            </button>
-                          ) : null}
-                        </span>
+                        <div>{x.quote_number}</div>
+                        {rev > 0 || g.older.length > 0 ? (
+                          <div className="mt-0.5 flex items-center gap-1">
+                            {rev > 0 ? (
+                              <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 ring-1 ring-inset ring-blue-600/20">
+                                Rev {rev}
+                              </span>
+                            ) : null}
+                            {g.older.length > 0 ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleExpand(x.id);
+                                }}
+                                className={cn(
+                                  "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset",
+                                  g.dupCount > 0
+                                    ? "bg-amber-50 text-amber-700 ring-amber-600/20 hover:bg-amber-100"
+                                    : "bg-slate-100 text-slate-500 ring-slate-200 hover:bg-slate-200",
+                                )}
+                                title={g.dupCount > 0 ? "Incluye posibles duplicados" : "Ver versiones anteriores"}
+                              >
+                                <ChevronDown className={cn("size-3 transition-transform", isOpen && "rotate-180")} />
+                                {g.older.length}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </td>
-                      <td className="max-w-[180px] px-3 py-2.5">
+                      <td className="max-w-[160px] px-3 py-2.5">
                         <div className="truncate text-slate-700">{x.client_std_name ?? x.client_name ?? "—"}</div>
                         {!x.client_id && x.client_name ? (
                           <span className="text-[10px] font-medium text-amber-600">sin estandarizar</span>
                         ) : null}
                       </td>
-                      <td className="hidden max-w-[150px] truncate px-3 py-2.5 text-slate-500 lg:table-cell">
+                      <td className="hidden max-w-[120px] truncate px-3 py-2.5 text-slate-500 2xl:table-cell" title={x.location_name ?? undefined}>
                         {x.location_name ? (
                           <span className="inline-flex items-center gap-1">
                             <MapPin className="size-3 text-slate-400" />
@@ -672,7 +676,7 @@ function CotizacionesTab({
                           "—"
                         )}
                       </td>
-                      <td className="hidden max-w-[280px] truncate px-3 py-2.5 text-slate-500 md:table-cell">
+                      <td className="hidden max-w-[190px] truncate px-3 py-2.5 text-slate-500 xl:table-cell" title={x.description ?? undefined}>
                         {x.description ?? "—"}
                       </td>
                       <td className="px-3 py-2.5">{x.rubro ? <RubroChip rubro={x.rubro} /> : "—"}</td>
@@ -690,7 +694,7 @@ function CotizacionesTab({
                           ) : null}
                         </div>
                       </td>
-                      <td className="hidden whitespace-nowrap px-3 py-2.5 text-slate-500 sm:table-cell">
+                      <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">
                         <div>{fmtDate(x.sent_date)}</div>
                         {daysSince(x.sent_date) !== null ? (
                           <div className="mt-0.5">
@@ -723,7 +727,7 @@ function CotizacionesTab({
                           ) : null}
                           {x.qbo_job_id ? (
                             <span
-                              className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
+                              className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
                               title={`En QBO desde ${x.qbo_sent_at ? fmtDate(x.qbo_sent_at.slice(0, 10)) : "—"}`}
                             >
                               <CheckCircle2 className="size-3.5" /> QBO
@@ -767,15 +771,15 @@ function CotizacionesTab({
                                   </span>
                                 </span>
                               </td>
-                              <td className="max-w-[180px] truncate px-3 py-2 text-xs">{o.client_std_name ?? o.client_name ?? "—"}</td>
-                              <td className="hidden px-3 py-2 text-xs lg:table-cell">{o.location_name ?? "—"}</td>
-                              <td className="hidden max-w-[280px] truncate px-3 py-2 text-xs md:table-cell">{o.description ?? "—"}</td>
+                              <td className="max-w-[160px] truncate px-3 py-2 text-xs">{o.client_std_name ?? o.client_name ?? "—"}</td>
+                              <td className="hidden max-w-[120px] truncate px-3 py-2 text-xs 2xl:table-cell">{o.location_name ?? "—"}</td>
+                              <td className="hidden max-w-[190px] truncate px-3 py-2 text-xs xl:table-cell">{o.description ?? "—"}</td>
                               <td className="px-3 py-2 text-xs">{o.rubro ?? "—"}</td>
                               <td className="whitespace-nowrap px-3 py-2 text-right text-xs tabular-nums">
                                 {o.amount_usd === null ? "—" : formatMoneyExact(o.amount_usd)}
                               </td>
                               <td className="px-3 py-2 text-xs">{QUOTE_STATUS_LABEL[o.status]}</td>
-                              <td className="hidden whitespace-nowrap px-3 py-2 text-xs sm:table-cell">{fmtDate(o.sent_date)}</td>
+                              <td className="whitespace-nowrap px-3 py-2 text-xs">{fmtDate(o.sent_date)}</td>
                               <td className="px-3 py-2"></td>
                             </tr>
                           );
