@@ -117,11 +117,14 @@ function daysSince(iso: string | null): number | null {
   return d >= 0 ? d : 0;
 }
 
-function AgingChip({ days, compact }: { days: number; compact?: boolean }) {
+// `neutral`: la cotización ya tuvo resolución (aprobada/rechazada/convertida) —
+// se muestra la antigüedad informativa sin colores de urgencia, que quedan
+// reservados para enviadas esperando respuesta.
+function AgingChip({ days, compact, neutral }: { days: number; compact?: boolean; neutral?: boolean }) {
   const cls =
-    days >= STALE_DAYS
+    !neutral && days >= STALE_DAYS
       ? "bg-rose-50 text-rose-700 ring-rose-600/20"
-      : days >= 8
+      : !neutral && days >= 8
         ? "bg-amber-50 text-amber-700 ring-amber-600/20"
         : "bg-slate-100 text-slate-500 ring-slate-200";
   return (
@@ -131,7 +134,7 @@ function AgingChip({ days, compact }: { days: number; compact?: boolean }) {
         compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
         cls,
       )}
-      title={`Enviada hace ${days} día${days === 1 ? "" : "s"} sin respuesta`}
+      title={`Enviada hace ${days} día${days === 1 ? "" : "s"}${neutral ? "" : " sin respuesta"}`}
     >
       <Clock className="size-3" />
       {days === 0 ? "hoy" : `hace ${days} d`}
@@ -596,7 +599,7 @@ function CotizacionesTab({
                 <th className="px-3 py-2.5 font-semibold">Rubro</th>
                 <SortTh label="Monto" k="amount_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estado" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
-                <SortTh label="Envío" k="sent_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} className="hidden sm:table-cell" />
+                <SortTh label="Fecha de envío" k="sent_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} className="hidden sm:table-cell" />
                 <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
@@ -689,9 +692,9 @@ function CotizacionesTab({
                       </td>
                       <td className="hidden whitespace-nowrap px-3 py-2.5 text-slate-500 sm:table-cell">
                         <div>{fmtDate(x.sent_date)}</div>
-                        {x.status === "enviada" && daysSince(x.sent_date) !== null ? (
+                        {daysSince(x.sent_date) !== null ? (
                           <div className="mt-0.5">
-                            <AgingChip days={daysSince(x.sent_date)!} compact />
+                            <AgingChip days={daysSince(x.sent_date)!} compact neutral={x.status !== "enviada"} />
                           </div>
                         ) : null}
                       </td>
@@ -1272,6 +1275,11 @@ function QuoteDrawer({
           </Field>
           <Field label="Fecha de envío">
             <input type="date" className={inputCls} value={f.sent_date ?? ""} onChange={(e) => set("sent_date", e.target.value || null)} />
+            {daysSince(f.sent_date) !== null ? (
+              <span className="mt-1.5 block">
+                <AgingChip days={daysSince(f.sent_date)!} neutral={f.status !== "enviada"} />
+              </span>
+            ) : null}
           </Field>
         </div>
 

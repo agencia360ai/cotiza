@@ -239,7 +239,9 @@ async function createQboCustomer(f: CreateFields): Promise<{ id: string; name: s
   for (const args of variants) {
     let result: QboToolResult;
     try {
-      result = await callQboTool(tool.name, args);
+      // retries: 0 — un create no es idempotente; ante un fallo de transporte
+      // la verificación por findByName decide, no un reintento a ciegas.
+      result = await callQboTool(tool.name, args, { retries: 0 });
     } catch (e) {
       lastErr = e instanceof Error ? e.message : String(e);
       continue; // error de transporte: probar la siguiente variante
