@@ -6,7 +6,15 @@
 // Nota: el endpoint está bloqueado por la política de egress del entorno de
 // desarrollo de Claude, pero NO desde Vercel; esto corre en runtime de servidor.
 
+import { fetch as undiciFetch, Agent } from "undici";
+
 const PROTOCOL_VERSION = "2025-06-18";
+
+// El fetch nativo corta la CONEXIÓN a los 10s (UND_ERR_CONNECT_TIMEOUT) — se
+// queda corto si el gateway está despertando de un cold start, que tarda
+// 30-60s. Agent propio con margen de conexión + pool keep-alive: initialize →
+// notifications → tools/call (y todo el loop de financials) reusan el socket.
+const qboAgent = new Agent({ connect: { timeout: 25_000 } });
 
 export function hasQboConfig(): boolean {
   return !!process.env.QBO_MCP_URL;
@@ -36,6 +44,17 @@ export class QboTransportError extends Error {
   }
 }
 
+// Traducción de los códigos de red más comunes a algo accionable.
+const CODIGO_HUMANO: Record<string, string> = {
+  UND_ERR_CONNECT_TIMEOUT: "no aceptó la conexión a tiempo (puede estar arrancando)",
+  UND_ERR_HEADERS_TIMEOUT: "aceptó la conexión pero no respondió",
+  UND_ERR_SOCKET: "cortó la conexión a mitad de la llamada",
+  ECONNREFUSED: "rechazó la conexión (¿servicio caído?)",
+  ECONNRESET: "cortó la conexión a mitad de la llamada",
+  ENOTFOUND: "no se encontró el host (revisa QBO_MCP_URL)",
+  EAI_AGAIN: "falló el DNS (transitorio)",
+};
+
 function describeFetchError(e: unknown, method: string): string {
   if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
     return `el gateway de QBO no respondió — timeout en ${method}`;
@@ -50,7 +69,9 @@ function describeFetchError(e: unknown, method: string): string {
       : typeof cause?.errors?.[0]?.code === "string"
         ? cause.errors[0].code
         : null;
-  return `sin conexión con el gateway de QBO — ${code ?? "fallo de red"} en ${method}`;
+  const humano = code ? CODIGO_HUMANO[code] : null;
+  const detalle = humano ? `${humano} · ${code}` : (code ?? "fallo de red");
+  return `sin conexión con el gateway de QBO — ${detalle} en ${method}`;
 }
 
 // Estos status vienen del proxy/infra, no de la lógica de QBO: transitorios.
@@ -100,15 +121,16 @@ async function rpc(
   const payload: Record<string, unknown> = { jsonrpc: "2.0", method, params };
   if (id !== null) payload.id = id; // las notificaciones no llevan id
 
-  const r = await fetch(endpoint(), {
+  // undiciFetch (no el fetch parcheado de Next) para poder pasar el dispatcher
+  // con el connect timeout largo. Total generoso (conexión fría + respuesta),
+  // pero un gateway colgado no debe congelar la server action: con el breaker
+  // abierto se corta a los 8s.
+  const r = await undiciFetch(endpoint(), {
     method: "POST",
     headers,
     body: JSON.stringify(payload),
-    // sin cache; cada llamada es una operación
-    cache: "no-store",
-    // Un gateway colgado no debe congelar la server action hasta que Vercel la
-    // mate (y con el inflight compartido, colgar a todos los que esperan).
-    signal: AbortSignal.timeout(gatewayCaido() ? 8_000 : 30_000),
+    dispatcher: qboAgent,
+    signal: AbortSignal.timeout(gatewayCaido() ? 8_000 : 40_000),
   }).catch((e) => {
     throw new QboTransportError(describeFetchError(e, method));
   });
@@ -170,7 +192,10 @@ async function withSession<T>(
         gatewayCaidoHasta = Date.now() + 60_000;
         throw e;
       }
-      await new Promise((res) => setTimeout(res, 500 * intento));
+      // Pausa larga a propósito: si el gateway está despertando de un cold
+      // start, los 3 intentos (con conexión de hasta 25s cada uno) cubren
+      // una ventana de ~80s de arranque.
+      await new Promise((res) => setTimeout(res, 2_000 * intento));
     }
   }
 }
