@@ -25,6 +25,44 @@ type RpcResponse = {
   error?: { code: number; message: string; data?: unknown };
 };
 
+// Fallo de TRANSPORTE (red caída, timeout, gateway ocupado) vs error de
+// aplicación. Solo los de transporte se reintentan: un rechazo de QBO va a
+// devolver lo mismo, pero un "fetch failed" suele ser un blip que al segundo
+// intento pasa — y el mensaje crudo de undici no le dice nada al usuario.
+export class QboTransportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QboTransportError";
+  }
+}
+
+function describeFetchError(e: unknown, method: string): string {
+  if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
+    return `el gateway de QBO no respondió — timeout en ${method}`;
+  }
+  // undici tira TypeError "fetch failed" con la causa real (ECONNRESET,
+  // ENOTFOUND…) escondida en e.cause — o en cause.errors[0] cuando el host
+  // resuelve a varias direcciones (AggregateError).
+  const cause = (e as { cause?: { code?: unknown; errors?: Array<{ code?: unknown }> } } | null)?.cause;
+  const code =
+    typeof cause?.code === "string"
+      ? cause.code
+      : typeof cause?.errors?.[0]?.code === "string"
+        ? cause.errors[0].code
+        : null;
+  return `sin conexión con el gateway de QBO — ${code ?? "fallo de red"} en ${method}`;
+}
+
+// Estos status vienen del proxy/infra, no de la lógica de QBO: transitorios.
+const HTTP_TRANSITORIO = new Set([429, 502, 503, 504]);
+
+// Circuit breaker: cuando el gateway está caído/colgado, un refresh recorre
+// docenas de llamadas y a 3 intentos × 30s cada una revienta el maxDuration de
+// la server action. Tras agotar reintentos, por 60s las llamadas van directo
+// (sin reintentos) y con timeout corto para fallar rápido.
+let gatewayCaidoHasta = 0;
+const gatewayCaido = () => Date.now() < gatewayCaidoHasta;
+
 // El servidor puede responder application/json o text/event-stream. En SSE el
 // payload viene en líneas `data:`; tomamos el último objeto JSON-RPC con result/error.
 function parseRpcPayload(contentType: string, body: string): RpcResponse {
@@ -70,12 +108,17 @@ async function rpc(
     cache: "no-store",
     // Un gateway colgado no debe congelar la server action hasta que Vercel la
     // mate (y con el inflight compartido, colgar a todos los que esperan).
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(gatewayCaido() ? 8_000 : 30_000),
+  }).catch((e) => {
+    throw new QboTransportError(describeFetchError(e, method));
   });
 
   const newSession = r.headers.get("mcp-session-id") ?? sessionId;
 
   if (!r.ok) {
+    if (HTTP_TRANSITORIO.has(r.status)) {
+      throw new QboTransportError(`el gateway de QBO devolvió HTTP ${r.status} en ${method}`);
+    }
     const txt = await r.text().catch(() => "");
     throw new Error(`QBO MCP ${method} → HTTP ${r.status}${txt ? `: ${txt.slice(0, 200)}` : ""}`);
   }
@@ -92,22 +135,44 @@ async function rpc(
 
 // Handshake + una llamada. Robusto a gateways con o sin sesión: si initialize
 // devuelve Mcp-Session-Id, mandamos notifications/initialized y lo arrastramos.
-async function withSession<T>(fn: (session: string | undefined) => Promise<T>): Promise<T> {
-  const init = await rpc(
-    "initialize",
-    {
-      protocolVersion: PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: "cotiza", version: "1.0" },
-    },
-    1,
-    undefined,
-  );
-  const session = init.sessionId;
-  if (session) {
-    await rpc("notifications/initialized", {}, null, session).catch(() => {});
+// Los fallos de transporte se reintentan con handshake fresco (la sesión pudo
+// morir con la conexión); retries: 0 para operaciones no idempotentes (creates).
+async function withSession<T>(
+  fn: (session: string | undefined) => Promise<T>,
+  opts?: { retries?: number },
+): Promise<T> {
+  const intentos = 1 + (gatewayCaido() ? 0 : (opts?.retries ?? 2));
+  for (let intento = 1; ; intento++) {
+    try {
+      const init = await rpc(
+        "initialize",
+        {
+          protocolVersion: PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: "cotiza", version: "1.0" },
+        },
+        1,
+        undefined,
+      );
+      const session = init.sessionId;
+      if (session) {
+        await rpc("notifications/initialized", {}, null, session).catch(() => {});
+      }
+      const out = await fn(session);
+      gatewayCaidoHasta = 0;
+      return out;
+    } catch (e) {
+      if (!(e instanceof QboTransportError)) {
+        gatewayCaidoHasta = 0; // la respuesta llegó al gateway: la conexión está bien
+        throw e;
+      }
+      if (intento >= intentos) {
+        gatewayCaidoHasta = Date.now() + 60_000;
+        throw e;
+      }
+      await new Promise((res) => setTimeout(res, 500 * intento));
+    }
   }
-  return fn(session);
 }
 
 export type QboTool = { name: string; description?: string; inputSchema?: unknown };
@@ -128,11 +193,15 @@ export type QboToolResult = {
   isError?: boolean;
 };
 
-export async function callQboTool(name: string, args: Record<string, unknown> = {}): Promise<QboToolResult> {
+export async function callQboTool(
+  name: string,
+  args: Record<string, unknown> = {},
+  opts?: { retries?: number },
+): Promise<QboToolResult> {
   return withSession(async (session) => {
     const { res } = await rpc("tools/call", { name, arguments: args }, 3, session);
     return (res?.result as QboToolResult) ?? {};
-  });
+  }, opts);
 }
 
 // Conveniencia: muchos tools de QBO devuelven JSON dentro de content[].text.
