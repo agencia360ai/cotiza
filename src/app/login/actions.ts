@@ -28,23 +28,7 @@ export async function signIn(_: ActionResult | null, formData: FormData): Promis
   redirect("/");
 }
 
-export async function signUp(_: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  const parsed = credentialsSchema.safeParse({
-    email: formData.get("email"),
-    password: formData.get("password"),
-  });
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
-  }
-
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signUp(parsed.data);
-
-  if (error) return { error: error.message };
-
-  if (!data.session) {
-    return { success: "Te enviamos un email para confirmar tu cuenta." };
-  }
-
-  redirect("/onboarding");
-}
+// Registro público CERRADO: las cuentas se crean solo por invitación desde
+// Configuración → Miembros (API admin con service role, no depende de que los
+// signups estén habilitados en Supabase). Complemento del lado de Supabase:
+// Authentication → Sign In / Providers → desactivar "Allow new users to sign up".
