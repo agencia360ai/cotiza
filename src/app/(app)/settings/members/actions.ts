@@ -44,7 +44,12 @@ export async function inviteMember(input: {
         data: ListUsersData | null;
         error: { message: string } | null;
       }>;
-      createUser: (p: { email: string; password: string; email_confirm: boolean }) => Promise<{
+      createUser: (p: {
+        email: string;
+        password: string;
+        email_confirm: boolean;
+        app_metadata?: Record<string, unknown>;
+      }) => Promise<{
         data: { user: { id: string } | null } | null;
         error: { message: string } | null;
       }>;
@@ -67,12 +72,15 @@ export async function inviteMember(input: {
     page += 1;
   }
 
-  // 2) Crearlo si no existía
+  // 2) Crearlo si no existía. `invited: true` lo exime del candado de dominio
+  // y del auto-join de la migración 0025 — la membresía y el rol los pone
+  // este flujo, y puede ser de cualquier dominio (externos incluidos).
   if (!userId) {
     const { data, error } = await adminAuth.admin.createUser({
       email,
       password: input.password,
       email_confirm: true,
+      app_metadata: { invited: true },
     });
     if (error || !data?.user) return { error: error?.message ?? "No se pudo crear el usuario" };
     userId = data.user.id;
@@ -168,7 +176,7 @@ export async function removeMember(memberId: string): Promise<Result> {
       .eq("org_id", ctx.orgId)
       .eq("role", "owner")) as unknown as { count: number | null };
     if ((ownerCount ?? 0) <= 1) {
-      return { error: "No podés quitar al último owner de la organización" };
+      return { error: "No puedes quitar al último owner de la organización" };
     }
   }
 
