@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasPanamaCompraConfig, pcLogin, pcListProcesos, pcPliegoRaw, extractPrecioBreakdown, type PcRegistro } from "./client";
-import { matchKeywords, classifyWithAI } from "./relevance";
+import { matchKeywords, classifyWithAI, esVehicular } from "./relevance";
 
 // Sync de licitaciones del gobierno — compartido entre la action (botón
 // Actualizar) y el cron diario. Incremental: si ya hay data, corta el paginado
@@ -129,24 +129,33 @@ export async function syncGovTenders(
     const nuevos = rows.filter((r) => !have.has(r.num_proceso)).length;
 
     // 3) Clasificar lo sin clasificar (keywords fuertes directo; resto IA).
-    //    También respeta el time-box: la IA en lotes puede tomar >1 min con
-    //    cientos de pendientes — lo que no alcance queda para la próxima corrida.
+    //    SOLO ABIERTAS: clasificar cerradas es tirar presupuesto (no se pueden
+    //    licitar) y peor: al ordenar por cierre ascendente, las cientos de ya
+    //    cerradas se comían el límite ANTES de llegar a las vivas — las HVAC
+    //    próximas a cerrar quedaban "sin clasificar" para siempre. El match por
+    //    keywords es gratis (regex) y resuelve las inequívocas al instante;
+    //    solo lo ambiguo va a la IA (con presupuesto de tiempo). Límite alto
+    //    para drenar el backlog de abiertas en pocas corridas.
     let relevantes = 0;
     const { data: pend } = (await db
       .from("gov_tenders")
       .select("id, titulo")
       .eq("org_id", orgId)
       .is("relevante", null)
+      .or(`fecha_cierre.is.null,fecha_cierre.gte.${nowIso}`)
       .order("fecha_cierre", { ascending: true, nullsFirst: false })
-      .limit(600)) as { data: { id: string; titulo: string | null }[] | null };
+      .limit(1200)) as { data: { id: string; titulo: string | null }[] | null };
     const pending = pend ?? [];
     if (pending.length > 0) {
       const updates: { id: string; relevante: boolean; motivo: string | null }[] = [];
       const paraIA: { i: number; titulo: string }[] = [];
       pending.forEach((p, i) => {
         const kws = matchKeywords(p.titulo);
-        if (kws.strong.length > 0) updates.push({ id: p.id, relevante: true, motivo: kws.strong.slice(0, 3).join(", ") });
-        else if (p.titulo) paraIA.push({ i, titulo: p.titulo });
+        // Keyword fuerte + contexto vehicular (A/A de auto/flota) → no auto-marcar;
+        // la IA distingue el A/A automotriz del HVAC de edificios.
+        if (kws.strong.length > 0 && !esVehicular(p.titulo)) {
+          updates.push({ id: p.id, relevante: true, motivo: kws.strong.slice(0, 3).join(", ") });
+        } else if (p.titulo) paraIA.push({ i, titulo: p.titulo });
         else updates.push({ id: p.id, relevante: false, motivo: null });
       });
       const ai = vencido() ? new Map<number, { relevante: boolean; motivo: string | null }>() : await classifyWithAI(paraIA, deadline);
