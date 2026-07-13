@@ -94,6 +94,7 @@ export async function syncGovTenders(
         const { registros, truncado } = await pcListProcesos(session, {
           ...t,
           shouldStop: incremental ? (nums) => nums.every((n) => have.has(n)) : undefined,
+          deadlineTs: deadline,
         });
         porTipo[t.key] = registros.length;
         if (truncado) truncados.push(t.key);

@@ -106,13 +106,18 @@ export async function classifyWithAI(
     if (deadlineTs && Date.now() > deadlineTs) break; // lo que falte va en la próxima corrida
     const batch = items.slice(start, start + 25);
     try {
-      const response = await anthropic.messages.parse({
-        model: pickModel("micro"),
-        max_tokens: 4000,
-        system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: batch.map((b) => `${b.i}. ${b.titulo}`).join("\n") }],
-        output_config: { format: zodOutputFormat(schema) },
-      });
+      const response = await anthropic.messages.parse(
+        {
+          model: pickModel("micro"),
+          max_tokens: 4000,
+          system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
+          messages: [{ role: "user", content: batch.map((b) => `${b.i}. ${b.titulo}`).join("\n") }],
+          output_config: { format: zodOutputFormat(schema) },
+        },
+        // Sin esto el default del SDK es 10 min: un lote colgado justo antes
+        // del deadline revienta el maxDuration de la función.
+        { timeout: 45_000 },
+      );
       for (const r of response.parsed_output?.resultados ?? []) {
         out.set(r.i, { relevante: r.relevante, motivo: r.relevante ? r.motivo : `${r.categoria} — ${r.motivo}` });
       }
