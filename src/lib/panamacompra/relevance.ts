@@ -30,6 +30,14 @@ const AMBIG_KEYWORDS = [
   "difusor", "difusores", "termostato", "aislamiento termico",
 ];
 
+// A/A AUTOMOTRIZ: "aire acondicionado" del vehículo (auto, bus, flota) NO es el
+// rubro de DICEC (HVAC de edificios). Un título con keyword fuerte + contexto
+// vehicular NO se auto-marca relevante: se manda a la IA para que decida.
+const VEHICULAR_KEYWORDS = [
+  "vehiculo", "vehicular", "automotriz", "automovil", "flota vehicular",
+  "microbus", "autobus", "motocicleta",
+];
+
 function toRegex(kw: string): RegExp {
   // límite de palabra + tolerancia de plural simple en la última palabra
   const escaped = norm(kw).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -37,6 +45,15 @@ function toRegex(kw: string): RegExp {
 }
 const STRONG = STRONG_KEYWORDS.map((k) => ({ k, re: toRegex(k) }));
 const AMBIG = AMBIG_KEYWORDS.map((k) => ({ k, re: toRegex(k) }));
+const VEHICULAR = VEHICULAR_KEYWORDS.map(toRegex);
+
+// true si el título habla de un vehículo (A/A de auto/bus/flota) — para no
+// auto-marcarlo relevante por el keyword fuerte "aire acondicionado".
+export function esVehicular(titulo: string | null): boolean {
+  if (!titulo) return false;
+  const t = norm(titulo);
+  return VEHICULAR.some((re) => re.test(t));
+}
 
 export function matchKeywords(titulo: string | null): { strong: string[]; ambiguous: string[] } {
   if (!titulo) return { strong: [], ambiguous: [] };
@@ -86,6 +103,7 @@ RELEVANTE = el TRABAJO CONTRATADO en sí es sobre estos sistemas:
 - Ductos DE AIRE (fabricación, instalación, limpieza, aislamiento)
 
 NO RELEVANTE (aunque suene parecido):
+- Aire acondicionado AUTOMOTRIZ / de vehículos (autos, buses, microbús, flota vehicular, "marca/modelo/placa") → no es HVAC de edificios
 - Ductos pluviales, eléctricos, viaductos/vigaductos, alcantarillado → obra civil
 - Bombas de pozos, aguas residuales, estaciones de bombeo sanitarias → Medio Ambiente y Agua
 - Pintura, techos, impermeabilización, obra civil en instalaciones frías (el trabajo no es el sistema de frío)
