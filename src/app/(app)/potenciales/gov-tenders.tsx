@@ -786,7 +786,17 @@ export function GovTendersBoard({
       }
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Se cortó la actualización — reintenta");
+      // "An unexpected response…" = Vercel mató la función a mitad de camino.
+      // Lo ya bajado quedó guardado; correr de nuevo continúa donde quedó.
+      const cortada = e instanceof Error && /unexpected response/i.test(e.message);
+      setError(
+        cortada
+          ? "El escaneo tardó más de lo permitido y el servidor lo cortó — lo que alcanzó a traer ya quedó guardado. Corre el escaneo otra vez para continuar donde quedó."
+          : e instanceof Error
+            ? e.message
+            : "Se cortó la actualización — reintenta",
+      );
+      if (cortada) await load().catch(() => {});
     } finally {
       setRefreshing(false);
     }

@@ -46,6 +46,9 @@ export async function pcLogin(): Promise<PcSession> {
     headers: baseHeaders(),
     body: JSON.stringify({ usuario: user, contrasena: pass }),
     cache: "no-store",
+    // El gobierno a veces cuelga la conexión sin responder: sin timeout, una
+    // sola request colgada se come el maxDuration entero de la función.
+    signal: AbortSignal.timeout(25_000),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`PanamaCompra login HTTP ${res.status}: ${text.slice(0, 200)}`);
@@ -97,6 +100,10 @@ export async function pcListProcesos(
     maxPages?: number;
     // Incremental: si una página entera ya es conocida, corta (lo nuevo sale primero).
     shouldStop?: (pageNums: string[]) => boolean;
+    // Time-box del caller (epoch ms): en escaneos completos un solo tipo puede
+    // tener 20+ páginas y con el gobierno lento comerse el maxDuration entero
+    // — cortar por página, no solo entre tipos.
+    deadlineTs?: number;
   },
 ): Promise<{ registros: PcRegistro[]; truncado: boolean }> {
   const out: PcRegistro[] = [];
@@ -104,6 +111,10 @@ export async function pcListProcesos(
   let truncado = false;
   const maxPages = opts.maxPages ?? 10;
   for (let page = 0; page < maxPages; page++) {
+    if (opts.deadlineTs && Date.now() > opts.deadlineTs) {
+      truncado = true; // quedaban páginas — la próxima corrida las trae
+      break;
+    }
     const filtro: Record<string, number> = {
       idEstado: Number(opts.idEstado),
       idTipoProceso: Number(opts.idTipoProceso),
@@ -114,6 +125,7 @@ export async function pcListProcesos(
       headers: baseHeaders(session),
       body: JSON.stringify({ registrosPorPagina: 50, valorSiguiente, filtro }),
       cache: "no-store",
+      signal: AbortSignal.timeout(25_000),
     });
     if (!res.ok) throw new Error(`PanamaCompra lista ${res.status}`);
     const j = (await res.json()) as {
@@ -144,6 +156,7 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
     method: "GET",
     headers: baseHeaders(session),
     cache: "no-store",
+    signal: AbortSignal.timeout(25_000),
   });
   if (!res.ok) {
     if (res.status === 404) return null; // el pliego genuinamente no está
@@ -177,6 +190,8 @@ export async function pcDownloadArchivo(
       cookie: `userToken=${session.userToken}; userSesionId=${session.userSesionId}`,
     },
     cache: "no-store",
+    // Más generoso que las llamadas JSON: los PDFs del pliego pueden pesar.
+    signal: AbortSignal.timeout(90_000),
   });
   if (!res.ok) {
     if (res.status === 404) return null;
