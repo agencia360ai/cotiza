@@ -4,7 +4,6 @@ import { createClient } from "@/lib/supabase/server";
 import { listMemberships } from "@/lib/org-context";
 import { imageUrl } from "@/lib/maintenance/types";
 import { setActiveOrg } from "./actions";
-import { CreateOrgCard } from "./create-org-card";
 
 export const dynamic = "force-dynamic";
 
@@ -53,10 +52,10 @@ export default async function SelectOrgPage() {
         <header className="mb-8 text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Cotiza · Reportme.ai</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-            Elegí la organización
+            Elige la organización
           </h1>
           <p className="mt-2 text-sm text-slate-500">
-            Tenés acceso a varias organizaciones — seleccioná en cuál querés trabajar
+            Tienes acceso a varias organizaciones — selecciona en cuál quieres trabajar
           </p>
         </header>
 
@@ -98,8 +97,6 @@ export default async function SelectOrgPage() {
             );
           })}
         </div>
-
-        <CreateOrgCard />
 
         <p className="mt-8 text-center text-xs text-slate-400">
           <Box className="mr-1 inline size-3" />
