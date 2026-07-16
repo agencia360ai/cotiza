@@ -26,6 +26,7 @@ import {
   ScanSearch,
   Search,
   Snowflake,
+  Sparkles,
   Target,
   User,
   Wind,
@@ -77,6 +78,14 @@ function diasParaCierre(iso: string | null): number | null {
   if (!iso) return null;
   return Math.ceil((+new Date(iso) - Date.now()) / 86400000);
 }
+
+// Días desde que ENTRÓ a la lista (created_at). Nueva = agregada en las últimas
+// 48 h, para distinguir lo que acaba de aparecer de lo arrastrado.
+function diasDesdeAgregada(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.floor((Date.now() - +new Date(iso)) / 86400000);
+}
+const FECHA_AGREGADA = new Intl.DateTimeFormat("es-PA", { day: "numeric", month: "short" });
 
 function estaAbierta(r: GovTenderRow): boolean {
   return !r.fecha_cierre || +new Date(r.fecha_cierre) >= Date.now();
@@ -327,6 +336,17 @@ function DetallePliego({
   onVerMisLicitaciones: () => void;
 }) {
   const d = r.detalle;
+  // Título COMPLETO al expandir (en la fila va recortado a 2 líneas).
+  const encabezado = (
+    <div className="rounded-xl border border-slate-100 bg-white p-3.5">
+      <p className="text-sm font-semibold leading-snug text-slate-900">{r.titulo ?? "—"}</p>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+        <span className="tabular-nums">{r.num_proceso}</span>
+        {r.entidad ? <span>· {r.entidad}</span> : null}
+        {r.created_at ? <span>· agregada {FECHA_AGREGADA.format(new Date(r.created_at))}</span> : null}
+      </div>
+    </div>
+  );
   const proceso = (
     <ProcesoLicitacion
       r={r}
@@ -366,6 +386,7 @@ function DetallePliego({
   const hayEntidad = ent.dependencia || ent.unidadCompra || ent.provincia || ent.direccion;
   return (
     <div className="space-y-3">
+      {encabezado}
       {proceso}
       <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between">
@@ -498,6 +519,8 @@ function TenderTr({
   onVerMisLicitaciones: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
+  const diasAgregada = diasDesdeAgregada(r.created_at);
+  const esNueva = diasAgregada !== null && diasAgregada <= 2;
   // "Cerrada" por hora exacta (no por día redondeado): una que cerró hace 3h
   // tiene dias=0 pero ya NO está abierta — no debe decir "cierra hoy".
   const cerrada = !estaAbierta(r) && !!r.fecha_cierre;
@@ -540,6 +563,16 @@ function TenderTr({
           <div className="min-w-[240px] max-w-xl">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-semibold tabular-nums text-slate-500">{r.num_proceso}</span>
+              {esNueva ? (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white" title={`Agregada ${r.created_at ? FECHA_AGREGADA.format(new Date(r.created_at)) : ""}`}>
+                  <Sparkles className="size-2.5" /> Nueva
+                </span>
+              ) : null}
+              {siguiendo ? (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700" title="Ya está en Mis Licitaciones">
+                  <CheckCircle2 className="size-2.5" /> En Mis Licit.
+                </span>
+              ) : null}
               <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-600/20 md:hidden">
                 {(r.tipo && TIPO_SHORT[r.tipo]) ?? r.tipo ?? "—"}
               </span>
@@ -558,7 +591,14 @@ function TenderTr({
               ) : null}
             </div>
             <p className="mt-1 text-sm font-medium leading-snug text-slate-900 line-clamp-2">{r.titulo ?? "—"}</p>
-            <p className="mt-0.5 truncate text-xs text-slate-500">{r.entidad ?? "—"}</p>
+            <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
+              <span className="truncate">{r.entidad ?? "—"}</span>
+              {r.created_at ? (
+                <span className="shrink-0 whitespace-nowrap text-[10px] text-slate-400">
+                  · agregada {diasAgregada === 0 ? "hoy" : diasAgregada === 1 ? "ayer" : FECHA_AGREGADA.format(new Date(r.created_at))}
+                </span>
+              ) : null}
+            </p>
           </div>
         </td>
         <td className="hidden px-2 py-3 align-top md:table-cell">
@@ -630,33 +670,13 @@ function TenderTr({
                 href={r.url}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
                 className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
                 title="Ver en PanamaCompra"
               >
                 <ExternalLink className="size-4" />
               </a>
             ) : null}
-            {siguiendo ? (
-              <button
-                type="button"
-                onClick={onVerMisLicitaciones}
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20 transition-colors hover:bg-emerald-100"
-                title="Ya está en Mis Licitaciones — abrir"
-              >
-                <CheckCircle2 className="size-3.5" /> En Mis Licit.
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={onParticipar}
-                disabled={busy}
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-indigo-600 px-2 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
-                title="Participar: mover a Mis Licitaciones"
-              >
-                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Flag className="size-3.5" />}
-                Participar
-              </button>
-            )}
           </div>
         </td>
       </tr>
