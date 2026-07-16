@@ -11,11 +11,14 @@ export type Db = SupabaseClient<any, any, any>;
 
 // Topes generosos (50 procesos por página): el corte incremental hace que el
 // costo diario sea bajo; el tope solo protege el serverless en escaneos llenos.
+// maxPages = tope POR PASADA. Con cursores reanudables (0026) el escaneo
+// completo continúa entre corridas, así que estos topes solo acotan cuánto
+// avanza cada pasada; el ciclo entero cubre TODAS las páginas en varios loops.
 const TIPOS: { idEstado: string; idTipoProceso: string; enviada?: string; key: string; maxPages: number }[] = [
   { idEstado: "36", idTipoProceso: "7", key: "licitacion_publica", maxPages: 20 },
-  { idEstado: "36", idTipoProceso: "6", key: "compra_menor_50k", maxPages: 16 },
+  { idEstado: "36", idTipoProceso: "6", key: "compra_menor_50k", maxPages: 20 },
   { idEstado: "1011", idTipoProceso: "4", enviada: "1", key: "compra_menor_10k", maxPages: 24 },
-  { idEstado: "15", idTipoProceso: "2", key: "programada", maxPages: 8 },
+  { idEstado: "15", idTipoProceso: "2", key: "programada", maxPages: 30 },
 ];
 
 // tipo guardado → idTipoProceso de la API (lo usan el backfill y la evaluación).
@@ -81,23 +84,49 @@ export async function syncGovTenders(
     // para recuperar cualquier cosa que el corte incremental se haya perdido.
     const incremental = have.size > 0 && !opts?.full;
 
+    // Cursores de paginación (SOLO escaneo completo): permiten CONTINUAR entre
+    // corridas en vez de re-topar siempre el mismo cap → el escaneo "lo hace
+    // todo" en varios loops sin timeoutear.
+    const cursores = new Map<string, { cursor: string | null; done: boolean }>();
+    if (opts?.full) {
+      const { data: cur } = (await db
+        .from("gov_scan_cursors")
+        .select("tipo, cursor, done")
+        .eq("org_id", orgId)) as { data: { tipo: string; cursor: string | null; done: boolean }[] | null };
+      for (const c of cur ?? []) cursores.set(c.tipo, { cursor: c.cursor, done: c.done });
+    }
+
     // 1) Traer tipos; corte temprano cuando la página entera ya es conocida.
     const byNum = new Map<string, { r: PcRegistro; tipo: string; idTipoProceso: string }>();
     const porTipo: Record<string, number> = {};
     const truncados: string[] = [];
     for (const t of TIPOS) {
+      // Escaneo completo: saltar los tipos ya AGOTADOS este ciclo (no re-listar).
+      if (opts?.full && cursores.get(t.key)?.done) continue;
       if (vencido()) {
         truncados.push(t.key); // no dio el tiempo para este tipo → hay más
         continue;
       }
       try {
-        const { registros, truncado } = await pcListProcesos(session, {
+        const cs = cursores.get(t.key);
+        const { registros, truncado, cursor, agotado } = await pcListProcesos(session, {
           ...t,
           shouldStop: incremental ? (nums) => nums.every((n) => have.has(n)) : undefined,
           deadlineTs: deadline,
+          startCursor: opts?.full ? (cs?.cursor ?? undefined) : undefined,
         });
         porTipo[t.key] = registros.length;
-        if (truncado) truncados.push(t.key);
+        if (opts?.full) {
+          // Persistir avance: done si se agotó el listado; si no, guardar cursor
+          // para continuar en la próxima pasada (y marcarlo como pendiente).
+          await db.from("gov_scan_cursors").upsert(
+            { org_id: orgId, tipo: t.key, cursor: agotado ? null : cursor, done: agotado, updated_at: new Date().toISOString() },
+            { onConflict: "org_id,tipo" },
+          );
+          if (!agotado) truncados.push(t.key);
+        } else if (truncado) {
+          truncados.push(t.key);
+        }
         for (const r of registros) {
           const num = (r.numProcesoOriginal || r.numProceso || "").trim();
           if (num && !byNum.has(num)) byNum.set(num, { r, tipo: t.key, idTipoProceso: t.idTipoProceso });
@@ -105,6 +134,11 @@ export async function syncGovTenders(
       } catch {
         /* un tipo caído no tumba el sync */
       }
+    }
+    // Ciclo completo (todos los tipos agotados): resetear los cursores para que
+    // el próximo escaneo arranque fresco (recobra removidos/actualizados).
+    if (opts?.full && truncados.length === 0) {
+      await db.from("gov_scan_cursors").update({ done: false, cursor: null }).eq("org_id", orgId);
     }
     const list = Array.from(byNum.entries());
 

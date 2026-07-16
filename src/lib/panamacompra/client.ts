@@ -104,11 +104,16 @@ export async function pcListProcesos(
     // tener 20+ páginas y con el gobierno lento comerse el maxDuration entero
     // — cortar por página, no solo entre tipos.
     deadlineTs?: number;
+    // Paginación reanudable: arrancar desde este cursor (valorSiguiente) en vez
+    // de la página 0, para que el escaneo completo avance entre corridas en vez
+    // de re-topar siempre el mismo cap.
+    startCursor?: string;
   },
-): Promise<{ registros: PcRegistro[]; truncado: boolean }> {
+): Promise<{ registros: PcRegistro[]; truncado: boolean; cursor: string | null; agotado: boolean }> {
   const out: PcRegistro[] = [];
-  let valorSiguiente = "";
+  let valorSiguiente = opts.startCursor ?? "";
   let truncado = false;
+  let agotado = false;
   const maxPages = opts.maxPages ?? 10;
   for (let page = 0; page < maxPages; page++) {
     if (opts.deadlineTs && Date.now() > opts.deadlineTs) {
@@ -134,15 +139,20 @@ export async function pcListProcesos(
     const regs = j.result?.registros ?? [];
     out.push(...regs);
     const next = j.result?.valorInicial;
-    if (!next || regs.length === 0) break;
+    if (!next || regs.length === 0) {
+      agotado = true; // llegamos al final natural del listado
+      valorSiguiente = "";
+      break;
+    }
+    valorSiguiente = next;
     if (opts.shouldStop) {
       const nums = regs.map((r) => (r.numProcesoOriginal || r.numProceso || "").trim()).filter(Boolean);
       if (nums.length > 0 && opts.shouldStop(nums)) break;
     }
     if (page === maxPages - 1) truncado = true; // quedaban páginas después del tope
-    valorSiguiente = next;
   }
-  return { registros: out, truncado };
+  // cursor para reanudar: null si se agotó (o cortó incremental sin más que traer).
+  return { registros: out, truncado, cursor: agotado ? null : valorSiguiente || null, agotado };
 }
 
 // Detalle del pliego (componentes de página). Devuelve el JSON crudo; el
