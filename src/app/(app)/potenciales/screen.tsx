@@ -54,6 +54,7 @@ import {
   deleteQuote,
   convertQuoteToProject,
   updateTender,
+  createManualTender,
   setTenderStatus,
   listMyTenders,
 } from "./actions";
@@ -1929,6 +1930,7 @@ function LicitacionesTab({
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortState<TSortKey>>({ key: "amount_ref_usd", dir: "desc" });
   const [editing, setEditing] = useState<TenderRow | null>(null);
+  const [creating, setCreating] = useState(false);
   const [sendingTenderQbo, setSendingTenderQbo] = useState<TenderRow | null>(null);
 
   // Cambio rápido de estatus desde la fila (optimista + revierte si falla).
@@ -1987,7 +1989,7 @@ function LicitacionesTab({
     { k: "gobierno" as const, label: "Potenciales del gobierno", icon: Landmark, badge: govBadge },
   ];
   const toggle = (
-    <div className="mb-4 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1 text-sm font-semibold shadow-sm">
+    <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1 text-sm font-semibold shadow-sm">
       {tabs.map(({ k, label, icon: Icon, badge }) => (
         <button
           key={k}
@@ -2018,7 +2020,7 @@ function LicitacionesTab({
   if (vista === "gobierno") {
     return (
       <>
-        {toggle}
+        <div className="mb-4">{toggle}</div>
         <GovTendersBoard
           onStats={setGovBadge}
           onParticipated={async () => {
@@ -2033,7 +2035,17 @@ function LicitacionesTab({
 
   return (
     <>
-      {toggle}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        {toggle}
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800"
+          title="Agregar una licitación a mano (ya participaste, no vino de PanamaCompra)"
+        >
+          <Plus className="size-4" /> Agregar licitación
+        </button>
+      </div>
       <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Vivas" value={String(kpis.vivas)} sub="presentadas / en revisión" icon={Clock} accent="#2563EB" />
         <Kpi label="Ganadas" value={String(kpis.ganadas)} sub={formatMoneyExact(kpis.montoGanadas)} icon={CheckCircle2} accent="#10B981" />
@@ -2160,6 +2172,17 @@ function LicitacionesTab({
           onSaved={(u) => {
             setTenders((prev) => prev.map((x) => (x.id === u.id ? u : x)));
             setEditing(null);
+          }}
+        />
+      ) : null}
+
+      {creating ? (
+        <NewTenderDrawer
+          clients={clients}
+          onClose={() => setCreating(false)}
+          onCreated={(t) => {
+            setTenders((prev) => [t, ...prev]);
+            setCreating(false);
           }}
         />
       ) : null}
@@ -2399,6 +2422,199 @@ function GovLicitacionPanel({ tenderId }: { tenderId: string }) {
         )}
       </div>
     </div>
+  );
+}
+
+// Alta MANUAL de una licitación a Mis Licitaciones (procesos donde ya se
+// participó y no vinieron de PanamaCompra). A diferencia del drawer de edición,
+// acá SÍ se capturan entidad/objeto/acto/modalidad.
+function NewTenderDrawer({
+  clients,
+  onClose,
+  onCreated,
+}: {
+  clients: ClientOpt[];
+  onClose: () => void;
+  onCreated: (t: TenderRow) => void;
+}) {
+  const [f, setF] = useState({
+    acto_number: "",
+    entity: "",
+    objeto: "",
+    modalidad: "" as Modalidad | "",
+    status: "presentada" as TenderStatus,
+    amount_ref_usd: null as number | null,
+    delivery_date: null as string | null,
+    rubro: null as Rubro | null,
+    folder_url: "",
+    notes: "",
+    client_id: null as string | null,
+    execution_status: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) {
+    setF((prev) => ({ ...prev, [k]: v }));
+  }
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await createManualTender({
+        acto_number: f.acto_number || null,
+        entity: f.entity || null,
+        objeto: f.objeto || null,
+        modalidad: f.modalidad || null,
+        status: f.status,
+        amount_ref_usd: f.amount_ref_usd,
+        delivery_date: f.delivery_date,
+        rubro: f.rubro,
+        folder_url: f.folder_url || null,
+        notes: f.notes || null,
+        client_id: f.client_id,
+        execution_status: f.execution_status || null,
+      });
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      const clientName = f.client_id ? clients.find((c) => c.id === f.client_id)?.name ?? null : null;
+      // Construir la fila para prepender sin recargar todo.
+      const row: TenderRow = {
+        id: r.data.id,
+        acto_number: f.acto_number || null,
+        year: f.delivery_date ? Number(f.delivery_date.slice(0, 4)) : new Date().getFullYear(),
+        modalidad: f.modalidad || null,
+        entity: f.entity || null,
+        client_id: f.client_id,
+        client_std_name: clientName,
+        location_id: null,
+        location_name: null,
+        location_text: null,
+        objeto: f.objeto || null,
+        status: f.status,
+        execution_status: f.execution_status || null,
+        amount_ref_usd: f.amount_ref_usd,
+        delivery_date: f.delivery_date,
+        notes: f.notes || null,
+        folder_url: f.folder_url || null,
+        rubro: f.rubro,
+        progress: 0,
+        converted_project_id: null,
+        qbo_job_id: null,
+        qbo_sent_at: null,
+      };
+      onCreated(row);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo crear la licitación");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Drawer title="Agregar licitación" onClose={onClose}>
+      <div className="space-y-3">
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          Para licitaciones donde ya participaste y no vinieron de PanamaCompra. Con al menos la entidad o el objeto basta.
+        </p>
+        <Field label="Entidad contratante" hint="quién licita (ej. Caja de Seguro Social)">
+          <input className={inputCls} value={f.entity} onChange={(e) => set("entity", e.target.value)} />
+        </Field>
+        <Field label="Objeto">
+          <textarea rows={2} className={inputCls} value={f.objeto} onChange={(e) => set("objeto", e.target.value)} placeholder="Qué se licita…" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Nº de acto" hint="opcional">
+            <input className={inputCls} value={f.acto_number} onChange={(e) => set("acto_number", e.target.value)} />
+          </Field>
+          <Field label="Modalidad">
+            <select className={inputCls} value={f.modalidad} onChange={(e) => set("modalidad", e.target.value as Modalidad | "")}>
+              <option value="">—</option>
+              {MODALIDADES.map((m) => (
+                <option key={m} value={m}>
+                  {MODALIDAD_LABEL[m]}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <Field label="Cliente" hint="entidad estandarizada (opcional)">
+          <select
+            className={inputCls}
+            value={f.client_id ?? ""}
+            onChange={(e) => set("client_id", e.target.value || null)}
+          >
+            <option value="">— Sin cliente estandarizado —</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Estatus">
+            <select className={inputCls} value={f.status} onChange={(e) => set("status", e.target.value as TenderStatus)}>
+              {TENDER_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {TENDER_STATUS_LABEL[s]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Rubro">
+            <select className={inputCls} value={f.rubro ?? ""} onChange={(e) => set("rubro", (e.target.value || null) as Rubro | null)}>
+              <option value="">—</option>
+              {RUBRO_KEYS.map((r) => (
+                <option key={r} value={r}>
+                  {RUBROS[r].label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Monto referencial">
+            <input
+              type="number"
+              step="0.01"
+              className={inputCls}
+              value={f.amount_ref_usd ?? ""}
+              onChange={(e) => set("amount_ref_usd", e.target.value === "" ? null : Number(e.target.value))}
+            />
+          </Field>
+          <Field label="Fecha (entrega / cierre)">
+            <input type="date" className={inputCls} value={f.delivery_date ?? ""} onChange={(e) => set("delivery_date", e.target.value || null)} />
+          </Field>
+        </div>
+        <Field label="Estatus de ejecución" hint="OC en espera, Terminado, En ejecución…">
+          <input className={inputCls} value={f.execution_status} onChange={(e) => set("execution_status", e.target.value)} />
+        </Field>
+        <Field label="Carpeta (Dropbox)">
+          <input className={inputCls} placeholder="https://…" value={f.folder_url} onChange={(e) => set("folder_url", e.target.value)} />
+        </Field>
+        <Field label="Comentarios">
+          <textarea rows={2} className={inputCls} value={f.notes} onChange={(e) => set("notes", e.target.value)} />
+        </Field>
+        {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
+        <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+            Agregar
+          </button>
+          <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </Drawer>
   );
 }
 
