@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   RefreshCw,
   Loader2,
@@ -140,6 +140,12 @@ export function QboProjectsBoard() {
   const [datesOv, setDatesOv] = useState<Map<string, { startDate: string | null; endDate: string | null; contractTotal: number | null }>>(new Map());
   const [rowError, setRowError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  // Barra de progreso del refresh de QBO. El refresh es UNA sola llamada que
+  // vuelve al final (no hay progreso granular real), así que la barra avanza
+  // por tiempo estimado (easing hacia 92%) y se completa al llegar la respuesta
+  // — sobre todo útil cuando el gateway estaba dormido y tarda.
+  const [refreshPct, setRefreshPct] = useState<number | null>(null);
+  const refreshTimer = useRef<number | null>(null);
 
   // Filtros / orden / búsqueda / rango.
   const [q, setQ] = useState("");
@@ -150,9 +156,31 @@ export function QboProjectsBoard() {
   const [customTo, setCustomTo] = useState("");
   const [editingDates, setEditingDates] = useState<string | null>(null);
 
+  function pararBarra(completar: boolean) {
+    if (refreshTimer.current) {
+      window.clearInterval(refreshTimer.current);
+      refreshTimer.current = null;
+    }
+    if (completar) {
+      setRefreshPct(100);
+      window.setTimeout(() => setRefreshPct(null), 1200);
+    } else {
+      setRefreshPct(null);
+    }
+  }
+
   async function load(force = false) {
     setLoading(true);
     setRefreshError(null);
+    if (force) {
+      setRefreshPct(4);
+      if (refreshTimer.current) window.clearInterval(refreshTimer.current);
+      // Easing hacia 92%: rápido al inicio, desacelerando — nunca "llena" hasta
+      // que la respuesta real dispara el 100%. Reasegura que algo está pasando.
+      refreshTimer.current = window.setInterval(() => {
+        setRefreshPct((p) => (p === null ? p : Math.min(92, p + (92 - p) * 0.06)));
+      }, 400);
+    }
     try {
       const r = await getQboProjects({ force, allYears: true });
       const teniaData = res?.ok && res.projects.length > 0;
@@ -174,8 +202,12 @@ export function QboProjectsBoard() {
       setRefreshError(e instanceof Error ? e.message : "Se cortó la actualización — reintenta");
     } finally {
       setLoading(false);
+      if (force) pararBarra(true);
     }
   }
+  useEffect(() => () => {
+    if (refreshTimer.current) window.clearInterval(refreshTimer.current);
+  }, []);
   const statusOf = (p: QboProject) => statusOv.get(p.id) ?? p.status;
   const datesOf = (p: QboProject) => {
     const ov = datesOv.get(p.id);
@@ -360,10 +392,24 @@ export function QboProjectsBoard() {
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
           title="Trae los datos de QuickBooks y los guarda. Abrir la página usa lo guardado, no consulta QBO."
         >
-          {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-          Actualizar
+          {refreshPct !== null ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+          {refreshPct !== null ? "Actualizando…" : "Actualizar"}
         </button>
       </div>
+
+      {refreshPct !== null ? (
+        <div className="mb-3 rounded-lg border border-slate-100 bg-white px-3 py-2 shadow-sm">
+          <div className="mb-1 flex items-center justify-between text-[11px]">
+            <span className="font-semibold text-slate-600">
+              Consultando QuickBooks… {refreshPct < 90 ? "(puede tardar si el servicio estaba en reposo)" : "casi listo"}
+            </span>
+            <span className="tabular-nums text-slate-400">{Math.round(refreshPct)}%</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${refreshPct}%` }} />
+          </div>
+        </div>
+      ) : null}
 
       {/* Filtros grandes por rubro (con cobro prorrateado al rango). */}
       {hasProjects ? (
