@@ -139,6 +139,7 @@ export type GovTenderRow = {
   precio_ref: number | null;
   url: string | null;
   seen_at: string | null;
+  created_at: string | null; // cuándo se agregó por PRIMERA vez (el upsert no lo toca)
   relevante: boolean | null;
   relevancia_motivo: string | null;
   converted_tender_id: string | null;
@@ -152,13 +153,13 @@ export type GovTenderRow = {
 
 // Column sets de más completo a más básico (fallback por migraciones pendientes).
 const GOV_COLSETS = [
-  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter",
-  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis",
-  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
-  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
-  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id, eval",
-  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, relevante, relevancia_motivo, converted_tender_id",
-  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, converted_tender_id",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id",
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, converted_tender_id",
 ];
 const PAGE_SIZE = 1000;
 
@@ -212,6 +213,7 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
     return {
       ...r,
       precio_ref: r.precio_ref === null ? null : Number(r.precio_ref),
+      created_at: r.created_at ?? null,
       relevante: r.relevante ?? null,
       relevancia_motivo: r.relevancia_motivo ?? null,
       eval: r.eval ?? null,
