@@ -23,7 +23,6 @@ import {
   Mail,
   Phone,
   RefreshCw,
-  ScanSearch,
   Search,
   Snowflake,
   Sparkles,
@@ -726,7 +725,9 @@ export function GovTendersBoard({
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
   const [folderBusy, setFolderBusy] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
-  const [truncWarn, setTruncWarn] = useState<string | null>(null);
+  // Progreso del escaneo (loop reanudable): pct 0-100 + mensaje de corrida.
+  const [scanPct, setScanPct] = useState<number | null>(null);
+  const [scanMsg, setScanMsg] = useState<string>("");
 
   // Sweet spot parametrizable en la página; persiste por navegador.
   const [ssMin, setSsMin] = useState(SWEET_DEFAULT.min);
@@ -777,48 +778,63 @@ export function GovTendersBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // try/finally en TODOS los handlers: una acción que RECHAZA (red caída,
-  // redeploy, función matada a los 300s) no debe dejar el botón girando eterno.
-  async function refresh(full = false) {
-    setRefreshing(full ? "full" : "inc");
+  // Escaneo con LOOP automático: repite el escaneo completo (paginación
+  // reanudable por cursor) hasta agotar todas las páginas — así "lo hace todo"
+  // aunque tome varias corridas, sin el viejo aviso de "corre otra vez". La
+  // barra de progreso avanza a medida que cada tipo de proceso se completa.
+  const TIPOS_TOTAL = 4;
+  async function refresh() {
+    setRefreshing("full");
     setError(null);
     setLastRefresh(null);
-    setTruncWarn(null);
+    setScanPct(2);
+    setScanMsg("Escaneando PanamaCompra…");
+    let ultima: Awaited<ReturnType<typeof refreshGovTenders>> | null = null;
+    let cortada = false;
     try {
-      const r = await refreshGovTenders(full);
-      if ("error" in r) {
-        setError(r.error);
-        return;
-      }
-      const desglose = Object.entries(r.data.porTipo)
-        .map(([k, n]) => `${TIPO_SHORT[k] ?? k} ${n}`)
-        .join(" · ");
-      setLastRefresh(
-        `${r.data.total} procesos (${desglose}) · ${r.data.nuevos} nuevos · ${r.data.relevantes} relevantes clasificados` +
-          (r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos traídos` : "") +
-          (r.data.pendientesPrecio > 0 ? ` · quedan ~${r.data.pendientesPrecio} sin monto (toca Actualizar de nuevo)` : ""),
-      );
-      if (r.data.truncados.length > 0) {
-        setTruncWarn(
-          `Hay más páginas en PanamaCompra para: ${r.data.truncados.map((k) => TIPO_SHORT[k] ?? k).join(", ")}. ` +
-            `Corre "Escaneo completo" otra vez para seguir trayendo.`,
+      for (let pasada = 1; pasada <= 8; pasada++) {
+        const r = await refreshGovTenders(true);
+        ultima = r;
+        if ("error" in r) {
+          setError(r.error);
+          break;
+        }
+        const listos = TIPOS_TOTAL - r.data.truncados.length;
+        setScanPct(Math.max(5, Math.round((listos / TIPOS_TOTAL) * 100)));
+        setScanMsg(
+          `Corrida ${pasada} · ${r.data.relevantes} relevantes${r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos` : ""}` +
+            (r.data.truncados.length > 0 ? ` · siguiendo con ${r.data.truncados.map((k) => TIPO_SHORT[k] ?? k).join(", ")}…` : " · completo"),
         );
+        await load();
+        if (r.data.truncados.length === 0) {
+          setScanPct(100);
+          break;
+        }
       }
-      await load();
     } catch (e) {
-      // "An unexpected response…" = Vercel mató la función a mitad de camino.
-      // Lo ya bajado quedó guardado; correr de nuevo continúa donde quedó.
-      const cortada = e instanceof Error && /unexpected response/i.test(e.message);
+      // "An unexpected response…" = Vercel cortó la función; lo bajado quedó
+      // guardado. El loop continúa donde quedó al reintentar.
+      cortada = e instanceof Error && /unexpected response/i.test(e.message);
       setError(
         cortada
-          ? "El escaneo tardó más de lo permitido y el servidor lo cortó — lo que alcanzó a traer ya quedó guardado. Corre el escaneo otra vez para continuar donde quedó."
+          ? "Una corrida tardó más de lo permitido; lo que alcanzó a traer ya quedó guardado. Vuelve a tocar Actualizar para seguir."
           : e instanceof Error
             ? e.message
             : "Se cortó la actualización — reintenta",
       );
-      if (cortada) await load().catch(() => {});
+      await load().catch(() => {});
     } finally {
+      if (ultima && "data" in ultima && !cortada) {
+        const d = ultima.data;
+        setLastRefresh(
+          `${d.nuevos} nuevos · ${d.relevantes} relevantes clasificados` +
+            (d.conPrecio > 0 ? ` · ${d.conPrecio} montos traídos` : "") +
+            (d.truncados.length === 0 ? " · escaneo completo ✓" : ""),
+        );
+      }
       setRefreshing(false);
+      // Dejar la barra llena un momento antes de esconderla.
+      window.setTimeout(() => setScanPct(null), 1600);
     }
   }
 
@@ -878,6 +894,12 @@ export function GovTendersBoard({
     }
   }
 
+
+  // ¿Ya se actualizó HOY (hora Panamá)? Si sí, el botón queda discreto; si no,
+  // resalta — el sync corre solo a diario y este botón es el respaldo manual.
+  const hoyPa = new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" });
+  const actualizadoHoy =
+    syncedAt !== null && new Date(syncedAt).toLocaleDateString("en-CA", { timeZone: "America/Panama" }) === hoyPa;
 
   // Resumen global (sobre todo lo abierto y relevante, sin filtros de vista).
   const stats = useMemo(() => {
@@ -972,29 +994,37 @@ export function GovTendersBoard({
               {syncedAt ? <p className="text-[11px] text-slate-400">Actualizado {relTime(syncedAt)} · sync automático diario</p> : null}
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => refresh(true)}
-              disabled={!!refreshing}
-              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
-              title="Recorre TODAS las páginas de PanamaCompra (tarda más). Úsalo si sospechas que falta algo."
-            >
-              {refreshing === "full" ? <Loader2 className="size-3.5 animate-spin" /> : <ScanSearch className="size-3.5" />}
-              Escaneo completo
-            </button>
-            <button
-              type="button"
-              onClick={() => refresh(false)}
-              disabled={!!refreshing}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
-              title="Trae lo nuevo de PanamaCompra y guarda — abrir la página usa lo guardado"
-            >
-              {refreshing === "inc" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-              {refreshing ? "Consultando…" : "Actualizar"}
-            </button>
-          </div>
+          {/* Un solo botón: escanea PanamaCompra en loop hasta completar. El
+              sync corre automático a diario; este botón es el disparo manual —
+              resalta cuando NO se actualizó hoy. */}
+          <button
+            type="button"
+            onClick={() => refresh()}
+            disabled={!!refreshing}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-60",
+              actualizadoHoy
+                ? "border border-slate-200 text-slate-600 hover:bg-slate-50"
+                : "bg-indigo-600 text-white shadow-sm hover:bg-indigo-700",
+            )}
+            title="Escanea PanamaCompra hasta traer todas las páginas. Corre solo a diario; este botón lo dispara a mano."
+          >
+            {refreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+            {refreshing ? "Escaneando…" : actualizadoHoy ? "Actualizar" : "Actualizar ahora"}
+          </button>
         </header>
+
+        {scanPct !== null ? (
+          <div className="border-b border-slate-100 px-4 py-2.5">
+            <div className="mb-1 flex items-center justify-between text-[11px]">
+              <span className="font-semibold text-slate-600">{scanMsg}</span>
+              <span className="tabular-nums text-slate-400">{scanPct}%</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full rounded-full bg-indigo-500 transition-all duration-500" style={{ width: `${scanPct}%` }} />
+            </div>
+          </div>
+        ) : null}
 
         <div className="px-4 py-3">
           <div className="relative">
@@ -1103,11 +1133,6 @@ export function GovTendersBoard({
           {lastRefresh ? (
             <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700 ring-1 ring-inset ring-emerald-600/20">{lastRefresh}</p>
           ) : null}
-          {truncWarn ? (
-            <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {truncWarn}
-            </p>
-          ) : null}
           {error ? (
             <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-inset ring-red-600/20">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {error}
@@ -1132,7 +1157,7 @@ export function GovTendersBoard({
             <p className="text-sm text-slate-500">Todavía no trajiste licitaciones de PanamaCompra.</p>
             <button
               type="button"
-              onClick={() => refresh(false)}
+              onClick={() => refresh()}
               disabled={!!refreshing}
               className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
             >

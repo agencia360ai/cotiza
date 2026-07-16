@@ -40,12 +40,19 @@ export async function GET(req: Request) {
   // ese orden no se cumpla (el interactivo "Actualizar" sigue siendo incremental).
   const results: Record<string, unknown> = {};
   for (const orgId of orgIds) {
-    if (Date.now() > deadlineTs) {
-      results[orgId] = { skipped: "sin tiempo — corre en el próximo cron" };
-      continue;
+    // Loops por org con cursores reanudables: repite el escaneo completo hasta
+    // agotar todas las páginas (truncados vacío) o quedarse sin tiempo. Así el
+    // nightly cubre TODO en una corrida cuando alcanza — sin dejar "más páginas".
+    let last: unknown = { skipped: "sin tiempo — corre en el próximo cron" };
+    let pasadas = 0;
+    while (Date.now() < deadlineTs && pasadas < 12) {
+      const r = await syncGovTenders(admin, orgId, { full: true, deadlineTs });
+      pasadas++;
+      if ("error" in r) { last = { error: r.error }; break; }
+      last = { ...r.data, pasadas };
+      if (r.data.truncados.length === 0) break; // ciclo completo
     }
-    const r = await syncGovTenders(admin, orgId, { full: true, deadlineTs });
-    results[orgId] = "error" in r ? { error: r.error } : r.data;
+    results[orgId] = last;
   }
   return NextResponse.json({ ok: true, orgs: orgIds.length, results });
 }
