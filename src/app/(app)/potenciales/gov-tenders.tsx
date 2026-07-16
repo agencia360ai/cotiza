@@ -17,7 +17,6 @@ import {
   Fan,
   FileText,
   FolderOpen,
-  FolderPlus,
   Landmark,
   Loader2,
   Mail,
@@ -42,8 +41,15 @@ import {
   followGovTender,
   enrichGovTender,
   createGovTenderFolder,
+  listGovTenderDocs,
+  uploadGovTenderDocToDropbox,
+  analyzeGovTenderDocs,
+  analyzeSubmissionDocs,
+  resolveSubmissionDoc,
+  saveSubmissionPlan,
   type GovTenderRow,
 } from "./gov-actions";
+import type { SubmissionDoc } from "@/lib/panamacompra/submit-docs";
 
 function relTime(ts: number): string {
   const m = Math.round((Date.now() - ts) / 60000);
@@ -200,6 +206,16 @@ function MiniKpi({
 }
 
 // Paso del proceso: círculo con número o check.
+type PartPaso = "carpeta" | "docs" | "checklist" | "migrar" | "listo";
+type ParticiparProgress = { paso: PartPaso; sub: string; pct: number; error: string | null; corriendo: boolean };
+
+const PART_PASOS: { key: PartPaso; label: string; hint: string }[] = [
+  { key: "carpeta", label: "Carpeta en Dropbox", hint: "Crea la carpeta de la licitación (si no existe)." },
+  { key: "docs", label: "Documentos del pliego", hint: "Baja los archivos del pliego y los analiza con IA." },
+  { key: "checklist", label: "Checklist de documentos a someter", hint: "Arma la lista y copia lo reutilizable de licitaciones pasadas." },
+  { key: "migrar", label: "En Mis Licitaciones", hint: "La mueve a Mis Licitaciones para el seguimiento." },
+];
+
 function StepDot({ done, n }: { done: boolean; n: number }) {
   return (
     <span
@@ -213,104 +229,112 @@ function StepDot({ done, n }: { done: boolean; n: number }) {
   );
 }
 
-// Proceso de participación: 2 pasos persistidos (derivados de la data) con % —
-// Paso 1 crear carpeta en Dropbox · Paso 2 PARTICIPAR (migra a Mis Licitaciones).
-// La descarga automática de documentos se quitó: no bajaba bien y confundía; el
-// equipo sube los PDFs a la carpeta a mano.
-function ProcesoLicitacion({
+// Flujo UNIFICADO "Participar": un botón que corre los 4 pasos (carpeta → bajar
+// + analizar documentos → checklist de documentos a someter → migrar a Mis
+// Licitaciones), con checkmarks por paso y % en vivo. Es reanudable: cada paso
+// persiste en la base, así que si se interrumpe, volver a tocar continúa donde
+// quedó (los pasos ya hechos salen con check).
+function ParticiparUnificado({
   r,
-  folderBusy,
-  onCrearCarpeta,
-  participarBusy,
+  prog,
   onParticipar,
   onVerMisLicitaciones,
 }: {
   r: GovTenderRow;
-  folderBusy: boolean;
-  onCrearCarpeta: () => void;
-  participarBusy: boolean;
+  prog: ParticiparProgress | undefined;
   onParticipar: () => void;
   onVerMisLicitaciones: () => void;
 }) {
-  const paso1 = !!r.dropbox_folder_path;
-  const participando = !!r.converted_tender_id;
-  const pct = Math.round(((paso1 ? 1 : 0) + (participando ? 1 : 0)) / 2 * 100);
+  // Estado de cada paso derivado de la data persistida (fuente de verdad).
+  const done: Record<PartPaso, boolean> = {
+    carpeta: !!r.dropbox_folder_path,
+    docs: !!r.doc_analisis,
+    checklist: !!r.docs_someter,
+    migrar: !!r.converted_tender_id,
+    listo: !!r.converted_tender_id,
+  };
+  const hechos = PART_PASOS.filter((p) => done[p.key]).length;
+  const todoListo = hechos === PART_PASOS.length;
+  const corriendo = !!prog?.corriendo;
+  // % en vivo mientras corre; si no, el derivado de los pasos completados.
+  const pct = corriendo ? prog!.pct : Math.round((hechos / PART_PASOS.length) * 100);
+  const empezado = hechos > 0;
+
   return (
-    <div className={cn("rounded-xl border p-3.5", participando ? "border-emerald-200 bg-emerald-50/40" : "border-slate-100 bg-white")}>
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Proceso de participación</p>
+    <div className={cn("rounded-xl border p-3.5", todoListo ? "border-emerald-200 bg-emerald-50/40" : "border-slate-100 bg-white")}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Participar en la licitación</p>
         <span className="text-[11px] font-semibold tabular-nums text-slate-500">{pct}%</span>
       </div>
       <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100">
-        <div className={cn("h-full rounded-full transition-all", participando ? "bg-emerald-500" : "bg-indigo-500")} style={{ width: `${pct}%` }} />
+        <div className={cn("h-full rounded-full transition-all duration-500", todoListo ? "bg-emerald-500" : "bg-indigo-500")} style={{ width: `${pct}%` }} />
       </div>
 
-      <ol className="mt-3 space-y-2.5">
-        <li className="flex items-center gap-2.5">
-          <StepDot done={paso1} n={1} />
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-slate-800">Carpeta en Dropbox</p>
-            <p className="text-[11px] text-slate-500">
-              {paso1 ? "Creada — sube ahí los documentos del pliego." : "Crea la carpeta para juntar los documentos de la licitación."}
-            </p>
-          </div>
-          {paso1 ? (
-            r.dropbox_folder_url ? (
-              <a
-                href={r.dropbox_folder_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
-              >
-                <FolderOpen className="size-3.5" /> Abrir
-              </a>
-            ) : (
-              <span className="shrink-0 text-[11px] font-semibold text-emerald-600">Lista</span>
-            )
-          ) : (
-            <button
-              type="button"
-              onClick={onCrearCarpeta}
-              disabled={folderBusy}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
-            >
-              {folderBusy ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
-              {folderBusy ? "Creando…" : "Crear carpeta"}
-            </button>
-          )}
-        </li>
-
-        <li className="flex items-center gap-2.5">
-          <StepDot done={participando} n={2} />
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-slate-800">Participar</p>
-            <p className="text-[11px] text-slate-500">
-              {participando
-                ? "Ya está en Mis Licitaciones — ahí armas el análisis, el checklist y el seguimiento."
-                : "Muévela a Mis Licitaciones para el análisis, el checklist y el seguimiento."}
-            </p>
-          </div>
-          {participando ? (
-            <button
-              type="button"
-              onClick={onVerMisLicitaciones}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-            >
-              Ver en Mis Licitaciones <ArrowRight className="size-3.5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onParticipar}
-              disabled={participarBusy}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {participarBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Flag className="size-3.5" />}
-              {participarBusy ? "Participando…" : "Participar"}
-            </button>
-          )}
-        </li>
+      <ol className="mt-3 space-y-2">
+        {PART_PASOS.map((p, i) => {
+          const activo = corriendo && prog!.paso === p.key;
+          return (
+            <li key={p.key} className="flex items-center gap-2.5">
+              {activo ? (
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-indigo-100">
+                  <Loader2 className="size-3.5 animate-spin text-indigo-600" />
+                </span>
+              ) : (
+                <StepDot done={done[p.key]} n={i + 1} />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className={cn("text-xs font-semibold", done[p.key] ? "text-slate-800" : "text-slate-600")}>{p.label}</p>
+                <p className="text-[11px] text-slate-500">{activo && prog!.sub ? prog!.sub : p.hint}</p>
+              </div>
+              {p.key === "carpeta" && r.dropbox_folder_url ? (
+                <a
+                  href={r.dropbox_folder_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700 ring-1 ring-inset ring-sky-600/20 hover:bg-sky-100"
+                >
+                  <FolderOpen className="size-3" /> Abrir
+                </a>
+              ) : null}
+            </li>
+          );
+        })}
       </ol>
+
+      {prog?.error ? (
+        <p className="mt-2.5 flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700 ring-1 ring-inset ring-red-600/20">
+          <AlertTriangle className="mt-0.5 size-3 shrink-0" /> {prog.error}
+        </p>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {/* Reanudar/Participar mientras falte algún paso. */}
+        {!todoListo ? (
+          <button
+            type="button"
+            onClick={onParticipar}
+            disabled={corriendo}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {corriendo ? <Loader2 className="size-3.5 animate-spin" /> : <Flag className="size-3.5" />}
+            {corriendo ? "Participando…" : empezado ? "Reanudar" : "Participar"}
+          </button>
+        ) : null}
+        {/* Ver en Mis Licitaciones en cuanto ya migró (aunque falten documentos). */}
+        {done.migrar ? (
+          <button
+            type="button"
+            onClick={onVerMisLicitaciones}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+          >
+            Ver en Mis Licitaciones <ArrowRight className="size-3.5" />
+          </button>
+        ) : null}
+        {!empezado && !corriendo ? (
+          <span className="text-[11px] text-slate-400">Carpeta · documentos · checklist · Mis Licitaciones — en un solo paso.</span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -319,18 +343,14 @@ function DetallePliego({
   r,
   busy,
   onCargar,
-  folderBusy,
-  onCrearCarpeta,
-  participarBusy,
+  prog,
   onParticipar,
   onVerMisLicitaciones,
 }: {
   r: GovTenderRow;
   busy: boolean;
   onCargar: () => void;
-  folderBusy: boolean;
-  onCrearCarpeta: () => void;
-  participarBusy: boolean;
+  prog: ParticiparProgress | undefined;
   onParticipar: () => void;
   onVerMisLicitaciones: () => void;
 }) {
@@ -347,14 +367,7 @@ function DetallePliego({
     </div>
   );
   const proceso = (
-    <ProcesoLicitacion
-      r={r}
-      folderBusy={folderBusy}
-      onCrearCarpeta={onCrearCarpeta}
-      participarBusy={participarBusy}
-      onParticipar={onParticipar}
-      onVerMisLicitaciones={onVerMisLicitaciones}
-    />
+    <ParticiparUnificado r={r} prog={prog} onParticipar={onParticipar} onVerMisLicitaciones={onVerMisLicitaciones} />
   );
   if (!d) {
     return (
@@ -494,27 +507,23 @@ function TenderTr({
   r,
   tamiz,
   sweet,
-  busy,
   expanded,
   enrichBusy,
-  folderBusy,
+  prog,
   onParticipar,
   onToggleExpand,
   onEnrich,
-  onCrearCarpeta,
   onVerMisLicitaciones,
 }: {
   r: GovTenderRow;
   tamiz: TamizResult;
   sweet: boolean;
-  busy: boolean;
   expanded: boolean;
   enrichBusy: boolean;
-  folderBusy: boolean;
+  prog: ParticiparProgress | undefined;
   onParticipar: () => void;
   onToggleExpand: () => void;
   onEnrich: () => void;
-  onCrearCarpeta: () => void;
   onVerMisLicitaciones: () => void;
 }) {
   const dias = diasParaCierre(r.fecha_cierre);
@@ -683,14 +692,12 @@ function TenderTr({
       {expanded ? (
         <tr className={cn("border-b border-slate-100", urgente ? "bg-red-50/30" : "bg-slate-50/50")}>
           <td colSpan={7} className="px-4 pb-4 pt-2">
-            {/* Proceso de participación + detalle del pliego. */}
+            {/* Flujo unificado Participar + detalle del pliego. */}
             <DetallePliego
               r={r}
               busy={enrichBusy}
               onCargar={onEnrich}
-              folderBusy={folderBusy}
-              onCrearCarpeta={onCrearCarpeta}
-              participarBusy={busy}
+              prog={prog}
               onParticipar={onParticipar}
               onVerMisLicitaciones={onVerMisLicitaciones}
             />
@@ -716,15 +723,15 @@ export function GovTendersBoard({
   const [refreshing, setRefreshing] = useState<false | "inc" | "full">(false);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
   const [soloRelevantes, setSoloRelevantes] = useState(true);
   const [tipoFiltro, setTipoFiltro] = useState<string>("all");
   const [bandaFiltro, setBandaFiltro] = useState<"all" | TamizBanda>("all");
   const [sort, setSort] = useState<SortState<GovSortKey>>({ key: "score", dir: "desc" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [enrichBusy, setEnrichBusy] = useState<string | null>(null);
-  const [folderBusy, setFolderBusy] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  // Progreso del flujo unificado "Participar" por licitación (reanudable).
+  const [partProg, setPartProg] = useState<Map<string, ParticiparProgress>>(new Map());
   // Progreso del escaneo (loop reanudable): pct 0-100 + mensaje de corrida.
   const [scanPct, setScanPct] = useState<number | null>(null);
   const [scanMsg, setScanMsg] = useState<string>("");
@@ -838,23 +845,103 @@ export function GovTendersBoard({
     }
   }
 
-  // Participar = migrar a Mis Licitaciones (crea el tender). onParticipated
-  // cambia a la sub-vista "mias" para que el usuario vea a dónde fue.
-  async function participar(id: string) {
-    setBusy(id);
+  // Flujo UNIFICADO "Participar": un botón que orquesta carpeta → bajar +
+  // analizar documentos → checklist de documentos a someter → migrar a Mis
+  // Licitaciones. Cada paso persiste en la base, así que si se interrumpe,
+  // volver a tocar Participar CONTINÚA donde quedó (salta lo ya hecho).
+  async function participarUnificado(id: string) {
+    const setP = (patch: Partial<ParticiparProgress>) =>
+      setPartProg((prev) => {
+        const m = new Map(prev);
+        const base = m.get(id) ?? { paso: "carpeta" as PartPaso, sub: "", pct: 0, error: null, corriendo: false };
+        m.set(id, { ...base, ...patch });
+        return m;
+      });
+    // Snapshot inicial para decidir qué saltar (reanudar).
+    const ini = rows.find((r) => r.id === id);
+    let folderPath = ini?.dropbox_folder_path ?? null;
+    const yaAnalisis = !!ini?.doc_analisis;
+    const yaChecklist = !!ini?.docs_someter;
+    const yaMigrado = !!ini?.converted_tender_id;
+    setP({ corriendo: true, error: null, paso: "carpeta", sub: "", pct: 3 });
+    const msg = (e: unknown) => (e instanceof Error ? e.message : "error");
+    // Los documentos y el checklist son BEST-EFFORT: el gobierno a veces no
+    // sirve bien los archivos. Un fallo ahí NO bloquea participar (el objetivo)
+    // — se anota como aviso suave y se puede reintentar con "Reanudar".
+    let softError: string | null = null;
     try {
-      const r = await followGovTender(id);
-      if ("error" in r) {
-        setError(r.error);
-        return;
+      // 1) Carpeta en Dropbox (si no existe). Este paso SÍ es requisito.
+      if (!folderPath) {
+        setP({ paso: "carpeta", sub: "creando carpeta…", pct: 6 });
+        const r = await createGovTenderFolder(id);
+        if ("error" in r) throw new Error(r.error);
+        folderPath = r.data.path;
+        setRows((prev) => prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: r.data.path, dropbox_folder_url: r.data.url } : x)));
       }
-      setRows((prev) => prev.map((x) => (x.id === id ? { ...x, converted_tender_id: r.data.tenderId } : x)));
-      onFollowed?.();
-      onParticipated?.();
+
+      // 2) Documentos del pliego: bajar los que falten + analizar con IA.
+      if (!yaAnalisis) {
+        try {
+          setP({ paso: "docs", sub: "leyendo el pliego…", pct: 12 });
+          const docsRes = await listGovTenderDocs(id);
+          if ("error" in docsRes) throw new Error(docsRes.error);
+          setRows((prev) =>
+            prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: docsRes.data.folderPath, dropbox_folder_url: docsRes.data.folderUrl } : x)),
+          );
+          const pend = docsRes.data.docs.filter((d) => !d.existe);
+          for (let i = 0; i < pend.length; i++) {
+            setP({ paso: "docs", sub: `bajando documentos ${i + 1}/${pend.length}`, pct: 12 + Math.round(((i + 1) / Math.max(1, pend.length)) * 26) });
+            await uploadGovTenderDocToDropbox(id, pend[i].nombre, pend[i].url).catch(() => null);
+          }
+          setP({ paso: "docs", sub: "analizando requisitos con IA…", pct: 44 });
+          const an = await analyzeGovTenderDocs(id);
+          if ("error" in an) throw new Error(an.error);
+          setRows((prev) => prev.map((x) => (x.id === id ? { ...x, doc_analisis: an.data.analisis } : x)));
+        } catch (e) {
+          softError = `Documentos: ${msg(e)} — reintenta con Reanudar.`;
+        }
+      }
+
+      // 3) Checklist de documentos a someter (busca/copia reutilizables).
+      if (!yaChecklist && !softError) {
+        try {
+          setP({ paso: "checklist", sub: "extrayendo documentos a someter…", pct: 56 });
+          const plan = await analyzeSubmissionDocs(id);
+          if ("error" in plan) throw new Error(plan.error);
+          const resueltos: SubmissionDoc[] = [];
+          for (let i = 0; i < plan.data.documentos.length; i++) {
+            setP({
+              paso: "checklist",
+              sub: `buscando en licitaciones pasadas ${i + 1}/${plan.data.documentos.length}`,
+              pct: 58 + Math.round(((i + 1) / Math.max(1, plan.data.documentos.length)) * 22),
+            });
+            const rr = await resolveSubmissionDoc(id, plan.data.documentos[i]);
+            resueltos.push("error" in rr ? plan.data.documentos[i] : rr.data);
+          }
+          const saved = await saveSubmissionPlan(id, plan.data.resumen, resueltos);
+          if ("error" in saved) throw new Error(saved.error);
+          setRows((prev) => prev.map((x) => (x.id === id ? { ...x, docs_someter: saved.data.plan } : x)));
+        } catch (e) {
+          softError = `Checklist: ${msg(e)} — reintenta con Reanudar.`;
+        }
+      }
+
+      // 4) Migrar a Mis Licitaciones (crea el tender del pipeline propio).
+      // SIEMPRE se intenta: es el objetivo de "Participar" y no depende de los
+      // documentos (que son valor agregado).
+      if (!yaMigrado) {
+        setP({ paso: "migrar", sub: "moviendo a Mis Licitaciones…", pct: 88 });
+        const f = await followGovTender(id);
+        if ("error" in f) throw new Error(f.error);
+        setRows((prev) => prev.map((x) => (x.id === id ? { ...x, converted_tender_id: f.data.tenderId } : x)));
+        onFollowed?.();
+      }
+      setP({ paso: "listo", sub: "", pct: 100, corriendo: false, error: softError });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo participar — reintenta");
-    } finally {
-      setBusy(null);
+      setP({
+        corriendo: false,
+        error: e instanceof Error ? e.message : "Se interrumpió — vuelve a tocar Participar para continuar donde quedó.",
+      });
     }
   }
 
@@ -875,24 +962,6 @@ export function GovTendersBoard({
     }
   }
 
-  async function crearCarpeta(id: string) {
-    setFolderBusy(id);
-    try {
-      const r = await createGovTenderFolder(id);
-      if ("error" in r) {
-        setError(r.error);
-        return;
-      }
-      setError(null);
-      setRows((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, dropbox_folder_path: r.data.path, dropbox_folder_url: r.data.url } : x)),
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo crear la carpeta — reintenta");
-    } finally {
-      setFolderBusy(null);
-    }
-  }
 
 
   // ¿Ya se actualizó HOY (hora Panamá)? Si sí, el botón queda discreto; si no,
@@ -1198,14 +1267,12 @@ export function GovTendersBoard({
                       r={r}
                       tamiz={tamizDe.get(r.id) ?? tamizScore(r.titulo, r.precio_ref, { min: ssMin, max: ssMax })}
                       sweet={inSweet(r.precio_ref)}
-                      busy={busy === r.id}
                       expanded={expandedId === r.id}
                       enrichBusy={enrichBusy === r.id}
-                      folderBusy={folderBusy === r.id}
-                      onParticipar={() => participar(r.id)}
+                      prog={partProg.get(r.id)}
+                      onParticipar={() => participarUnificado(r.id)}
                       onToggleExpand={() => setExpandedId((prev) => (prev === r.id ? null : r.id))}
                       onEnrich={() => enrich(r.id)}
-                      onCrearCarpeta={() => crearCarpeta(r.id)}
                       onVerMisLicitaciones={() => onParticipated?.()}
                     />
                   ))}
