@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import type { ProjectType } from "@/lib/projects/types";
-import type { QuoteStatus, Rubro, TenderStatus, TenderRow } from "@/lib/pipeline/types";
+import type { QuoteStatus, Rubro, TenderStatus, TenderRow, Modalidad } from "@/lib/pipeline/types";
 import { listTenders } from "@/lib/pipeline/queries";
 import { matchClientByName } from "@/lib/clients/match";
 import { norm } from "@/lib/clients/normalize";
@@ -236,6 +236,54 @@ export async function updateTender(
   if (error) return { error: error.message };
   revalidatePath(REVALIDATE);
   return { ok: true };
+}
+
+// Crear licitación MANUAL en Mis Licitaciones — para procesos donde ya se
+// participó y que no vienen de PanamaCompra (o son viejos). source='manual'.
+export async function createManualTender(input: {
+  acto_number: string | null;
+  entity: string | null;
+  objeto: string | null;
+  modalidad: Modalidad | null;
+  status: TenderStatus;
+  amount_ref_usd: number | null;
+  delivery_date: string | null;
+  rubro: Rubro | null;
+  folder_url: string | null;
+  notes: string | null;
+  client_id: string | null;
+  execution_status: string | null;
+}): Promise<Result<{ id: string }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const entity = input.entity?.trim() || null;
+  const objeto = input.objeto?.trim() || null;
+  if (!entity && !objeto) return { error: "Agrega al menos la entidad o el objeto de la licitación." };
+  const row: Record<string, unknown> = {
+    org_id: c.orgId,
+    acto_number: input.acto_number?.trim() || null,
+    // Año del acto: de la fecha de entrega si la hay, si no el año actual.
+    year: input.delivery_date ? Number(input.delivery_date.slice(0, 4)) : new Date().getFullYear(),
+    modalidad: input.modalidad,
+    entity,
+    objeto,
+    status: input.status,
+    execution_status: input.execution_status?.trim() || null,
+    amount_ref_usd: input.amount_ref_usd,
+    delivery_date: input.delivery_date,
+    rubro: input.rubro,
+    folder_url: input.folder_url?.trim() || null,
+    notes: input.notes?.trim() || null,
+    client_id: input.client_id,
+    source: "manual",
+  };
+  const { data, error } = (await c.supabase.from("tenders").insert(row).select("id").single()) as {
+    data: { id: string } | null;
+    error: { message: string } | null;
+  };
+  if (error || !data) return { error: error?.message ?? "No se pudo crear la licitación" };
+  revalidatePath(REVALIDATE);
+  return { ok: true, data: { id: data.id } };
 }
 
 // Cambio rápido de estatus (picker inline en Mis Licitaciones).
