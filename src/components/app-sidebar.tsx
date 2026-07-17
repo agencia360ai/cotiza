@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Users, Building2, Home, Menu, X, Settings, Hammer, Wrench, TrendingUp } from "lucide-react";
+import { LogOut, Users, Building2, Home, Menu, X, Settings, Hammer, Wrench, TrendingUp, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -16,6 +16,7 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: "/inicio", label: "Inicio", icon: Home, exact: true },
+  { href: "/leads", label: "Leads", icon: Sparkles },
   { href: "/potenciales", label: "Cotizaciones", icon: TrendingUp },
   { href: "/proyectos", label: "Proyectos", icon: Hammer },
   {
