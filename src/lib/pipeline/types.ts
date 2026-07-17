@@ -33,9 +33,10 @@ export const QUOTE_STATUS_COLOR: Record<QuoteStatus, string> = {
   rechazada: "#EF4444",
 };
 
-export type TenderStatus = "ganada" | "no_ganada" | "presentada" | "en_revision" | "por_partir";
+export type TenderStatus = "por_participar" | "ganada" | "no_ganada" | "presentada" | "en_revision" | "por_partir";
 
 export const TENDER_STATUS_LABEL: Record<TenderStatus, string> = {
+  por_participar: "Por participar",
   ganada: "Ganada",
   no_ganada: "No ganada",
   presentada: "Participada",
@@ -43,6 +44,7 @@ export const TENDER_STATUS_LABEL: Record<TenderStatus, string> = {
   por_partir: "Participada", // legacy: se unifica con "presentada"
 };
 export const TENDER_STATUS_COLOR: Record<TenderStatus, string> = {
+  por_participar: "#7C3AED", // aún no se presenta — intención de participar
   ganada: "#10B981",
   no_ganada: "#94A3B8",
   presentada: "#2563EB",
@@ -204,7 +206,7 @@ export function emptyPipelineData(year: number): PipelineData {
     },
     licitaciones: {
       total: cero(),
-      porEstatus: { ganada: cero(), no_ganada: cero(), presentada: cero(), en_revision: cero(), por_partir: cero() },
+      porEstatus: { por_participar: cero(), ganada: cero(), no_ganada: cero(), presentada: cero(), en_revision: cero(), por_partir: cero() },
       porModalidad: {
         publica: { label: "Licitación Pública", count: 0 },
         compraMenor: { label: "Compra Menor", count: 0 },
@@ -231,6 +233,7 @@ export function snapshotPipelineData(): PipelineData {
     licitaciones: {
       total: { ...PIPELINE_SNAPSHOT.licitaciones.total },
       porEstatus: {
+        por_participar: { count: 0, monto: 0 },
         ganada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.ganada },
         no_ganada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.no_ganada },
         presentada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.presentada },
@@ -251,9 +254,9 @@ export function pipelineDerived(data: PipelineData) {
   const c = data.cotizaciones;
   const l = data.licitaciones;
   const licitacionesVivas =
-    l.porEstatus.presentada.count + l.porEstatus.en_revision.count + l.porEstatus.por_partir.count;
+    l.porEstatus.por_participar.count + l.porEstatus.presentada.count + l.porEstatus.en_revision.count + l.porEstatus.por_partir.count;
   const montoLicitacionesVivas =
-    l.porEstatus.presentada.monto + l.porEstatus.en_revision.monto + l.porEstatus.por_partir.monto;
+    l.porEstatus.por_participar.monto + l.porEstatus.presentada.monto + l.porEstatus.en_revision.monto + l.porEstatus.por_partir.monto;
   const enJuegoMonto = c.porEstado.enviada.monto + montoLicitacionesVivas;
   const decididas = c.porEstado.aprobada.count + c.porEstado.rechazada.count;
   const tasaCierre = decididas > 0 ? c.porEstado.aprobada.count / decididas : 0;

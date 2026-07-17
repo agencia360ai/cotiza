@@ -93,10 +93,10 @@ type ClientOpt = { id: string; name: string; locations: { id: string; name: stri
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
 type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
-const TENDER_STATUSES: TenderStatus[] = ["presentada", "en_revision", "por_partir", "ganada", "no_ganada"];
-// Los 4 estatus del pipeline propio (Participada = presentada). "por_partir" es
-// legacy y se muestra solo si una fila ya lo tiene.
-const TENDER_STATUS_PICKER: TenderStatus[] = ["presentada", "en_revision", "no_ganada", "ganada"];
+const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "ganada", "no_ganada"];
+// Los estatus del pipeline propio, en orden del flujo (Por participar → …).
+// "por_partir" es legacy (Participada) y se muestra solo si una fila ya lo tiene.
+const TENDER_STATUS_PICKER: TenderStatus[] = ["por_participar", "presentada", "en_revision", "no_ganada", "ganada"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
 
 // Fecha LOCAL de Panamá (UTC-5): toISOString() es UTC y después de las 7pm
@@ -1969,7 +1969,13 @@ function LicitacionesTab({
       if (x.status === "ganada") {
         ganadas += 1;
         montoGanadas += x.amount_ref_usd ?? 0;
-      } else if (x.status === "presentada" || x.status === "en_revision" || x.status === "por_partir") vivas += 1;
+      } else if (
+        x.status === "por_participar" ||
+        x.status === "presentada" ||
+        x.status === "en_revision" ||
+        x.status === "por_partir"
+      )
+        vivas += 1;
     }
     return { vivas, ganadas, montoGanadas, montoRef };
   }, [filtered]);
