@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { listQuotes, listTenders } from "@/lib/pipeline/queries";
-import { syncTenderDropboxLinks } from "./gov-actions";
+import { syncTendersFromGov } from "./gov-actions";
 import { PotencialesScreen } from "./screen";
 
 export const dynamic = "force-dynamic";
@@ -13,9 +13,10 @@ export default async function PotencialesPage() {
   const orgId = (await getActiveOrgId()) ?? "";
   const supabase = await createClient();
 
-  // Antes de listar: propagar el link de la carpeta Dropbox del gov_tender a su
-  // tender (los seguidos antes de crear la carpeta quedaron sin link).
-  await syncTenderDropboxLinks();
+  // Antes de listar: vincular licitaciones sueltas con su proceso del gobierno
+  // (por número de acto) y rellenar faltantes — fecha de participación, monto,
+  // modalidad, carpeta Dropbox.
+  await syncTendersFromGov();
   const [quotes, tenders] = await Promise.all([listQuotes(orgId), listTenders(orgId)]);
   const { data: clientsData } = (await supabase
     .from("clients")

@@ -584,36 +584,113 @@ export async function getGovTenderCompetidores(govId: string): Promise<Result<Co
   }
 }
 
-// Sincroniza tenders.folder_url con la carpeta Dropbox de su gov_tender. Las
-// licitaciones seguidas ANTES de crear la carpeta quedaron apuntando a
-// PanamaCompra (o sin link). Best-effort al cargar la página: nunca rompe la
-// carga y solo pisa links vacíos o del portal — un link puesto a mano se respeta.
-export async function syncTenderDropboxLinks(): Promise<void> {
+// Sincroniza Mis Licitaciones con el board del gobierno, al cargar la página
+// (best-effort: nunca rompe la carga). Dos pasos:
+//   1. VINCULAR por número de acto: licitaciones creadas a mano (o importadas)
+//      cuyo acto existe en gov_tenders quedan enlazadas — con eso ganan el
+//      panel de PanamaCompra (Check status, carpeta) en su drawer.
+//   2. RELLENAR faltantes desde el gov_tender: fecha de participación
+//      (fecha_cierre), monto referencial, modalidad, entidad, objeto y el link
+//      de la carpeta Dropbox. Solo campos VACÍOS — lo escrito a mano se
+//      respeta; el folder además pisa links del portal (eran el fallback).
+type GovLite = {
+  id: string;
+  converted_tender_id: string | null;
+  num_proceso: string;
+  fecha_cierre: string | null;
+  precio_ref: number | null;
+  tipo: string | null;
+  dropbox_folder_url: string | null;
+  entidad: string | null;
+  titulo: string | null;
+};
+const GOV_LITE_COLS = "id, converted_tender_id, num_proceso, fecha_cierre, precio_ref, tipo, dropbox_folder_url, entidad, titulo";
+const normActo = (s: string) => s.trim().toUpperCase();
+
+function modalidadDeTipo(tipo: string | null): string | null {
+  if (!tipo) return null;
+  return tipo === "licitacion_publica" ? "licitacion_publica" : tipo.startsWith("compra_menor") ? "compra_menor" : "otro";
+}
+
+export async function syncTendersFromGov(): Promise<void> {
   try {
     const c = await ctx();
     if (!c.ok) return;
     const { supabase, orgId } = c;
-    const { data: govs } = (await supabase
-      .from("gov_tenders")
-      .select("converted_tender_id, dropbox_folder_url")
-      .eq("org_id", orgId)
-      .not("converted_tender_id", "is", null)
-      .not("dropbox_folder_url", "is", null)) as {
-      data: { converted_tender_id: string; dropbox_folder_url: string }[] | null;
-    };
-    if (!govs || govs.length === 0) return;
+
     const { data: tenders } = (await supabase
       .from("tenders")
-      .select("id, folder_url")
+      .select("id, acto_number, delivery_date, amount_ref_usd, folder_url, modalidad, entity, objeto")
+      .eq("org_id", orgId)) as {
+      data:
+        | {
+            id: string;
+            acto_number: string | null;
+            delivery_date: string | null;
+            amount_ref_usd: number | null;
+            folder_url: string | null;
+            modalidad: string | null;
+            entity: string | null;
+            objeto: string | null;
+          }[]
+        | null;
+    };
+    if (!tenders || tenders.length === 0) return;
+
+    // Gov rows ya vinculadas + candidatas libres que matchean un acto nuestro.
+    const actos = [...new Set(tenders.map((t) => normActo(t.acto_number ?? "")).filter(Boolean))];
+    const { data: vinculadas } = (await supabase
+      .from("gov_tenders")
+      .select(GOV_LITE_COLS)
       .eq("org_id", orgId)
-      .in("id", govs.map((g) => g.converted_tender_id))) as { data: { id: string; folder_url: string | null }[] | null };
-    const actual = new Map((tenders ?? []).map((t) => [t.id, t.folder_url]));
-    for (const g of govs) {
-      if (!actual.has(g.converted_tender_id)) continue; // tender borrado
-      const url = actual.get(g.converted_tender_id);
-      const pisable = !url || /panamacompra\.gob\.pa/i.test(url);
-      if (pisable && url !== g.dropbox_folder_url) {
-        await supabase.from("tenders").update({ folder_url: g.dropbox_folder_url }).eq("id", g.converted_tender_id).eq("org_id", orgId);
+      .not("converted_tender_id", "is", null)) as { data: GovLite[] | null };
+    const { data: libres } = actos.length
+      ? ((await supabase
+          .from("gov_tenders")
+          .select(GOV_LITE_COLS)
+          .eq("org_id", orgId)
+          .is("converted_tender_id", null)
+          .in("num_proceso", actos)) as { data: GovLite[] | null })
+      : { data: [] as GovLite[] };
+
+    const govDeTender = new Map<string, GovLite>();
+    for (const g of vinculadas ?? []) if (g.converted_tender_id) govDeTender.set(g.converted_tender_id, g);
+    const libresPorActo = new Map((libres ?? []).map((g) => [normActo(g.num_proceso), g]));
+
+    // 1) Vincular por acto (guardado con .is null → dos corridas concurrentes no
+    //    duplican; el select detecta "0 filas" = otro ganó).
+    for (const t of tenders) {
+      if (govDeTender.has(t.id) || !t.acto_number) continue;
+      const g = libresPorActo.get(normActo(t.acto_number));
+      if (!g) continue;
+      const { data: ok } = (await supabase
+        .from("gov_tenders")
+        .update({ converted_tender_id: t.id })
+        .eq("id", g.id)
+        .eq("org_id", orgId)
+        .is("converted_tender_id", null)
+        .select("id")) as { data: { id: string }[] | null };
+      if (ok && ok.length > 0) {
+        govDeTender.set(t.id, g);
+        libresPorActo.delete(normActo(t.acto_number));
+      }
+    }
+
+    // 2) Backfill de campos faltantes.
+    for (const t of tenders) {
+      const g = govDeTender.get(t.id);
+      if (!g) continue;
+      const patch: Record<string, unknown> = {};
+      if (!t.delivery_date && g.fecha_cierre) patch.delivery_date = String(g.fecha_cierre).slice(0, 10);
+      if (t.amount_ref_usd === null && g.precio_ref !== null) patch.amount_ref_usd = Number(g.precio_ref);
+      if (!t.entity && g.entidad) patch.entity = g.entidad;
+      if (!t.objeto && g.titulo) patch.objeto = g.titulo;
+      const modalidad = modalidadDeTipo(g.tipo);
+      if (!t.modalidad && modalidad) patch.modalidad = modalidad;
+      const folderPisable = !t.folder_url || /panamacompra\.gob\.pa/i.test(t.folder_url);
+      if (g.dropbox_folder_url && folderPisable && t.folder_url !== g.dropbox_folder_url) patch.folder_url = g.dropbox_folder_url;
+      if (Object.keys(patch).length > 0) {
+        await supabase.from("tenders").update(patch).eq("id", t.id).eq("org_id", orgId);
       }
     }
   } catch {
