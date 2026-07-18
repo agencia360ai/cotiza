@@ -469,6 +469,21 @@ export async function pcProponentes(
       if (match) b.monto = match.monto;
     }
   }
+  // Fallback compra menor 10k: si ningún cuadro/lista trajo proponentes, la
+  // oferta está EN el pliego (procesoVistaPliego). Para LP esto devuelve [] (su
+  // oferta va en el cuadro), así que no interfiere.
+  if (base.length === 0) {
+    try {
+      const pliego = await pcPliegoRaw(session, idTipoProceso, idFlujos);
+      const props = pliego ? extractProponentesPliego(pliego) : [];
+      if (props.length > 0) {
+        base = props;
+        vistaUsada = `${BASE}/procesos-configuracion/pagina-componentes/${idTipoProceso}/procesoVistaPliego/${idFlujos}`;
+      }
+    } catch {
+      /* fallback best-effort */
+    }
+  }
   return { proponentes: base, vistaUsada };
 }
 
@@ -991,6 +1006,50 @@ export function extractFechaCierre(pliego: unknown): string | null {
   const [, dd, mm, yyyy] = m;
   const iso = `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
   return Number.isNaN(new Date(iso).getTime()) ? null : iso;
+}
+
+// ¿Alguna etiqueta/valor/descripción del árbol matchea? (señales del pliego
+// tipo "Motivo de adjudicación" / "Orden de compra refrendada").
+function pliegoTieneTexto(node: unknown, re: RegExp): boolean {
+  let found = false;
+  const visit = (n: unknown): void => {
+    if (found) return;
+    if (Array.isArray(n)) {
+      for (const x of n) visit(x);
+      return;
+    }
+    if (n && typeof n === "object") {
+      const o = n as Record<string, unknown>;
+      for (const k of ["nombre", "value", "descripcion", "titulo"]) {
+        const v = o[k];
+        if (typeof v === "string" && re.test(v)) {
+          found = true;
+          return;
+        }
+      }
+      for (const v of Object.values(o)) visit(v);
+    }
+  };
+  visit(node);
+  return found;
+}
+
+// Compra menor hasta 10,000 (idTipoProceso 4): NO tiene cuadroPropuesta — el
+// proponente y su oferta viven EN el pliego ("Información del proponente" +
+// "Monto de la contratación"). Extrae la empresa (Nombre Comercial / Razón
+// Social), el monto y si fue adjudicada (hay orden de compra / motivo de
+// adjudicación). Devuelve [] si el pliego no trae proponente (ej. una LP, donde
+// la oferta va en el cuadro aparte) — así es seguro como fallback general.
+export function extractProponentesPliego(pliego: unknown): PcProponente[] {
+  const nombre = findValueByLabel(pliego, /nombre comercial/i) ?? findValueByLabel(pliego, /raz[oó]n social/i);
+  if (!nombre || nombre.length > 140) return [];
+  const montoStr =
+    findValueByLabel(pliego, /monto de la contrataci[oó]n/i) ??
+    findValueByLabel(pliego, /monto neto/i) ??
+    findValueByLabel(pliego, /total ofertad/i);
+  const monto = montoStr ? parseNum(montoStr) : null;
+  const adjudicado = pliegoTieneTexto(pliego, /motivo de adjudicaci[oó]n|orden de compra refrendada/i);
+  return [{ nombre, monto, extra: adjudicado ? "Adjudicado" : null }];
 }
 
 export function extractDetalle(node: unknown, nowIso: string): GovDetalle {
