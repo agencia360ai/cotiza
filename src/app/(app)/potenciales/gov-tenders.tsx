@@ -347,7 +347,7 @@ function ParticiparUnificado({
 // propuestas son secretas). Autocontenido; se pide solo al tocar el botón.
 export function CompetidoresCard({ govId }: { govId: string }) {
   const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState<{ proponentes: PcProponente[]; vistaUsada: string | null; cerrada: boolean } | null>(null);
+  const [res, setRes] = useState<{ proponentes: PcProponente[]; vistaUsada: string | null; abierta: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function ver() {
@@ -403,9 +403,9 @@ export function CompetidoresCard({ govId }: { govId: string }) {
           </div>
         ) : (
           <p className="mt-2 text-[11px] italic text-slate-400">
-            {res.cerrada
-              ? "PanamaCompra no expuso las propuestas para este proceso (o cambió la vista). Si tienes el link de la tabla de propuestas, lo afino para que salga siempre."
-              : "Aún no cierra — las propuestas de otros oferentes son secretas hasta el acto de apertura."}
+            {res.abierta
+              ? "Aún no cierra — las propuestas de otros oferentes son secretas hasta el acto de apertura."
+              : "PanamaCompra no expuso las propuestas para este proceso (o cambió la vista). Si tienes el link de la tabla de propuestas, lo afino para que salga siempre."}
           </p>
         )
       ) : (
