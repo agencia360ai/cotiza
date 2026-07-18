@@ -1099,7 +1099,10 @@ export async function buscarInfoTender(tenderId: string): Promise<Result<BuscarI
           org_id: orgId,
           num_proceso: num,
           titulo: reg.titulo ?? null,
-          entidad: reg.nombre ?? null,
+          // OJO: en la búsqueda por número `nombre` es el TIPO ("Licitacion
+          // pública"), no la entidad — no usarlo como entidad. La entidad real
+          // sale del pliego (enrichVinculada → detalle) si hiciera falta.
+          entidad: null,
           fecha_cierre: safeIso(reg.fechaCierre),
           tipo: idTipoReg != null ? (ID_TO_TIPO[String(idTipoReg)] ?? null) : null,
           url: `https://www.panamacompra.gob.pa/Inicio/#!/vistaPreviaCP?NumLc=${encodeURIComponent(num)}&esap=1&nnc=0&it=1`,
