@@ -60,7 +60,7 @@ import {
   listMyTenders,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
-import { GovTendersBoard } from "./gov-tenders";
+import { GovTendersBoard, CompetidoresCard } from "./gov-tenders";
 import {
   listGovTenders,
   getGovTenderForTender,
@@ -2520,6 +2520,9 @@ function GovLicitacionPanel({ tenderId }: { tenderId: string }) {
           </p>
         )}
       </div>
+
+      {/* Competidores / propuestas recibidas — útil en revisión (tras el acto). */}
+      <CompetidoresCard govId={g.govId} />
     </div>
   );
 }

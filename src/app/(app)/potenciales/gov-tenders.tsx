@@ -345,7 +345,7 @@ function ParticiparUnificado({
 // Competidores / propuestas recibidas (bajo demanda). TANTEO de endpoints de
 // PanamaCompra: solo hay data en procesos ya cerrados (antes del acto las
 // propuestas son secretas). Autocontenido; se pide solo al tocar el botón.
-function CompetidoresCard({ tenderId }: { tenderId: string }) {
+export function CompetidoresCard({ govId }: { govId: string }) {
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<{ proponentes: PcProponente[]; vistaUsada: string | null; cerrada: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -354,7 +354,7 @@ function CompetidoresCard({ tenderId }: { tenderId: string }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await getGovTenderCompetidores(tenderId);
+      const r = await getGovTenderCompetidores(govId);
       if ("error" in r) setError(r.error);
       else setRes(r.data);
     } catch (e) {
@@ -433,7 +433,7 @@ function DetallePliego({
   onVerMisLicitaciones: () => void;
 }) {
   const d = r.detalle;
-  const competidores = <CompetidoresCard tenderId={r.id} />;
+  const competidores = <CompetidoresCard govId={r.id} />;
   // Título COMPLETO al expandir (en la fila va recortado a 2 líneas).
   const encabezado = (
     <div className="rounded-xl border border-slate-100 bg-white p-3.5">
