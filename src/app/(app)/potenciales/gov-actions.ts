@@ -32,17 +32,34 @@ export type GovForTender = {
   dropboxFolderUrl: string | null;
   docAnalisis: import("@/lib/panamacompra/docs").GovDocAnalisis | null;
   docsSometer: SubmissionPlan | null;
+  competidores: CompetidoresData | null;
 };
+const GOV_FOR_TENDER_COLSETS = [
+  "id, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter, competidores",
+  "id, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter",
+  "id, dropbox_folder_path, dropbox_folder_url",
+];
 export async function getGovTenderForTender(tenderId: string): Promise<{ error: string } | { ok: true; data: GovForTender | null }> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   const run = (cols: string) =>
     c.supabase.from("gov_tenders").select(cols).eq("org_id", c.orgId).eq("converted_tender_id", tenderId).maybeSingle();
-  let res = (await run("id, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter")) as {
-    data: { id: string; dropbox_folder_path: string | null; dropbox_folder_url: string | null; doc_analisis: unknown; docs_someter: unknown } | null;
+  type Res = {
+    data: {
+      id: string;
+      dropbox_folder_path: string | null;
+      dropbox_folder_url: string | null;
+      doc_analisis?: unknown;
+      docs_someter?: unknown;
+      competidores?: unknown;
+    } | null;
     error: { message: string; code?: string } | null;
   };
-  if (isMissingColumn(res.error)) res = (await run("id, dropbox_folder_path, dropbox_folder_url")) as typeof res;
+  let res: Res = { data: null, error: null };
+  for (const cols of GOV_FOR_TENDER_COLSETS) {
+    res = (await run(cols)) as Res;
+    if (!isMissingColumn(res.error)) break;
+  }
   if (res.error) return { error: res.error.message };
   if (!res.data) return { ok: true, data: null }; // tender manual (no vino del gobierno)
   return {
@@ -53,6 +70,7 @@ export async function getGovTenderForTender(tenderId: string): Promise<{ error: 
       dropboxFolderUrl: res.data.dropbox_folder_url ?? null,
       docAnalisis: (res.data.doc_analisis ?? null) as GovForTender["docAnalisis"],
       docsSometer: (res.data.docs_someter ?? null) as SubmissionPlan | null,
+      competidores: (res.data.competidores ?? null) as CompetidoresData | null,
     },
   };
 }
@@ -82,6 +100,7 @@ export async function setSubmissionDocEstado(
   return { ok: true, data: { docs_someter: plan } };
 }
 import type { GovTenderEval } from "@/lib/panamacompra/tamiz";
+import type { TenderStatus } from "@/lib/pipeline/types";
 
 // Carpeta base en Dropbox donde viven las licitaciones (override por env).
 const LICITACIONES_BASE =
@@ -151,10 +170,12 @@ export type GovTenderRow = {
   dropbox_folder_url: string | null;
   doc_analisis: GovDocAnalisis | null;
   docs_someter: SubmissionPlan | null;
+  competidores: CompetidoresData | null;
 };
 
 // Column sets de más completo a más básico (fallback por migraciones pendientes).
 const GOV_COLSETS = [
+  "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter, competidores",
   "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis, docs_someter",
   "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url, doc_analisis",
   "id, num_proceso, titulo, entidad, fecha_cierre, tipo, precio_ref, url, seen_at, created_at, relevante, relevancia_motivo, converted_tender_id, eval, detalle, dropbox_folder_path, dropbox_folder_url",
@@ -224,6 +245,7 @@ export async function listGovTenders(): Promise<Result<{ rows: GovTenderRow[]; s
       dropbox_folder_url: r.dropbox_folder_url ?? null,
       doc_analisis: r.doc_analisis ?? null,
       docs_someter: r.docs_someter ?? null,
+      competidores: r.competidores ?? null,
     };
   });
   return { ok: true, data: { rows, syncedAt } };
@@ -449,22 +471,89 @@ export async function uploadGovTenderDocToDropbox(
   }
 }
 
-// Competidores / propuestas recibidas de OTROS contratistas (bajo demanda, con
-// botón). TANTEO: prueba varias vistas de PanamaCompra. Solo hay data en procesos
-// YA CERRADOS (antes del acto las propuestas son secretas). Devuelve la lista y
-// qué vista funcionó (o un aviso si no se encontró).
-export async function getGovTenderCompetidores(
-  govId: string,
-): Promise<Result<{ proponentes: PcProponente[]; vistaUsada: string | null; abierta: boolean }>> {
+// ── Check status: competidores + resultado automático ─────────────────────────
+// "Check status" consulta las propuestas del acto en PanamaCompra y, si el
+// proceso tiene tender vinculado, aplica el veredicto: DICEC adjudicado →
+// Ganada + monto = el precio con el que se ganó. El resultado se PERSISTE en
+// gov_tenders.competidores (migración 0029) para no depender del gobierno.
+
+export type CompetidoresAuto = { estatus: "ganada" | "no_ganada" | null; monto: number | null };
+export type CompetidoresData = {
+  proponentes: PcProponente[];
+  vistaUsada: string | null;
+  abierta: boolean;
+  at: string;
+  auto: CompetidoresAuto | null;
+};
+
+// La empresa PROPIA en el portal (modo single-org DICEC): así detectamos cuál
+// de los proponentes somos nosotros. Override por env si algún día cambia.
+const RE_EMPRESA_PROPIA = new RegExp(process.env.PANAMACOMPRA_EMPRESA_MATCH || "dicec", "i");
+
+// Veredicto a partir del cuadro: ganamos si NUESTRA oferta salió adjudicada;
+// perdimos solo si estamos en la lista SIN adjudicar y OTRO sí quedó adjudicado
+// (mientras nadie esté adjudicado, el acto sigue en evaluación — no se toca).
+function decidirResultado(proponentes: PcProponente[]): { ganamos: boolean; perdimos: boolean; montoGanador: number | null } {
+  const propio = proponentes.find((p) => RE_EMPRESA_PROPIA.test(p.nombre));
+  const rivalGano = proponentes.some((p) => !RE_EMPRESA_PROPIA.test(p.nombre) && p.extra === "Adjudicado");
+  const ganamos = !!propio && propio.extra === "Adjudicado";
+  return { ganamos, perdimos: !!propio && !ganamos && rivalGano, montoGanador: ganamos ? propio.monto : null };
+}
+
+// Estados desde los que el veredicto puede ASCENDER el tender. Nunca degrada lo
+// que el usuario avanzó a mano: una Orden de proceder no vuelve a Ganada, y una
+// Ganada manual no baja a No ganada.
+const ASCENDIBLES_A_GANADA: TenderStatus[] = ["por_participar", "por_partir", "presentada", "en_revision", "no_ganada"];
+const ASCENDIBLES_A_NO_GANADA: TenderStatus[] = ["por_participar", "por_partir", "presentada", "en_revision"];
+
+async function aplicarResultadoAlTender(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  orgId: string,
+  tenderId: string,
+  proponentes: PcProponente[],
+): Promise<CompetidoresAuto | null> {
+  const { ganamos, perdimos, montoGanador } = decidirResultado(proponentes);
+  if (!ganamos && !perdimos) return null;
+  const { data: t } = (await supabase
+    .from("tenders")
+    .select("status, amount_ref_usd")
+    .eq("id", tenderId)
+    .eq("org_id", orgId)
+    .maybeSingle()) as { data: { status: TenderStatus; amount_ref_usd: number | null } | null };
+  if (!t) return null;
+  const patch: Record<string, unknown> = {};
+  let estatus: CompetidoresAuto["estatus"] = null;
+  if (ganamos) {
+    if (ASCENDIBLES_A_GANADA.includes(t.status)) {
+      patch.status = "ganada";
+      estatus = "ganada";
+    }
+    // El monto pasa a ser el precio GANADOR aunque el estatus ya estuviera al
+    // día (Ganada u Orden de proceder): es el número real del negocio.
+    const montoActual = t.amount_ref_usd === null ? null : Number(t.amount_ref_usd);
+    if (montoGanador !== null && montoActual !== montoGanador) patch.amount_ref_usd = montoGanador;
+  } else if (perdimos && ASCENDIBLES_A_NO_GANADA.includes(t.status)) {
+    patch.status = "no_ganada";
+    estatus = "no_ganada";
+  }
+  if (Object.keys(patch).length === 0) return null;
+  const { error } = await supabase.from("tenders").update(patch).eq("id", tenderId).eq("org_id", orgId);
+  if (error) return null;
+  return { estatus, monto: typeof patch.amount_ref_usd === "number" ? patch.amount_ref_usd : null };
+}
+
+export async function getGovTenderCompetidores(govId: string): Promise<Result<CompetidoresData>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
   const { data: g } = (await c.supabase
     .from("gov_tenders")
-    .select("tipo, raw, fecha_cierre")
+    .select("tipo, raw, fecha_cierre, converted_tender_id")
     .eq("id", govId)
     .eq("org_id", c.orgId)
-    .maybeSingle()) as { data: { tipo: string | null; raw: unknown; fecha_cierre: string | null } | null };
+    .maybeSingle()) as {
+    data: { tipo: string | null; raw: unknown; fecha_cierre: string | null; converted_tender_id: string | null } | null;
+  };
   if (!g) return { error: "No encontrada" };
   const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
   const idFlujos = rw?.idProcesosContratacionFlujos;
@@ -478,9 +567,57 @@ export async function getGovTenderCompetidores(
   try {
     const session = await pcLogin();
     const { proponentes, vistaUsada } = await pcProponentes(session, idTipo, String(idFlujos));
-    return { ok: true, data: { proponentes, vistaUsada, abierta } };
+    let auto: CompetidoresAuto | null = null;
+    if (g.converted_tender_id && proponentes.length > 0) {
+      auto = await aplicarResultadoAlTender(c.supabase, c.orgId, g.converted_tender_id, proponentes);
+    }
+    const data: CompetidoresData = { proponentes, vistaUsada, abierta, at: new Date().toISOString(), auto };
+    // Guardar "por siempre" — solo cuando trajo algo (no pisar data buena con
+    // un reintento vacío). Si la migración 0029 falta, la consulta igual sirve.
+    if (proponentes.length > 0) {
+      await c.supabase.from("gov_tenders").update({ competidores: data }).eq("id", govId).eq("org_id", c.orgId);
+    }
+    if (auto) revalidatePath("/potenciales");
+    return { ok: true, data };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudieron consultar las propuestas" };
+  }
+}
+
+// Sincroniza tenders.folder_url con la carpeta Dropbox de su gov_tender. Las
+// licitaciones seguidas ANTES de crear la carpeta quedaron apuntando a
+// PanamaCompra (o sin link). Best-effort al cargar la página: nunca rompe la
+// carga y solo pisa links vacíos o del portal — un link puesto a mano se respeta.
+export async function syncTenderDropboxLinks(): Promise<void> {
+  try {
+    const c = await ctx();
+    if (!c.ok) return;
+    const { supabase, orgId } = c;
+    const { data: govs } = (await supabase
+      .from("gov_tenders")
+      .select("converted_tender_id, dropbox_folder_url")
+      .eq("org_id", orgId)
+      .not("converted_tender_id", "is", null)
+      .not("dropbox_folder_url", "is", null)) as {
+      data: { converted_tender_id: string; dropbox_folder_url: string }[] | null;
+    };
+    if (!govs || govs.length === 0) return;
+    const { data: tenders } = (await supabase
+      .from("tenders")
+      .select("id, folder_url")
+      .eq("org_id", orgId)
+      .in("id", govs.map((g) => g.converted_tender_id))) as { data: { id: string; folder_url: string | null }[] | null };
+    const actual = new Map((tenders ?? []).map((t) => [t.id, t.folder_url]));
+    for (const g of govs) {
+      if (!actual.has(g.converted_tender_id)) continue; // tender borrado
+      const url = actual.get(g.converted_tender_id);
+      const pisable = !url || /panamacompra\.gob\.pa/i.test(url);
+      if (pisable && url !== g.dropbox_folder_url) {
+        await supabase.from("tenders").update({ folder_url: g.dropbox_folder_url }).eq("id", g.converted_tender_id).eq("org_id", orgId);
+      }
+    }
+  } catch {
+    /* best-effort */
   }
 }
 
