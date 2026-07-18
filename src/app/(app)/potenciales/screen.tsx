@@ -11,6 +11,7 @@ import {
   Search,
   X,
   Loader2,
+  Check,
   CheckCircle2,
   Clock,
   DollarSign,
@@ -232,7 +233,15 @@ function CotizacionesTab({
   );
   const [year, setYear] = useState<number | "all">(years[0] ?? "all");
   const [estado, setEstado] = useState<QuoteStatus | "all">("all");
-  const [rubro, setRubro] = useState<Rubro | "all">("all");
+  // Multi-select de rubros: vacío = todos. Se puede escoger varios.
+  const [rubros, setRubros] = useState<Set<Rubro>>(new Set());
+  const toggleRubro = (r: Rubro) =>
+    setRubros((prev) => {
+      const n = new Set(prev);
+      if (n.has(r)) n.delete(r);
+      else n.add(r);
+      return n;
+    });
   const [q, setQ] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -264,7 +273,7 @@ function CotizacionesTab({
     return ({ main: x, older }: QuoteGroup): boolean => {
       if (year !== "all" && x.year !== year) return false;
       if (estado !== "all" && x.status !== estado) return false;
-      if (rubro !== "all" && x.rubro !== rubro) return false;
+      if (rubros.size > 0 && (!x.rubro || !rubros.has(x.rubro))) return false;
       if (from && (!x.sent_date || x.sent_date < from)) return false;
       if (to && (!x.sent_date || x.sent_date > to)) return false;
       if (needle) {
@@ -276,7 +285,7 @@ function CotizacionesTab({
       }
       return true;
     };
-  }, [year, estado, rubro, q, from, to]);
+  }, [year, estado, rubros, q, from, to]);
 
   const filtered = useMemo(
     () => groups.filter((g) => passesFilters(g) && (!soloSinCliente || !g.main.client_id)),
@@ -511,12 +520,40 @@ function CotizacionesTab({
           onChange={(v) => setEstado(v as QuoteStatus | "all")}
           options={[{ v: "all", label: "Todos" }, ...QUOTE_STATUSES.map((s) => ({ v: s, label: QUOTE_STATUS_LABEL[s] }))]}
         />
-        <Dropdown
-          label="Rubro"
-          value={rubro}
-          onChange={(v) => setRubro(v as Rubro | "all")}
-          options={[{ v: "all", label: "Todos" }, ...RUBRO_KEYS.map((r) => ({ v: r, label: RUBROS[r].label }))]}
-        />
+        {/* Rubros multi-select: "Todos" (vacío) + un chip por rubro, se
+            seleccionan/deseleccionan varios. */}
+        <div className="flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setRubros(new Set())}
+            className={cn(
+              "rounded-full px-2.5 py-1.5 text-xs font-semibold transition-colors",
+              rubros.size === 0 ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+            )}
+          >
+            Todos
+          </button>
+          {RUBRO_KEYS.map((r) => {
+            const on = rubros.has(r);
+            const c = RUBROS[r];
+            return (
+              <button
+                key={r}
+                type="button"
+                onClick={() => toggleRubro(r)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-semibold ring-1 ring-inset transition-colors",
+                  on ? "text-white" : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50",
+                )}
+                style={on ? { backgroundColor: c.color, borderColor: c.color } : undefined}
+                title={c.label}
+              >
+                {on ? <Check className="size-3" /> : null}
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
         <div className="relative min-w-[180px] flex-1">
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
           <input
