@@ -33,11 +33,19 @@ export const QUOTE_STATUS_COLOR: Record<QuoteStatus, string> = {
   rechazada: "#EF4444",
 };
 
-export type TenderStatus = "por_participar" | "ganada" | "no_ganada" | "presentada" | "en_revision" | "por_partir";
+export type TenderStatus =
+  | "por_participar"
+  | "ganada"
+  | "orden_proceder"
+  | "no_ganada"
+  | "presentada"
+  | "en_revision"
+  | "por_partir";
 
 export const TENDER_STATUS_LABEL: Record<TenderStatus, string> = {
   por_participar: "Por participar",
   ganada: "Ganada",
+  orden_proceder: "Orden de proceder",
   no_ganada: "No ganada",
   presentada: "Participada",
   en_revision: "En revisión",
@@ -46,6 +54,7 @@ export const TENDER_STATUS_LABEL: Record<TenderStatus, string> = {
 export const TENDER_STATUS_COLOR: Record<TenderStatus, string> = {
   por_participar: "#7C3AED", // aún no se presenta — intención de participar
   ganada: "#10B981",
+  orden_proceder: "#0D9488", // ganada + OP recibida → lista para pasar a Proyectos
   no_ganada: "#94A3B8",
   presentada: "#2563EB",
   en_revision: "#F59E0B",
@@ -206,7 +215,7 @@ export function emptyPipelineData(year: number): PipelineData {
     },
     licitaciones: {
       total: cero(),
-      porEstatus: { por_participar: cero(), ganada: cero(), no_ganada: cero(), presentada: cero(), en_revision: cero(), por_partir: cero() },
+      porEstatus: { por_participar: cero(), ganada: cero(), orden_proceder: cero(), no_ganada: cero(), presentada: cero(), en_revision: cero(), por_partir: cero() },
       porModalidad: {
         publica: { label: "Licitación Pública", count: 0 },
         compraMenor: { label: "Compra Menor", count: 0 },
@@ -235,6 +244,7 @@ export function snapshotPipelineData(): PipelineData {
       porEstatus: {
         por_participar: { count: 0, monto: 0 },
         ganada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.ganada },
+        orden_proceder: { count: 0, monto: 0 },
         no_ganada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.no_ganada },
         presentada: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.presentada },
         en_revision: { ...PIPELINE_SNAPSHOT.licitaciones.porEstatus.en_revision },
