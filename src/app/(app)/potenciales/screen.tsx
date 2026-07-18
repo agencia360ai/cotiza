@@ -2274,6 +2274,7 @@ function LicitacionesTab({
             setTenders((prev) => prev.map((x) => (x.id === u.id ? u : x)));
             setEditing(null);
           }}
+          onAutoUpdated={(id, patch) => setTenders((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)))}
         />
       ) : null}
 
@@ -2332,7 +2333,21 @@ const SOMETER_ESTADO_CLS: Record<SubmissionDocEstado, string> = {
 // vino de PanamaCompra (busca su gov_tender ligado). El equipo sube los PDFs a
 // la carpeta de Dropbox y desde acá corre el análisis y arma el checklist,
 // cambiando el estado de cada rubro a mano.
-function GovLicitacionPanel({ tenderId }: { tenderId: string }) {
+// Estados en los que la licitación todavía se está PREPARANDO/presentando: solo
+// ahí tienen sentido el análisis IA del pliego y el checklist de documentos.
+// Después de participada (en revisión, ganada, orden de proceder, no ganada)
+// esos bloques se esconden — ya no hay nada que preparar.
+const STATUS_EN_PREPARACION: TenderStatus[] = ["por_participar", "por_partir", "presentada"];
+
+function GovLicitacionPanel({
+  tenderId,
+  status,
+  onAuto,
+}: {
+  tenderId: string;
+  status: TenderStatus;
+  onAuto?: (patch: Partial<{ status: TenderStatus; amount_ref_usd: number }>) => void;
+}) {
   const [gov, setGov] = useState<GovForTender | null | "loading">("loading");
   const [analyzeBusy, setAnalyzeBusy] = useState(false);
   const [someterBusy, setSometerBusy] = useState(false);
@@ -2428,21 +2443,26 @@ function GovLicitacionPanel({ tenderId }: { tenderId: string }) {
   const plan = g.docsSometer;
   const a = g.docAnalisis;
   const pct = prog && prog.total > 0 ? Math.round((prog.done / prog.total) * 100) : 0;
+  const enPreparacion = STATUS_EN_PREPARACION.includes(status);
 
   return (
     <div className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/30 p-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">Análisis y checklist del pliego</p>
+        <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
+          {enPreparacion ? "Análisis y checklist del pliego" : "Licitación en PanamaCompra"}
+        </p>
         {g.dropboxFolderUrl ? (
           <a href={g.dropboxFolderUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 hover:underline">
             <ExternalLink className="size-3" /> Carpeta Dropbox
           </a>
-        ) : (
+        ) : enPreparacion ? (
           <span className="text-[11px] text-amber-600">Crea la carpeta desde el board del gobierno.</span>
-        )}
+        ) : null}
       </div>
       {err ? <p className="rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{err}</p> : null}
 
+      {enPreparacion ? (
+        <>
       {/* Análisis IA */}
       <div className="rounded-lg bg-white p-2.5 ring-1 ring-inset ring-slate-100">
         <div className="flex items-center justify-between gap-2">
@@ -2522,9 +2542,11 @@ function GovLicitacionPanel({ tenderId }: { tenderId: string }) {
           </p>
         )}
       </div>
+        </>
+      ) : null}
 
-      {/* Competidores / propuestas recibidas — útil en revisión (tras el acto). */}
-      <CompetidoresCard govId={g.govId} />
+      {/* Check status: competidores + resultado automático (tras el acto). */}
+      <CompetidoresCard govId={g.govId} initial={g.competidores} onAuto={onAuto} />
     </div>
   );
 }
@@ -2727,11 +2749,15 @@ function TenderDrawer({
   clients,
   onClose,
   onSaved,
+  onAutoUpdated,
 }: {
   tender: TenderRow;
   clients: ClientOpt[];
   onClose: () => void;
   onSaved: (t: TenderRow) => void;
+  // "Check status" puede cambiar estatus/monto en el server sin pasar por
+  // Guardar: esto avisa al padre para que la tabla refleje el cambio al toque.
+  onAutoUpdated?: (id: string, patch: Partial<Pick<TenderRow, "status" | "amount_ref_usd">>) => void;
 }) {
   const [f, setF] = useState<TenderRow>(tender);
   const [saving, setSaving] = useState(false);
@@ -2770,8 +2796,15 @@ function TenderDrawer({
         {f.objeto ? <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{f.objeto}</p> : null}
         {f.acto_number ? <p className="text-xs text-slate-400">Acto: {f.acto_number}</p> : null}
 
-        {/* Análisis IA + checklist interactivo (si vino de PanamaCompra). */}
-        <GovLicitacionPanel tenderId={tender.id} />
+        {/* Análisis IA + checklist + Check status (si vino de PanamaCompra). */}
+        <GovLicitacionPanel
+          tenderId={tender.id}
+          status={f.status}
+          onAuto={(p) => {
+            setF((prev) => ({ ...prev, ...p }));
+            onAutoUpdated?.(tender.id, p);
+          }}
+        />
         <Field label="Cliente" hint="entidad estandarizada">
           <select
             className={inputCls}

@@ -50,8 +50,9 @@ import {
   saveSubmissionPlan,
   getGovTenderCompetidores,
   type GovTenderRow,
+  type CompetidoresData,
 } from "./gov-actions";
-import type { PcProponente } from "@/lib/panamacompra/client";
+import type { TenderStatus } from "@/lib/pipeline/types";
 import type { SubmissionDoc } from "@/lib/panamacompra/submit-docs";
 
 function relTime(ts: number): string {
@@ -342,12 +343,22 @@ function ParticiparUnificado({
   );
 }
 
-// Competidores / propuestas recibidas (bajo demanda). TANTEO de endpoints de
-// PanamaCompra: solo hay data en procesos ya cerrados (antes del acto las
-// propuestas son secretas). Autocontenido; se pide solo al tocar el botón.
-export function CompetidoresCard({ govId }: { govId: string }) {
+// "Check status": consulta las propuestas del acto en PanamaCompra y, si el
+// tender está vinculado, el server aplica el veredicto (DICEC adjudicado →
+// Ganada + monto ganador). El último resultado queda guardado en la base y se
+// muestra al abrir sin volver a consultar. Solo hay data en procesos ya
+// cerrados (antes del acto las propuestas son secretas).
+export function CompetidoresCard({
+  govId,
+  initial,
+  onAuto,
+}: {
+  govId: string;
+  initial?: CompetidoresData | null;
+  onAuto?: (patch: Partial<{ status: TenderStatus; amount_ref_usd: number }>) => void;
+}) {
   const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState<{ proponentes: PcProponente[]; vistaUsada: string | null; abierta: boolean } | null>(null);
+  const [res, setRes] = useState<CompetidoresData | null>(initial ?? null);
   const [error, setError] = useState<string | null>(null);
 
   async function ver() {
@@ -356,7 +367,16 @@ export function CompetidoresCard({ govId }: { govId: string }) {
     try {
       const r = await getGovTenderCompetidores(govId);
       if ("error" in r) setError(r.error);
-      else setRes(r.data);
+      else {
+        setRes(r.data);
+        const auto = r.data.auto;
+        if (auto && (auto.estatus || auto.monto !== null)) {
+          onAuto?.({
+            ...(auto.estatus ? { status: auto.estatus } : {}),
+            ...(auto.monto !== null ? { amount_ref_usd: auto.monto } : {}),
+          });
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo consultar");
     } finally {
@@ -364,6 +384,7 @@ export function CompetidoresCard({ govId }: { govId: string }) {
     }
   }
 
+  const auto = res?.auto ?? null;
   return (
     <div className="rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between gap-2">
@@ -375,32 +396,50 @@ export function CompetidoresCard({ govId }: { govId: string }) {
           className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
         >
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Users className="size-3.5" />}
-          {busy ? "Consultando…" : res ? "Volver a consultar" : "Ver competidores"}
+          {busy ? "Consultando…" : "Check status"}
         </button>
       </div>
       {error ? <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700 ring-1 ring-inset ring-red-600/20">{error}</p> : null}
+      {auto && (auto.estatus || auto.monto !== null) ? (
+        <p
+          className={cn(
+            "mt-2 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold ring-1 ring-inset",
+            auto.estatus === "no_ganada" ? "bg-rose-50 text-rose-700 ring-rose-600/20" : "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+          )}
+        >
+          {auto.estatus === "ganada"
+            ? "✓ Adjudicada a DICEC — marcada Ganada automáticamente"
+            : auto.estatus === "no_ganada"
+              ? "Adjudicada a otro oferente — marcada No ganada"
+              : "Estatus ya estaba al día"}
+          {auto.monto !== null ? ` · monto actualizado a ${formatMoneyExact(auto.monto)}` : ""}
+        </p>
+      ) : null}
       {res ? (
         res.proponentes.length > 0 ? (
-          <div className="mt-2 overflow-x-auto rounded-lg ring-1 ring-slate-100">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50 text-left text-[10px] uppercase tracking-wide text-slate-400">
-                  <th className="px-2 py-1.5 font-semibold">Oferente</th>
-                  <th className="px-2 py-1.5 text-right font-semibold">Propuesta</th>
-                  <th className="px-2 py-1.5 font-semibold">Resultado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {res.proponentes.map((p, i) => (
-                  <tr key={i} className="border-b border-slate-50 last:border-0">
-                    <td className="px-2 py-1.5 text-slate-700">{p.nombre}</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{p.monto !== null ? formatMoneyExact(p.monto) : "—"}</td>
-                    <td className="px-2 py-1.5 text-slate-500">{p.extra ?? "—"}</td>
+          <>
+            <div className="mt-2 overflow-x-auto rounded-lg ring-1 ring-slate-100">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 bg-slate-50 text-left text-[10px] uppercase tracking-wide text-slate-400">
+                    <th className="px-2 py-1.5 font-semibold">Oferente</th>
+                    <th className="px-2 py-1.5 text-right font-semibold">Propuesta</th>
+                    <th className="px-2 py-1.5 font-semibold">Resultado</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {res.proponentes.map((p, i) => (
+                    <tr key={i} className="border-b border-slate-50 last:border-0">
+                      <td className="px-2 py-1.5 text-slate-700">{p.nombre}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{p.monto !== null ? formatMoneyExact(p.monto) : "—"}</td>
+                      <td className="px-2 py-1.5 text-slate-500">{p.extra ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {res.at ? <p className="mt-1.5 text-[10px] text-slate-400">Consultado: {res.at.slice(0, 10)}</p> : null}
+          </>
         ) : (
           <p className="mt-2 text-[11px] italic text-slate-400">
             {res.abierta
@@ -410,7 +449,7 @@ export function CompetidoresCard({ govId }: { govId: string }) {
         )
       ) : (
         <p className="mt-1.5 text-[11px] text-slate-400">
-          Solo hay datos en procesos ya cerrados: antes del acto de apertura, las propuestas de la competencia son confidenciales por ley.
+          Consulta quién más ofertó y si ya se adjudicó: si DICEC ganó, la licitación se marca Ganada con el monto ganador automáticamente.
         </p>
       )}
     </div>
@@ -433,7 +472,7 @@ function DetallePliego({
   onVerMisLicitaciones: () => void;
 }) {
   const d = r.detalle;
-  const competidores = <CompetidoresCard govId={r.id} />;
+  const competidores = <CompetidoresCard govId={r.id} initial={r.competidores} />;
   // Título COMPLETO al expandir (en la fila va recortado a 2 líneas).
   const encabezado = (
     <div className="rounded-xl border border-slate-100 bg-white p-3.5">
