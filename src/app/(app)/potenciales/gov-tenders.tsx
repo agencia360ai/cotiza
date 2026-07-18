@@ -411,8 +411,10 @@ export function CompetidoresCard({
             ? "✓ Adjudicada a DICEC — marcada Ganada automáticamente"
             : auto.estatus === "no_ganada"
               ? "Adjudicada a otro oferente — marcada No ganada"
-              : "Estatus ya estaba al día"}
-          {auto.monto !== null ? ` · monto actualizado a ${formatMoneyExact(auto.monto)}` : ""}
+              : auto.monto !== null
+                ? "Precio real de la oferta de DICEC actualizado"
+                : "Estatus ya estaba al día"}
+          {auto.monto !== null ? ` · ${formatMoneyExact(auto.monto)}` : ""}
         </p>
       ) : null}
       {res ? (

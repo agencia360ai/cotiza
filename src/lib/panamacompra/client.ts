@@ -163,45 +163,52 @@ export async function pcListProcesos(
 // (busqueda/proceso-lista); el match se valida por número EXACTO, así que una
 // variante ignorada por la API no puede dar un falso positivo. Deja diagnóstico
 // en logs para afinar con datos reales.
+// Comparación de números de proceso tolerante a formato (separadores, ceros,
+// mayúsculas): "2026-1-11-01-08-LP-000014" == "2026 1 11 1 8 lp 14"? No —
+// solo quita separadores y mayúsculas, NO ceros de padding, para no confundir
+// "000014" con "000140". El padding real siempre coincide entre portal y filtro.
+const normNumProceso = (s: string | undefined | null) => (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
 export async function pcBuscarProceso(session: PcSession, numero: string): Promise<PcRegistro | null> {
   const num = numero.trim();
   if (!num) return null;
-  const variantes: Record<string, unknown>[] = [
-    { numLc: num }, // el portal llama NumLc al número en sus URLs
+  const target = normNumProceso(num);
+  // Cuerpos candidatos para POST busqueda/proceso-lista (el endpoint que usa
+  // "Búsqueda Pliego" del portal, confirmado por captura). No se conoce la clave
+  // exacta del filtro → se tantean; el match se valida por número EXACTO
+  // (normalizado), así que una variante que la API ignore no da falso positivo.
+  const bodies: Record<string, unknown>[] = [
+    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numProceso: num } },
+    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numProcesoOriginal: num } },
+    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numeroProceso: num } },
+    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numLc: num } },
+    { registrosPorPagina: 20, valorSiguiente: "", filtro: { busqueda: num } },
+    { registrosPorPagina: 20, valorSiguiente: "", numProceso: num },
     { numProceso: num },
-    { numeroProceso: num },
-    { numProcesoOriginal: num },
-    { busqueda: num },
-    { texto: num },
   ];
-  for (const filtro of variantes) {
+  for (const body of bodies) {
     try {
       const res = await fetch(`${BASE}/busqueda/proceso-lista`, {
         method: "POST",
         headers: baseHeaders(session),
-        body: JSON.stringify({ registrosPorPagina: 20, valorSiguiente: "", filtro }),
+        body: JSON.stringify(body),
         cache: "no-store",
         signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) continue;
       const j = (await res.json()) as { result?: { registros?: PcRegistro[] } };
       const regs = j.result?.registros ?? [];
-      const match = regs.find((r) =>
-        [r.numProcesoOriginal, r.numProceso].some((n) => (n ?? "").trim().toUpperCase() === num.toUpperCase()),
-      );
+      const match = regs.find((r) => [r.numProcesoOriginal, r.numProceso].some((n) => normNumProceso(n) === target));
       if (match) return match;
       if (regs.length > 0) {
-        // La API contestó pero sin nuestro número: o ignoró el filtro o el shape
-        // del registro cambió — dejar rastro para el afinado.
-        console.warn(
-          `[pcBuscarProceso] variante ${Object.keys(filtro)[0]} devolvió ${regs.length} registros sin match para ${num}`,
-        );
+        const key = body.filtro ? Object.keys(body.filtro as object)[0] : Object.keys(body)[0];
+        console.warn(`[pcBuscarProceso] variante ${key} devolvió ${regs.length} registros sin match para ${num}`);
       }
     } catch {
       continue; // timeout/red en una variante no corta el tanteo
     }
   }
-  console.warn(`[pcBuscarProceso] sin match para ${num} tras ${variantes.length} variantes`);
+  console.warn(`[pcBuscarProceso] sin match para ${num} tras ${bodies.length} variantes`);
   return null;
 }
 
@@ -955,6 +962,48 @@ export type GovDetalle = {
   items: PliegoItem[];
   at: string;
 };
+
+// El pliego guarda datos como pares { nombre: "<etiqueta>", value: "<dato>" }
+// (no como claves nombradas). Busca el value del primer par cuya etiqueta
+// matchee. Así se leen "Fecha … presentación de propuestas", "Precio de
+// referencia", etc., que viven bajo la clave genérica "nombre".
+function findValueByLabel(node: unknown, labelRe: RegExp): string | null {
+  let found: string | null = null;
+  const visit = (n: unknown): void => {
+    if (found !== null) return;
+    if (Array.isArray(n)) {
+      for (const x of n) visit(x);
+      return;
+    }
+    if (n && typeof n === "object") {
+      const o = n as Record<string, unknown>;
+      if (typeof o.nombre === "string" && labelRe.test(o.nombre) && typeof o.value === "string" && o.value.trim()) {
+        found = o.value.trim();
+        return;
+      }
+      for (const v of Object.values(o)) visit(v);
+    }
+  };
+  visit(node);
+  return found;
+}
+
+// Fecha de PARTICIPACIÓN = cierre de presentación de propuestas (la fecha "de
+// cuando es la licitación"). El pliego la trae como "24-06-2026 hasta 10:30 AM"
+// (DD-MM-YYYY). Cae a la de apertura y luego a la de publicación. Devuelve
+// YYYY-MM-DD o null.
+export function extractFechaCierre(pliego: unknown): string | null {
+  const raw =
+    findValueByLabel(pliego, /presentaci[oó]n de propuestas/i) ??
+    findValueByLabel(pliego, /apertura de propuestas/i) ??
+    findValueByLabel(pliego, /fecha de publicaci[oó]n/i);
+  if (!raw) return null;
+  const m = raw.match(/(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  const iso = `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  return Number.isNaN(new Date(iso).getTime()) ? null : iso;
+}
 
 export function extractDetalle(node: unknown, nowIso: string): GovDetalle {
   return {

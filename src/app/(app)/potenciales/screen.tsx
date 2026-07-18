@@ -2379,6 +2379,7 @@ function BuscarInfoCard({
       if (typeof a.objeto === "string") patch.objeto = a.objeto;
       if (typeof a.entity === "string") patch.entity = a.entity;
       if (typeof a.modalidad === "string") patch.modalidad = a.modalidad as Modalidad;
+      if (a.status === "ganada" || a.status === "no_ganada") patch.status = a.status;
       if (Object.keys(patch).length > 0) onAuto?.(patch);
       if (r.data.pc === "vinculada") onVinculada();
     } catch (e) {
@@ -2417,6 +2418,13 @@ function BuscarInfoCard({
       {res ? (
         <div className="mt-2 space-y-1 text-[11px] text-slate-600">
           <p>{PC_TXT[res.pc]}</p>
+          {typeof res.aplicado.delivery_date === "string" ? <p>✓ Fecha de participación: {res.aplicado.delivery_date}</p> : null}
+          {res.auto?.estatus === "ganada" ? (
+            <p className="font-semibold text-emerald-700">✓ Adjudicada a DICEC — marcada Ganada.</p>
+          ) : res.auto?.estatus === "no_ganada" ? (
+            <p className="font-semibold text-rose-700">Adjudicada a otro oferente — marcada No ganada.</p>
+          ) : null}
+          {typeof res.aplicado.amount_ref_usd === "number" ? <p>✓ Precio real de la oferta cargado.</p> : null}
           <p>{res.carpeta ? "✓ Carpeta de Dropbox enlazada." : "No encontré la carpeta del acto en Dropbox."}</p>
         </div>
       ) : null}

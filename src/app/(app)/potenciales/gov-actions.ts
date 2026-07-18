@@ -16,6 +16,7 @@ import {
   extractDetalle,
   extractArchivos,
   extractPrecioBreakdown,
+  extractFechaCierre,
   type GovDetalle,
   type PcProponente,
 } from "@/lib/panamacompra/client";
@@ -502,12 +503,14 @@ const RE_EMPRESA_PROPIA = new RegExp(process.env.PANAMACOMPRA_EMPRESA_MATCH || "
 
 // Veredicto a partir del cuadro: ganamos si NUESTRA oferta salió adjudicada;
 // perdimos solo si estamos en la lista SIN adjudicar y OTRO sí quedó adjudicado
-// (mientras nadie esté adjudicado, el acto sigue en evaluación — no se toca).
-function decidirResultado(proponentes: PcProponente[]): { ganamos: boolean; perdimos: boolean; montoGanador: number | null } {
+// (mientras nadie esté adjudicado, el acto sigue en evaluación — no se toca el
+// estatus). `montoPropio` es el PRECIO REAL con el que participó DICEC (su
+// oferta), gane o pierda — es el número que el usuario quiere ver.
+function decidirResultado(proponentes: PcProponente[]): { ganamos: boolean; perdimos: boolean; montoPropio: number | null } {
   const propio = proponentes.find((p) => RE_EMPRESA_PROPIA.test(p.nombre));
   const rivalGano = proponentes.some((p) => !RE_EMPRESA_PROPIA.test(p.nombre) && p.extra === "Adjudicado");
   const ganamos = !!propio && propio.extra === "Adjudicado";
-  return { ganamos, perdimos: !!propio && !ganamos && rivalGano, montoGanador: ganamos ? propio.monto : null };
+  return { ganamos, perdimos: !!propio && !ganamos && rivalGano, montoPropio: propio?.monto ?? null };
 }
 
 // Estados desde los que el veredicto puede ASCENDER el tender. Nunca degrada lo
@@ -522,8 +525,9 @@ async function aplicarResultadoAlTender(
   tenderId: string,
   proponentes: PcProponente[],
 ): Promise<CompetidoresAuto | null> {
-  const { ganamos, perdimos, montoGanador } = decidirResultado(proponentes);
-  if (!ganamos && !perdimos) return null;
+  const { ganamos, perdimos, montoPropio } = decidirResultado(proponentes);
+  // Nada que aplicar si no estamos en el cuadro y no hubo veredicto.
+  if (!ganamos && !perdimos && montoPropio === null) return null;
   const { data: t } = (await supabase
     .from("tenders")
     .select("status, amount_ref_usd")
@@ -533,19 +537,17 @@ async function aplicarResultadoAlTender(
   if (!t) return null;
   const patch: Record<string, unknown> = {};
   let estatus: CompetidoresAuto["estatus"] = null;
-  if (ganamos) {
-    if (ASCENDIBLES_A_GANADA.includes(t.status)) {
-      patch.status = "ganada";
-      estatus = "ganada";
-    }
-    // El monto pasa a ser el precio GANADOR aunque el estatus ya estuviera al
-    // día (Ganada u Orden de proceder): es el número real del negocio.
-    const montoActual = t.amount_ref_usd === null ? null : Number(t.amount_ref_usd);
-    if (montoGanador !== null && montoActual !== montoGanador) patch.amount_ref_usd = montoGanador;
+  if (ganamos && ASCENDIBLES_A_GANADA.includes(t.status)) {
+    patch.status = "ganada";
+    estatus = "ganada";
   } else if (perdimos && ASCENDIBLES_A_NO_GANADA.includes(t.status)) {
     patch.status = "no_ganada";
     estatus = "no_ganada";
   }
+  // El monto pasa a ser el PRECIO REAL de la oferta de DICEC (gane, pierda o en
+  // revisión): reemplaza al referencial del gobierno por lo que se ofertó.
+  const montoActual = t.amount_ref_usd === null ? null : Number(t.amount_ref_usd);
+  if (montoPropio !== null && montoActual !== montoPropio) patch.amount_ref_usd = montoPropio;
   if (Object.keys(patch).length === 0) return null;
   const { error } = await supabase.from("tenders").update(patch).eq("id", tenderId).eq("org_id", orgId);
   if (error) return null;
@@ -962,15 +964,82 @@ export async function saveSubmissionPlan(
   return { ok: true, data: { plan } };
 }
 
+// Tras vincular un proceso: trae del gobierno la FECHA de participación (del
+// pliego, "presentación de propuestas") y el PRECIO real + veredicto (del cuadro
+// de propuestas). Best-effort: cada fetch va por separado y un fallo no tumba al
+// resto. Actualiza el gov_tender y devuelve los campos a aplicar al tender.
+async function enrichVinculada(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  orgId: string,
+  govId: string,
+  tender: TenderLite,
+): Promise<{ patch: Record<string, unknown>; auto: CompetidoresAuto | null }> {
+  const patch: Record<string, unknown> = {};
+  let auto: CompetidoresAuto | null = null;
+  const { data: g } = (await supabase
+    .from("gov_tenders")
+    .select("tipo, raw, fecha_cierre")
+    .eq("id", govId)
+    .eq("org_id", orgId)
+    .maybeSingle()) as { data: { tipo: string | null; raw: unknown; fecha_cierre: string | null } | null };
+  if (!g) return { patch, auto };
+  const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
+  const idFlujos = rw?.idProcesosContratacionFlujos;
+  const idTipo = idTipoDe(g.tipo, g.raw);
+  if (!idFlujos || !idTipo) return { patch, auto };
+  try {
+    const session = await pcLoginCached();
+    // Pliego → fecha de cierre (si falta) + detalle + precio de referencia.
+    try {
+      const pliego = await pcPliegoRaw(session, idTipo, String(idFlujos));
+      if (pliego) {
+        const govPatch: Record<string, unknown> = { detalle: extractDetalle(pliego, new Date().toISOString()) };
+        const fecha = extractFechaCierre(pliego);
+        if (fecha && !g.fecha_cierre) {
+          govPatch.fecha_cierre = fecha;
+          if (!tender.delivery_date) patch.delivery_date = fecha;
+        }
+        const bd = extractPrecioBreakdown(pliego);
+        if (bd.elegido !== null && tender.amount_ref_usd === null) patch.amount_ref_usd = bd.elegido;
+        let { error } = await supabase.from("gov_tenders").update(govPatch).eq("id", govId).eq("org_id", orgId);
+        if (isMissingColumn(error)) {
+          delete govPatch.detalle; // migración 0015 pendiente
+          ({ error } = await supabase.from("gov_tenders").update(govPatch).eq("id", govId).eq("org_id", orgId));
+        }
+      }
+    } catch {
+      /* pliego best-effort */
+    }
+    // Cuadro → competidores + veredicto + PRECIO real de la oferta de DICEC.
+    try {
+      const { proponentes, vistaUsada } = await pcProponentes(session, idTipo, String(idFlujos));
+      if (proponentes.length > 0) {
+        auto = await aplicarResultadoAlTender(supabase, orgId, tender.id, proponentes);
+        const data: CompetidoresData = { proponentes, vistaUsada, abierta: false, at: new Date().toISOString(), auto };
+        await supabase.from("gov_tenders").update({ competidores: data }).eq("id", govId).eq("org_id", orgId);
+        if (auto?.monto != null) patch.amount_ref_usd = auto.monto; // el precio real pisa al referencial
+        if (auto?.estatus) patch.status = auto.estatus;
+      }
+    } catch {
+      /* cuadro best-effort */
+    }
+  } catch {
+    /* login best-effort */
+  }
+  return { patch, auto };
+}
+
 // ── Buscar información de UN acto (viejos / no capturados por el escaneo) ────
 // Para licitaciones sin vínculo al gobierno: busca el proceso POR NÚMERO en
 // PanamaCompra (la fuente real de la FECHA del acto) y lo registra vinculado;
-// además busca la carpeta "Acto #<número>" en Dropbox. Rellena los campos
-// faltantes del tender y devuelve qué se aplicó (para pintar el form al toque).
+// trae fecha + precio real + competidores del pliego y el cuadro; y busca la
+// carpeta "Acto #<número>" en Dropbox. Devuelve qué se aplicó (para pintar el
+// form al toque).
 export type BuscarInfoResultado = {
   pc: "vinculada" | "ya_vinculada" | "ocupada" | "no_encontrada" | "sin_config";
   carpeta: string | null;
   aplicado: Record<string, unknown>;
+  auto: CompetidoresAuto | null;
 };
 
 export async function buscarInfoTender(tenderId: string): Promise<Result<BuscarInfoResultado>> {
@@ -1070,7 +1139,16 @@ export async function buscarInfoTender(tenderId: string): Promise<Result<BuscarI
 
   const aplicado: Record<string, unknown> = gov ? patchTenderDesdeGov(t, gov) : {};
 
-  // 3) Carpeta en Dropbox si sigue faltando.
+  // 3) Enriquecer desde el gobierno: fecha del pliego + precio real/veredicto del
+  //    cuadro (lo que trae GANA sobre el referencial). Solo si hay vínculo.
+  let auto: CompetidoresAuto | null = null;
+  if (gov) {
+    const { patch, auto: a } = await enrichVinculada(supabase, orgId, gov.id, t);
+    Object.assign(aplicado, patch);
+    auto = a;
+  }
+
+  // 4) Carpeta en Dropbox si sigue faltando.
   const folderTras = (aplicado.folder_url as string | undefined) ?? t.folder_url;
   if (hasDropboxConfig() && esFolderPisable(folderTras ?? null)) {
     const hit = await buscarCarpetaActo(acto);
@@ -1087,7 +1165,7 @@ export async function buscarInfoTender(tenderId: string): Promise<Result<BuscarI
   }
   revalidatePath("/potenciales");
   const carpeta = typeof aplicado.folder_url === "string" ? aplicado.folder_url : !esFolderPisable(t.folder_url) ? t.folder_url : null;
-  return { ok: true, data: { pc, carpeta, aplicado } };
+  return { ok: true, data: { pc, carpeta, aplicado, auto } };
 }
 
 // "Actualizar": delega al sync compartido (mismo código que el cron diario).
