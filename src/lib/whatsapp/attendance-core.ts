@@ -147,6 +147,67 @@ export function fmtDuracion(ms: number): string {
   return h > 0 ? `${h} h ${m} min` : `${m} min`;
 }
 
+// ── Emparejado de turnos (para el tablero; se calcula al vuelo) ───────────────
+export type AttEvent = { id: string; direction: "in" | "out"; occurred_at: string; status?: string };
+export type Shift = { in: AttEvent | null; out: AttEvent | null; ms: number | null };
+
+// Día calendario en America/Panama (UTC-5, sin DST): 'YYYY-MM-DD'.
+export function panamaDayKey(iso: string): string {
+  return new Date(new Date(iso).getTime() - 5 * 3600_000).toISOString().slice(0, 10);
+}
+
+// Empareja los eventos (cronológicos) de UN técnico en turnos in→out. Un 'in'
+// abre turno; el siguiente 'out' lo cierra. Un 'in' seguido de otro 'in' deja el
+// primero abierto (out=null). Un 'out' sin 'in' previo abierto queda suelto.
+export function pairShifts(eventsChrono: AttEvent[]): Shift[] {
+  const shifts: Shift[] = [];
+  let abierto: AttEvent | null = null;
+  for (const e of eventsChrono) {
+    if (e.direction === "in") {
+      if (abierto) shifts.push({ in: abierto, out: null, ms: null }); // in sin cierre
+      abierto = e;
+    } else {
+      if (abierto) {
+        shifts.push({ in: abierto, out: e, ms: +new Date(e.occurred_at) - +new Date(abierto.occurred_at) });
+        abierto = null;
+      } else {
+        shifts.push({ in: null, out: e, ms: null }); // out suelto
+      }
+    }
+  }
+  if (abierto) shifts.push({ in: abierto, out: null, ms: null });
+  return shifts;
+}
+
+export function sumShiftMs(shifts: Shift[]): number {
+  return shifts.reduce((a, s) => a + (s.ms ?? 0), 0);
+}
+
+// ── Parseo de coordenadas (pegar link de Google Maps o "lat, lng") ────────────
+export function parseLatLng(input: string): { lat: number; lng: number } | null {
+  const s = input.trim();
+  const valida = (lat: number, lng: number) =>
+    Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+  // Patrones de URL de Google Maps. !3d!4d (el pin REAL del lugar) gana sobre @
+  // (centro del mapa); q/ll son variantes de "?q=lat,lng".
+  const patrones = [
+    /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/,
+    /@(-?\d+\.\d+),(-?\d+\.\d+)/,
+    /[?&](?:q|ll|sll|daddr)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/,
+  ];
+  for (const re of patrones) {
+    const m = s.match(re);
+    if (m) {
+      const r = valida(Number(m[1]), Number(m[2]));
+      if (r) return r;
+    }
+  }
+  // "lat, lng" o "lat lng" pelado.
+  const m = s.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (m) return valida(Number(m[1]), Number(m[2]));
+  return null;
+}
+
 export function buildConfirmation(input: {
   direction: "in" | "out";
   when: Date;

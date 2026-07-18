@@ -65,7 +65,7 @@ export function NewTechnicianForm() {
         <UserPlus className="size-4 text-slate-700" />
         <h3 className="text-sm font-semibold text-slate-900">Agregar personal</h3>
       </div>
-      <p className="sr-only">Cargá nombre, teléfono y email. Después podés editarlo y asignarle clientes específicos.</p>
+      <p className="sr-only">Carga nombre, teléfono y email. Después puedes editarlo y asignarle clientes específicos.</p>
       <div className="grid gap-3 sm:grid-cols-3">
         <input
           required
@@ -90,7 +90,7 @@ export function NewTechnicianForm() {
       </div>
       <div className="mt-3 flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
-          Se genera un link único — copialo y mandáselo por WhatsApp al personal
+          Se genera un link único — cópialo y mándaselo por WhatsApp al personal
         </p>
         <button
           type="submit"
