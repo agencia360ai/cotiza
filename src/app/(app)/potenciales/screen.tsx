@@ -94,11 +94,11 @@ type ClientOpt = { id: string; name: string; locations: { id: string; name: stri
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
 type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
-const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "ganada", "orden_proceder", "no_ganada"];
-// Los estatus del pipeline propio, en orden del flujo:
-// Por participar → Participada → En revisión → Ganada → Orden de proceder → No ganada.
+const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "no_ganada", "ganada", "orden_proceder"];
+// Orden del flujo, con la RAMIFICACIÓN tras la revisión:
+// Por participar → Participada → En revisión → (No ganada | Ganada → Orden de proceder).
 // "por_partir" es legacy (Participada) y se muestra solo si una fila ya lo tiene.
-const TENDER_STATUS_PICKER: TenderStatus[] = ["por_participar", "presentada", "en_revision", "ganada", "orden_proceder", "no_ganada"];
+const TENDER_STATUS_PICKER: TenderStatus[] = ["por_participar", "presentada", "en_revision", "no_ganada", "ganada", "orden_proceder"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
 const MODALIDAD_SHORT: Record<Modalidad, string> = {
   licitacion_publica: "LP",
