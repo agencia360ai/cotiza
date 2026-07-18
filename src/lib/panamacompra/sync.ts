@@ -23,6 +23,8 @@ const TIPOS: { idEstado: string; idTipoProceso: string; enviada?: string; key: s
 
 // tipo guardado → idTipoProceso de la API (lo usan el backfill y la evaluación).
 export const TIPO_TO_ID: Record<string, string> = Object.fromEntries(TIPOS.map((t) => [t.key, t.idTipoProceso]));
+// idTipoProceso → tipo guardado (para clasificar procesos hallados por número).
+export const ID_TO_TIPO: Record<string, string> = Object.fromEntries(TIPOS.map((t) => [t.idTipoProceso, t.key]));
 
 // "la columna no existe" (migración pendiente → fallback) vs error real.
 function isMissingColumn(error: { message?: string; code?: string } | null | undefined): boolean {
@@ -32,7 +34,7 @@ function isMissingColumn(error: { message?: string; code?: string } | null | und
 }
 
 // Fecha del gobierno → ISO, sin romper el sync si viene malformada (poison pill).
-function safeIso(v: unknown): string | null {
+export function safeIso(v: unknown): string | null {
   if (!v) return null;
   const d = new Date(v as string);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();

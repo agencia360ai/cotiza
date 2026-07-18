@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
-import { syncGovTenders, TIPO_TO_ID } from "@/lib/panamacompra/sync";
+import { syncGovTenders, TIPO_TO_ID, ID_TO_TIPO, safeIso } from "@/lib/panamacompra/sync";
 import { evaluateTender } from "@/lib/panamacompra/evaluate";
 import {
   hasPanamaCompraConfig,
@@ -12,6 +12,7 @@ import {
   pcPliegoRaw,
   pcDownloadArchivo,
   pcProponentes,
+  pcBuscarProceso,
   extractDetalle,
   extractArchivos,
   extractPrecioBreakdown,
@@ -148,6 +149,15 @@ async function ctx() {
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
   return { ok: true as const, supabase, orgId };
+}
+
+// idTipoProceso para las vistas del pliego: del tipo clasificado o, si el tipo
+// no se conoce (procesos vinculados por número de acto), del registro crudo.
+function idTipoDe(tipo: string | null, raw: unknown): string | undefined {
+  const porTipo = tipo ? TIPO_TO_ID[tipo] : undefined;
+  if (porTipo) return porTipo;
+  const idRaw = (raw as { idTipoProceso?: string | number } | null)?.idTipoProceso;
+  return idRaw != null && String(idRaw).trim() !== "" ? String(idRaw) : undefined;
 }
 
 export type GovTenderRow = {
@@ -297,7 +307,7 @@ export async function enrichGovTender(govId: string): Promise<Result<{ detalle: 
   if (!g) return { error: "No encontrada" };
   const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
   const idFlujos = rw?.idProcesosContratacionFlujos;
-  const idTipo = g.tipo ? TIPO_TO_ID[g.tipo] : undefined;
+  const idTipo = idTipoDe(g.tipo, g.raw);
   if (!idFlujos || !idTipo) return { error: "Este proceso no tiene pliego consultable." };
   try {
     const session = await pcLogin();
@@ -395,7 +405,7 @@ export async function listGovTenderDocs(
   if (!g) return { error: "No encontrada" };
   const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
   const idFlujos = rw?.idProcesosContratacionFlujos;
-  const idTipo = g.tipo ? TIPO_TO_ID[g.tipo] : undefined;
+  const idTipo = idTipoDe(g.tipo, g.raw);
   if (!idFlujos || !idTipo) return { error: "Este proceso no tiene pliego consultable." };
   try {
     const session = await pcLoginCached();
@@ -557,7 +567,7 @@ export async function getGovTenderCompetidores(govId: string): Promise<Result<Co
   if (!g) return { error: "No encontrada" };
   const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
   const idFlujos = rw?.idProcesosContratacionFlujos;
-  const idTipo = g.tipo ? TIPO_TO_ID[g.tipo] : undefined;
+  const idTipo = idTipoDe(g.tipo, g.raw);
   if (!idFlujos || !idTipo) return { error: "Este proceso no tiene detalle consultable en PanamaCompra." };
   // "Abierta" = SABEMOS que sigue abierta (cierra en el futuro) → ahí sí las
   // propuestas son secretas. fecha_cierre null o pasada NO es "abierta": una
@@ -612,28 +622,89 @@ function modalidadDeTipo(tipo: string | null): string | null {
   return tipo === "licitacion_publica" ? "licitacion_publica" : tipo.startsWith("compra_menor") ? "compra_menor" : "otro";
 }
 
+type TenderLite = {
+  id: string;
+  acto_number: string | null;
+  delivery_date: string | null;
+  amount_ref_usd: number | null;
+  folder_url: string | null;
+  modalidad: string | null;
+  entity: string | null;
+  objeto: string | null;
+};
+const TENDER_LITE_COLS = "id, acto_number, delivery_date, amount_ref_usd, folder_url, modalidad, entity, objeto";
+
+const esFolderPisable = (url: string | null) => !url || /panamacompra\.gob\.pa/i.test(url);
+
+// Campos FALTANTES del tender que el gov_tender puede completar. Solo vacíos —
+// lo escrito a mano se respeta; el folder además pisa links del portal.
+function patchTenderDesdeGov(t: TenderLite, g: GovLite): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if (!t.delivery_date && g.fecha_cierre) patch.delivery_date = String(g.fecha_cierre).slice(0, 10);
+  if (t.amount_ref_usd === null && g.precio_ref !== null) patch.amount_ref_usd = Number(g.precio_ref);
+  if (!t.entity && g.entidad) patch.entity = g.entidad;
+  if (!t.objeto && g.titulo) patch.objeto = g.titulo;
+  const modalidad = modalidadDeTipo(g.tipo);
+  if (!t.modalidad && modalidad) patch.modalidad = modalidad;
+  if (g.dropbox_folder_url && esFolderPisable(t.folder_url) && t.folder_url !== g.dropbox_folder_url) {
+    patch.folder_url = g.dropbox_folder_url;
+  }
+  return patch;
+}
+
+// ── Carpeta del acto en Dropbox ───────────────────────────────────────────────
+// Las carpetas viven como "Acto #<número> <título>" bajo las carpetas de año
+// ("LICITACIONES 2026", "LICITACIONES 2025", …). Se busca en el PADRE de la
+// base configurada para cubrir años viejos.
+const LICITACIONES_ROOT = LICITACIONES_BASE.replace(/\/[^/]*$/, "") || LICITACIONES_BASE;
+
+// Carpeta que CONTIENE el acto: el segmento del path cuyo nombre incluye el
+// número (sirve tanto si el match fue la carpeta como un archivo adentro).
+function carpetaDelMatch(path: string, acto: string): string | null {
+  const segs = path.split("/");
+  const idx = segs.findIndex((s) => s.toUpperCase().includes(acto.toUpperCase()));
+  if (idx <= 0) return null;
+  return segs.slice(0, idx + 1).join("/");
+}
+
+// Título del acto según el nombre de la carpeta ("Acto #<num> <título>").
+function tituloDeCarpeta(carpetaPath: string, acto: string): string | null {
+  const nombre = carpetaPath.split("/").pop() ?? "";
+  const i = nombre.toUpperCase().indexOf(acto.toUpperCase());
+  if (i === -1) return null;
+  const resto = nombre
+    .slice(i + acto.length)
+    .trim()
+    .replace(/^[-–·:]+\s*/, "");
+  return resto.length > 3 ? resto : null;
+}
+
+async function buscarCarpetaActo(acto: string): Promise<{ path: string; url: string | null } | null> {
+  let matches: DbxEntry[] = [];
+  try {
+    matches = await searchFiles(acto, { path: LICITACIONES_ROOT, maxResults: 25 });
+  } catch {
+    return null;
+  }
+  const carpeta = matches.map((m) => carpetaDelMatch(m.path, acto)).find((p): p is string => !!p);
+  if (!carpeta) return null;
+  let url: string | null = null;
+  try {
+    url = await getSharedLink(carpeta);
+  } catch {
+    url = null; // carpeta hallada; el link se reintenta en otra corrida
+  }
+  return { path: carpeta, url };
+}
+
 export async function syncTendersFromGov(): Promise<void> {
   try {
     const c = await ctx();
     if (!c.ok) return;
     const { supabase, orgId } = c;
 
-    const { data: tenders } = (await supabase
-      .from("tenders")
-      .select("id, acto_number, delivery_date, amount_ref_usd, folder_url, modalidad, entity, objeto")
-      .eq("org_id", orgId)) as {
-      data:
-        | {
-            id: string;
-            acto_number: string | null;
-            delivery_date: string | null;
-            amount_ref_usd: number | null;
-            folder_url: string | null;
-            modalidad: string | null;
-            entity: string | null;
-            objeto: string | null;
-          }[]
-        | null;
+    const { data: tenders } = (await supabase.from("tenders").select(TENDER_LITE_COLS).eq("org_id", orgId)) as {
+      data: TenderLite[] | null;
     };
     if (!tenders || tenders.length === 0) return;
 
@@ -677,19 +748,31 @@ export async function syncTendersFromGov(): Promise<void> {
     }
 
     // 2) Backfill de campos faltantes.
+    const folderEfectivo = new Map<string, string | null>();
     for (const t of tenders) {
+      folderEfectivo.set(t.id, t.folder_url);
       const g = govDeTender.get(t.id);
       if (!g) continue;
-      const patch: Record<string, unknown> = {};
-      if (!t.delivery_date && g.fecha_cierre) patch.delivery_date = String(g.fecha_cierre).slice(0, 10);
-      if (t.amount_ref_usd === null && g.precio_ref !== null) patch.amount_ref_usd = Number(g.precio_ref);
-      if (!t.entity && g.entidad) patch.entity = g.entidad;
-      if (!t.objeto && g.titulo) patch.objeto = g.titulo;
-      const modalidad = modalidadDeTipo(g.tipo);
-      if (!t.modalidad && modalidad) patch.modalidad = modalidad;
-      const folderPisable = !t.folder_url || /panamacompra\.gob\.pa/i.test(t.folder_url);
-      if (g.dropbox_folder_url && folderPisable && t.folder_url !== g.dropbox_folder_url) patch.folder_url = g.dropbox_folder_url;
+      const patch = patchTenderDesdeGov(t, g);
       if (Object.keys(patch).length > 0) {
+        await supabase.from("tenders").update(patch).eq("id", t.id).eq("org_id", orgId);
+        if (typeof patch.folder_url === "string") folderEfectivo.set(t.id, patch.folder_url);
+      }
+    }
+
+    // 3) Carpeta en Dropbox para las que siguen sin link (actos viejos que el
+    //    board nunca capturó). Acotado por corrida — converge en pocas cargas
+    //    sin frenar la página; lo no-resoluble cuesta pocas búsquedas.
+    if (hasDropboxConfig()) {
+      const pendientes = tenders.filter((t) => t.acto_number?.trim() && esFolderPisable(folderEfectivo.get(t.id) ?? null)).slice(0, 6);
+      for (const t of pendientes) {
+        const hit = await buscarCarpetaActo(t.acto_number!.trim());
+        if (!hit?.url) continue;
+        const patch: Record<string, unknown> = { folder_url: hit.url };
+        if (!t.objeto) {
+          const titulo = tituloDeCarpeta(hit.path, t.acto_number!.trim());
+          if (titulo) patch.objeto = titulo;
+        }
         await supabase.from("tenders").update(patch).eq("id", t.id).eq("org_id", orgId);
       }
     }
@@ -877,6 +960,134 @@ export async function saveSubmissionPlan(
   if (error) return { error: error.message };
   revalidatePath("/potenciales");
   return { ok: true, data: { plan } };
+}
+
+// ── Buscar información de UN acto (viejos / no capturados por el escaneo) ────
+// Para licitaciones sin vínculo al gobierno: busca el proceso POR NÚMERO en
+// PanamaCompra (la fuente real de la FECHA del acto) y lo registra vinculado;
+// además busca la carpeta "Acto #<número>" en Dropbox. Rellena los campos
+// faltantes del tender y devuelve qué se aplicó (para pintar el form al toque).
+export type BuscarInfoResultado = {
+  pc: "vinculada" | "ya_vinculada" | "ocupada" | "no_encontrada" | "sin_config";
+  carpeta: string | null;
+  aplicado: Record<string, unknown>;
+};
+
+export async function buscarInfoTender(tenderId: string): Promise<Result<BuscarInfoResultado>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { supabase, orgId } = c;
+  const { data: t } = (await supabase
+    .from("tenders")
+    .select(TENDER_LITE_COLS)
+    .eq("id", tenderId)
+    .eq("org_id", orgId)
+    .maybeSingle()) as { data: TenderLite | null };
+  if (!t) return { error: "No encontrada" };
+  const acto = (t.acto_number ?? "").trim();
+  if (!acto) return { error: "Esta licitación no tiene número de acto — agrégalo y vuelve a intentar." };
+
+  let pc: BuscarInfoResultado["pc"] = "no_encontrada";
+  let gov: GovLite | null = null;
+
+  // 1) ¿El acto ya está en el board? (ilike sin % = igualdad case-insensitive)
+  const { data: existente } = (await supabase
+    .from("gov_tenders")
+    .select(GOV_LITE_COLS)
+    .eq("org_id", orgId)
+    .ilike("num_proceso", acto)
+    .maybeSingle()) as { data: GovLite | null };
+  if (existente) {
+    if (existente.converted_tender_id === t.id) {
+      gov = existente;
+      pc = "ya_vinculada";
+    } else if (existente.converted_tender_id) {
+      pc = "ocupada";
+    } else {
+      const { data: ok } = (await supabase
+        .from("gov_tenders")
+        .update({ converted_tender_id: t.id })
+        .eq("id", existente.id)
+        .eq("org_id", orgId)
+        .is("converted_tender_id", null)
+        .select("id")) as { data: { id: string }[] | null };
+      if (ok && ok.length > 0) {
+        gov = existente;
+        pc = "vinculada";
+      } else pc = "ocupada";
+    }
+  } else if (!hasPanamaCompraConfig()) {
+    pc = "sin_config";
+  } else {
+    // 2) Buscarlo en PanamaCompra por número y registrarlo ya vinculado.
+    try {
+      const session = await pcLoginCached();
+      const reg = await pcBuscarProceso(session, acto);
+      if (reg) {
+        const num = (reg.numProcesoOriginal || reg.numProceso || acto).trim();
+        const idTipoReg = (reg as Record<string, unknown>).idTipoProceso;
+        const fila = {
+          org_id: orgId,
+          num_proceso: num,
+          titulo: reg.titulo ?? null,
+          entidad: reg.nombre ?? null,
+          fecha_cierre: safeIso(reg.fechaCierre),
+          tipo: idTipoReg != null ? (ID_TO_TIPO[String(idTipoReg)] ?? null) : null,
+          url: `https://www.panamacompra.gob.pa/Inicio/#!/vistaPreviaCP?NumLc=${encodeURIComponent(num)}&esap=1&nnc=0&it=1`,
+          raw: reg as unknown,
+          seen_at: new Date().toISOString(),
+          relevante: true,
+          relevancia_motivo: "vinculada por número de acto",
+          converted_tender_id: t.id,
+        };
+        const { data: ins, error: insErr } = (await supabase
+          .from("gov_tenders")
+          .insert(fila)
+          .select(GOV_LITE_COLS)
+          .maybeSingle()) as { data: GovLite | null; error: { message: string; code?: string } | null };
+        if (ins) {
+          gov = ins;
+          pc = "vinculada";
+        } else if (insErr?.code === "23505") {
+          // Carrera: otro lo insertó entre el select y el insert → vincular ese.
+          const { data: otra } = (await supabase
+            .from("gov_tenders")
+            .select(GOV_LITE_COLS)
+            .eq("org_id", orgId)
+            .ilike("num_proceso", num)
+            .maybeSingle()) as { data: GovLite | null };
+          if (otra && !otra.converted_tender_id) {
+            await supabase.from("gov_tenders").update({ converted_tender_id: t.id }).eq("id", otra.id).eq("org_id", orgId).is("converted_tender_id", null);
+            gov = otra;
+            pc = "vinculada";
+          } else pc = otra ? "ocupada" : "no_encontrada";
+        }
+      }
+    } catch {
+      /* el gobierno caído no rompe la búsqueda de carpeta */
+    }
+  }
+
+  const aplicado: Record<string, unknown> = gov ? patchTenderDesdeGov(t, gov) : {};
+
+  // 3) Carpeta en Dropbox si sigue faltando.
+  const folderTras = (aplicado.folder_url as string | undefined) ?? t.folder_url;
+  if (hasDropboxConfig() && esFolderPisable(folderTras ?? null)) {
+    const hit = await buscarCarpetaActo(acto);
+    if (hit?.url) aplicado.folder_url = hit.url;
+    if (hit && !t.objeto && !aplicado.objeto) {
+      const titulo = tituloDeCarpeta(hit.path, acto);
+      if (titulo) aplicado.objeto = titulo;
+    }
+  }
+
+  if (Object.keys(aplicado).length > 0) {
+    const { error } = await supabase.from("tenders").update(aplicado).eq("id", t.id).eq("org_id", orgId);
+    if (error) return { error: error.message };
+  }
+  revalidatePath("/potenciales");
+  const carpeta = typeof aplicado.folder_url === "string" ? aplicado.folder_url : !esFolderPisable(t.folder_url) ? t.folder_url : null;
+  return { ok: true, data: { pc, carpeta, aplicado } };
 }
 
 // "Actualizar": delega al sync compartido (mismo código que el cron diario).

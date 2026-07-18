@@ -69,7 +69,9 @@ import {
   analyzeSubmissionDocs,
   resolveSubmissionDoc,
   saveSubmissionPlan,
+  buscarInfoTender,
   type GovForTender,
+  type BuscarInfoResultado,
 } from "./gov-actions";
 import type { SubmissionDoc, SubmissionDocEstado } from "@/lib/panamacompra/submit-docs";
 import {
@@ -2339,16 +2341,102 @@ const SOMETER_ESTADO_CLS: Record<SubmissionDocEstado, string> = {
 // esos bloques se esconden — ya no hay nada que preparar.
 const STATUS_EN_PREPARACION: TenderStatus[] = ["por_participar", "por_partir", "presentada"];
 
+// Cambios que el server puede aplicar al tender sin pasar por Guardar (Check
+// status, Buscar información): se propagan al form del drawer y a la tabla.
+type TenderAutoPatch = Partial<Pick<TenderRow, "status" | "amount_ref_usd" | "delivery_date" | "folder_url" | "objeto" | "entity" | "modalidad">>;
+
+// Para licitaciones SIN vínculo al gobierno (actos viejos que el escaneo nunca
+// capturó): busca el proceso POR NÚMERO en PanamaCompra — la fuente real de la
+// FECHA del acto — y la carpeta "Acto #<número>" en Dropbox; rellena lo que falte.
+function BuscarInfoCard({
+  tenderId,
+  onAuto,
+  onVinculada,
+}: {
+  tenderId: string;
+  onAuto?: (patch: TenderAutoPatch) => void;
+  onVinculada: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<BuscarInfoResultado | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function buscar() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await buscarInfoTender(tenderId);
+      if ("error" in r) {
+        setError(r.error);
+        return;
+      }
+      setRes(r.data);
+      const a = r.data.aplicado;
+      const patch: TenderAutoPatch = {};
+      if (typeof a.delivery_date === "string") patch.delivery_date = a.delivery_date;
+      if (typeof a.amount_ref_usd === "number") patch.amount_ref_usd = a.amount_ref_usd;
+      if (typeof a.folder_url === "string") patch.folder_url = a.folder_url;
+      if (typeof a.objeto === "string") patch.objeto = a.objeto;
+      if (typeof a.entity === "string") patch.entity = a.entity;
+      if (typeof a.modalidad === "string") patch.modalidad = a.modalidad as Modalidad;
+      if (Object.keys(patch).length > 0) onAuto?.(patch);
+      if (r.data.pc === "vinculada") onVinculada();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo buscar");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const PC_TXT: Record<BuscarInfoResultado["pc"], string> = {
+    vinculada: "✓ Vinculada a PanamaCompra — fecha e información del acto cargadas.",
+    ya_vinculada: "Ya estaba vinculada a PanamaCompra.",
+    ocupada: "Ese número de acto ya está vinculado a otra licitación.",
+    no_encontrada: "PanamaCompra no devolvió el acto por número (quedó el detalle en los logs para afinarlo).",
+    sin_config: "Faltan credenciales de PanamaCompra en Vercel.",
+  };
+
+  return (
+    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Sin vínculo con PanamaCompra</p>
+          <p className="mt-0.5 text-[11px] text-slate-400">Busca el acto por número (fecha, monto) y su carpeta en Dropbox.</p>
+        </div>
+        <button
+          type="button"
+          onClick={buscar}
+          disabled={busy}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+          {busy ? "Buscando…" : "Buscar información"}
+        </button>
+      </div>
+      {error ? <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700 ring-1 ring-inset ring-red-600/20">{error}</p> : null}
+      {res ? (
+        <div className="mt-2 space-y-1 text-[11px] text-slate-600">
+          <p>{PC_TXT[res.pc]}</p>
+          <p>{res.carpeta ? "✓ Carpeta de Dropbox enlazada." : "No encontré la carpeta del acto en Dropbox."}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function GovLicitacionPanel({
   tenderId,
+  actoNumber,
   status,
   onAuto,
 }: {
   tenderId: string;
+  actoNumber: string | null;
   status: TenderStatus;
-  onAuto?: (patch: Partial<{ status: TenderStatus; amount_ref_usd: number }>) => void;
+  onAuto?: (patch: TenderAutoPatch) => void;
 }) {
   const [gov, setGov] = useState<GovForTender | null | "loading">("loading");
+  const [nonce, setNonce] = useState(0);
   const [analyzeBusy, setAnalyzeBusy] = useState(false);
   const [someterBusy, setSometerBusy] = useState(false);
   const [prog, setProg] = useState<{ done: number; total: number; current: string } | null>(null);
@@ -2366,10 +2454,21 @@ function GovLicitacionPanel({
     return () => {
       alive = false;
     };
-  }, [tenderId]);
+  }, [tenderId, nonce]);
 
   if (gov === "loading") return <div className="h-16 animate-pulse rounded-xl bg-slate-100" />;
-  if (!gov) return null; // tender manual: sin pliego del gobierno
+  if (!gov)
+    // Tender sin proceso del gobierno vinculado: ofrecer la búsqueda por número.
+    return actoNumber ? (
+      <BuscarInfoCard
+        tenderId={tenderId}
+        onAuto={onAuto}
+        onVinculada={() => {
+          setGov("loading");
+          setNonce((n) => n + 1);
+        }}
+      />
+    ) : null;
 
   const g = gov; // narrow
 
@@ -2755,9 +2854,9 @@ function TenderDrawer({
   clients: ClientOpt[];
   onClose: () => void;
   onSaved: (t: TenderRow) => void;
-  // "Check status" puede cambiar estatus/monto en el server sin pasar por
-  // Guardar: esto avisa al padre para que la tabla refleje el cambio al toque.
-  onAutoUpdated?: (id: string, patch: Partial<Pick<TenderRow, "status" | "amount_ref_usd">>) => void;
+  // "Check status" / "Buscar información" pueden cambiar campos en el server sin
+  // pasar por Guardar: esto avisa al padre para que la tabla refleje el cambio.
+  onAutoUpdated?: (id: string, patch: TenderAutoPatch) => void;
 }) {
   const [f, setF] = useState<TenderRow>(tender);
   const [saving, setSaving] = useState(false);
@@ -2796,9 +2895,11 @@ function TenderDrawer({
         {f.objeto ? <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{f.objeto}</p> : null}
         {f.acto_number ? <p className="text-xs text-slate-400">Acto: {f.acto_number}</p> : null}
 
-        {/* Análisis IA + checklist + Check status (si vino de PanamaCompra). */}
+        {/* Análisis IA + checklist + Check status (si vino de PanamaCompra),
+            o "Buscar información" por número de acto si no está vinculada. */}
         <GovLicitacionPanel
           tenderId={tender.id}
+          actoNumber={f.acto_number}
           status={f.status}
           onAuto={(p) => {
             setF((prev) => ({ ...prev, ...p }));

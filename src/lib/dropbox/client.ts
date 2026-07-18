@@ -161,7 +161,8 @@ export async function copyFile(fromPath: string, toPath: string): Promise<{ path
   throw new Error(`Dropbox copy ${res.status}: ${errText.slice(0, 200)}`);
 }
 
-/** Busca archivos por nombre (recursivo) dentro de una ruta. Más recientes primero. */
+/** Busca por nombre (recursivo) dentro de una ruta: archivos Y carpetas, con su
+ * tag correcto. Más recientes primero (las carpetas, sin fecha, quedan al final). */
 export async function searchFiles(query: string, opts?: { path?: string; maxResults?: number }): Promise<DbxEntry[]> {
   const headers = { ...(await rpcHeaders()), "Content-Type": "application/json" };
   const options: Record<string, unknown> = {
@@ -186,9 +187,9 @@ export async function searchFiles(query: string, opts?: { path?: string; maxResu
   const out: DbxEntry[] = [];
   for (const m of j.matches ?? []) {
     const md = m.metadata?.metadata;
-    if (!md || md[".tag"] === "folder" || !md.name) continue;
+    if (!md || !md.name) continue;
     out.push({
-      tag: "file",
+      tag: md[".tag"] === "folder" ? "folder" : "file",
       name: md.name,
       path: md.path_display ?? md.path_lower ?? "",
       id: md.id ?? "",

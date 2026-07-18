@@ -155,6 +155,56 @@ export async function pcListProcesos(
   return { registros: out, truncado, cursor: agotado ? null : valorSiguiente || null, agotado };
 }
 
+// ── Búsqueda de UN proceso por número de acto ─────────────────────────────────
+// Para licitaciones viejas (2025 y anteriores) que el escaneo de vigentes nunca
+// capturó: la FECHA del acto y el idProcesosContratacionFlujos solo se
+// consiguen buscando el proceso por su número. La clave exacta del filtro de
+// búsqueda no está confirmada → TANTEO de variantes sobre el endpoint conocido
+// (busqueda/proceso-lista); el match se valida por número EXACTO, así que una
+// variante ignorada por la API no puede dar un falso positivo. Deja diagnóstico
+// en logs para afinar con datos reales.
+export async function pcBuscarProceso(session: PcSession, numero: string): Promise<PcRegistro | null> {
+  const num = numero.trim();
+  if (!num) return null;
+  const variantes: Record<string, unknown>[] = [
+    { numLc: num }, // el portal llama NumLc al número en sus URLs
+    { numProceso: num },
+    { numeroProceso: num },
+    { numProcesoOriginal: num },
+    { busqueda: num },
+    { texto: num },
+  ];
+  for (const filtro of variantes) {
+    try {
+      const res = await fetch(`${BASE}/busqueda/proceso-lista`, {
+        method: "POST",
+        headers: baseHeaders(session),
+        body: JSON.stringify({ registrosPorPagina: 20, valorSiguiente: "", filtro }),
+        cache: "no-store",
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) continue;
+      const j = (await res.json()) as { result?: { registros?: PcRegistro[] } };
+      const regs = j.result?.registros ?? [];
+      const match = regs.find((r) =>
+        [r.numProcesoOriginal, r.numProceso].some((n) => (n ?? "").trim().toUpperCase() === num.toUpperCase()),
+      );
+      if (match) return match;
+      if (regs.length > 0) {
+        // La API contestó pero sin nuestro número: o ignoró el filtro o el shape
+        // del registro cambió — dejar rastro para el afinado.
+        console.warn(
+          `[pcBuscarProceso] variante ${Object.keys(filtro)[0]} devolvió ${regs.length} registros sin match para ${num}`,
+        );
+      }
+    } catch {
+      continue; // timeout/red en una variante no corta el tanteo
+    }
+  }
+  console.warn(`[pcBuscarProceso] sin match para ${num} tras ${variantes.length} variantes`);
+  return null;
+}
+
 // Detalle del pliego (componentes de página). Devuelve el JSON crudo; el
 // precio de referencia se extrae buscando la clave recursivamente (el shape
 // exacto varía por tipo de proceso — patrón adaptativo, se valida en vivo).
