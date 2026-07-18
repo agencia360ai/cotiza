@@ -1974,6 +1974,8 @@ function LicitacionesTab({
   const [estatus, setEstatus] = useState<TenderStatus | "all">("all");
   const [modalidad, setModalidad] = useState<Modalidad | "all">("all");
   const [q, setQ] = useState("");
+  const [from, setFrom] = useState(""); // rango por fecha de participación
+  const [to, setTo] = useState("");
   const [sort, setSort] = useState<SortState<TSortKey>>({ key: "amount_ref_usd", dir: "desc" });
   const [editing, setEditing] = useState<TenderRow | null>(null);
   const [creating, setCreating] = useState(false);
@@ -1995,6 +1997,11 @@ function LicitacionesTab({
     const arr = tenders.filter((x) => {
       if (estatus !== "all" && x.status !== estatus) return false;
       if (modalidad !== "all" && x.modalidad !== modalidad) return false;
+      // Rango por fecha de participación (delivery_date). Recortar a YYYY-MM-DD:
+      // la fecha puede traer hora y "…T15:30" > "…" rompería el límite superior.
+      const d = x.delivery_date ? x.delivery_date.slice(0, 10) : null;
+      if (from && (!d || d < from)) return false;
+      if (to && (!d || d > to)) return false;
       if (needle) {
         const hay = `${x.acto_number ?? ""} ${x.entity ?? ""} ${x.client_std_name ?? ""} ${x.objeto ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
@@ -2003,7 +2010,7 @@ function LicitacionesTab({
     });
     arr.sort((a, b) => compareVals(a[sort.key], b[sort.key], sort.dir));
     return arr;
-  }, [tenders, estatus, modalidad, q, sort]);
+  }, [tenders, estatus, modalidad, q, from, to, sort]);
 
   const kpis = useMemo(() => {
     let vivas = 0;
@@ -2176,6 +2183,19 @@ function LicitacionesTab({
             className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-3 text-sm focus:border-slate-400 focus:outline-none"
           />
         </div>
+      </div>
+
+      {/* Rango de fechas (por fecha de participación) */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span className="font-semibold uppercase tracking-wider">Participación</span>
+        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:border-slate-400 focus:outline-none" />
+        <span>→</span>
+        <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:border-slate-400 focus:outline-none" />
+        {from || to ? (
+          <button type="button" onClick={() => { setFrom(""); setTo(""); }} className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-slate-500 hover:bg-slate-100">
+            <X className="size-3" /> Limpiar
+          </button>
+        ) : null}
       </div>
 
       <p className="mb-2 text-xs text-muted-foreground">
