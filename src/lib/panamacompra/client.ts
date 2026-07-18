@@ -173,42 +173,30 @@ export async function pcBuscarProceso(session: PcSession, numero: string): Promi
   const num = numero.trim();
   if (!num) return null;
   const target = normNumProceso(num);
-  // Cuerpos candidatos para POST busqueda/proceso-lista (el endpoint que usa
-  // "Búsqueda Pliego" del portal, confirmado por captura). No se conoce la clave
-  // exacta del filtro → se tantean; el match se valida por número EXACTO
-  // (normalizado), así que una variante que la API ignore no da falso positivo.
-  const bodies: Record<string, unknown>[] = [
-    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numProceso: num } },
-    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numProcesoOriginal: num } },
-    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numeroProceso: num } },
-    { registrosPorPagina: 20, valorSiguiente: "", filtro: { numLc: num } },
-    { registrosPorPagina: 20, valorSiguiente: "", filtro: { busqueda: num } },
-    { registrosPorPagina: 20, valorSiguiente: "", numProceso: num },
-    { numProceso: num },
-  ];
-  for (const body of bodies) {
-    try {
-      const res = await fetch(`${BASE}/busqueda/proceso-lista`, {
-        method: "POST",
-        headers: baseHeaders(session),
-        body: JSON.stringify(body),
-        cache: "no-store",
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (!res.ok) continue;
+  // Cuerpo CONFIRMADO con captura del portal ("Búsqueda Pliego"): el filtro
+  // exige idEstado=0 (todos), idTipoProceso=-1 (todos) e idProvincia=0 además
+  // del número — solo con numProceso la API devolvía vacío. La respuesta trae
+  // idProcesosContratacionFlujos y fechaCierre. Match validado por número EXACTO
+  // (normalizado): si algún día la API cambia y no filtra, no da falso positivo.
+  const filtro = { numProceso: num, idEstado: 0, idTipoProceso: -1, idProvincia: 0 };
+  try {
+    const res = await fetch(`${BASE}/busqueda/proceso-lista`, {
+      method: "POST",
+      headers: baseHeaders(session),
+      body: JSON.stringify({ registrosPorPagina: 50, valorSiguiente: "", filtro }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (res.ok) {
       const j = (await res.json()) as { result?: { registros?: PcRegistro[] } };
       const regs = j.result?.registros ?? [];
       const match = regs.find((r) => [r.numProcesoOriginal, r.numProceso].some((n) => normNumProceso(n) === target));
       if (match) return match;
-      if (regs.length > 0) {
-        const key = body.filtro ? Object.keys(body.filtro as object)[0] : Object.keys(body)[0];
-        console.warn(`[pcBuscarProceso] variante ${key} devolvió ${regs.length} registros sin match para ${num}`);
-      }
-    } catch {
-      continue; // timeout/red en una variante no corta el tanteo
+      console.warn(`[pcBuscarProceso] ${regs.length} registros sin match para ${num}`);
     }
+  } catch {
+    /* timeout/red: sin resultado */
   }
-  console.warn(`[pcBuscarProceso] sin match para ${num} tras ${bodies.length} variantes`);
   return null;
 }
 
