@@ -183,16 +183,13 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
 // primero que traiga una tabla de proponentes. Si ninguno pega, [] (degradación).
 export type PcProponente = { nombre: string; monto: number | null; extra: string | null };
 
-// Vistas candidatas del detalle del proceso donde suele vivir el cuadro de
-// propuestas / acto público. Se prueban en orden hasta encontrar proponentes.
-const VISTAS_PROPUESTAS = [
-  "procesoVistaResumen",
-  "procesoVistaActoPublico",
-  "procesoVistaActo",
-  "procesoVistaPropuestas",
-  "procesoVistaOfertas",
-  "procesoVistaAdjudicacion",
-  "procesoVistaEvaluacion",
+// Endpoints candidatos del cuadro de propuestas / acto público. El PRIMERO es
+// el CONFIRMADO (capturado del portal): "cuadroPropuesta". Los demás quedan como
+// respaldo por si algún tipo de proceso usa otra ruta. {t}=idTipoProceso {f}=idFlujos.
+const ENDPOINTS_PROPUESTAS: ((t: string, f: string) => string)[] = [
+  (t, f) => `${BASE}/documentos-actos-publico/cuadroPropuesta/${t}/procesoVistaCuadroPropuesta/${f}`,
+  (t, f) => `${BASE}/procesos-configuracion/pagina-componentes/${t}/procesoVistaResumen/${f}`,
+  (t, f) => `${BASE}/procesos-configuracion/pagina-componentes/${t}/procesoVistaActoPublico/${f}`,
 ];
 
 const RE_PROP_NOMBRE = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa|contratista|participante|proveedor/i;
@@ -245,22 +242,38 @@ export async function pcProponentes(
   idTipoProceso: string,
   idFlujos: string,
 ): Promise<{ proponentes: PcProponente[]; vistaUsada: string | null }> {
-  for (const vista of VISTAS_PROPUESTAS) {
+  for (const build of ENDPOINTS_PROPUESTAS) {
+    const url = build(idTipoProceso, idFlujos);
     let json: unknown = null;
     try {
-      const res = await fetch(`${BASE}/procesos-configuracion/pagina-componentes/${idTipoProceso}/${vista}/${idFlujos}`, {
+      const res = await fetch(url, {
         method: "GET",
         headers: baseHeaders(session),
         cache: "no-store",
         signal: AbortSignal.timeout(20_000),
       });
-      if (!res.ok) continue; // 404 = esa vista no existe para este tipo → probar la siguiente
-      json = await res.json().catch(() => null);
+      if (!res.ok) continue; // 404 = ese endpoint no aplica para este tipo → siguiente
+      // El cuadro de propuestas responde con Content-Type text/html pero el
+      // cuerpo es JSON → parsear el texto (json() fallaría por el header).
+      const text = await res.text();
+      try {
+        json = JSON.parse(text);
+      } catch {
+        const i = text.indexOf("{");
+        const j = text.lastIndexOf("}");
+        if (i >= 0 && j > i) {
+          try {
+            json = JSON.parse(text.slice(i, j + 1));
+          } catch {
+            json = null;
+          }
+        }
+      }
     } catch {
-      continue; // red/timeout en una vista no tumba el intento
+      continue; // red/timeout en un endpoint no tumba el intento
     }
     const props = json ? buscarProponentes(json) : [];
-    if (props.length > 0) return { proponentes: props, vistaUsada: vista };
+    if (props.length > 0) return { proponentes: props, vistaUsada: url };
   }
   return { proponentes: [], vistaUsada: null };
 }
