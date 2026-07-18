@@ -11,7 +11,14 @@ function missing(error: { message?: string; code?: string } | null): boolean {
   return /does not exist|schema cache|could not find/i.test(error.message ?? "");
 }
 
-export default async function AsistenciaPage() {
+// Períodos de historial/export (ventanas móviles en días).
+const RANGOS: Record<string, number> = { "30d": 30, "3m": 92, "6m": 183, "12m": 366 };
+
+export default async function AsistenciaPage({ searchParams }: { searchParams: Promise<{ rango?: string }> }) {
+  const { rango: rangoParam } = await searchParams;
+  const rango = rangoParam && RANGOS[rangoParam] ? rangoParam : "30d";
+  const dias = RANGOS[rango];
+
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
@@ -74,19 +81,24 @@ export default async function AsistenciaPage() {
     }));
   }
 
-  // Eventos de los últimos 21 días (tablero + historial).
+  // Eventos del período elegido (tablero HOY + historial + export).
   let events: AttEventRow[] = [];
+  let truncado = false;
   {
-    const desde = new Date(Date.now() - 21 * 86400_000).toISOString();
+    const desde = new Date(Date.now() - dias * 86400_000).toISOString();
+    const LIMITE = 50000;
     const res = (await supabase
       .from("attendance_events")
       .select("id, technician_id, direction, occurred_at, status, distance_m, matched_location_id, matched_hq, wa_location_name")
       .eq("org_id", orgId)
       .gte("occurred_at", desde)
       .order("occurred_at", { ascending: true })
-      .limit(3000)) as { data: AttEventRow[] | null; error: { message?: string; code?: string } | null };
+      .limit(LIMITE)) as { data: AttEventRow[] | null; error: { message?: string; code?: string } | null };
     if (missing(res.error)) migracionPendiente = true;
-    else events = res.data ?? [];
+    else {
+      events = res.data ?? [];
+      truncado = events.length >= LIMITE;
+    }
   }
 
   return (
@@ -96,6 +108,8 @@ export default async function AsistenciaPage() {
       locs={locs}
       events={events}
       migracionPendiente={migracionPendiente}
+      rango={rango}
+      truncado={truncado}
     />
   );
 }
