@@ -93,11 +93,18 @@ type ClientOpt = { id: string; name: string; locations: { id: string; name: stri
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
 type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
-const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "ganada", "no_ganada"];
-// Los estatus del pipeline propio, en orden del flujo (Por participar → …).
+const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "ganada", "orden_proceder", "no_ganada"];
+// Los estatus del pipeline propio, en orden del flujo:
+// Por participar → Participada → En revisión → Ganada → Orden de proceder → No ganada.
 // "por_partir" es legacy (Participada) y se muestra solo si una fila ya lo tiene.
-const TENDER_STATUS_PICKER: TenderStatus[] = ["por_participar", "presentada", "en_revision", "no_ganada", "ganada"];
+const TENDER_STATUS_PICKER: TenderStatus[] = ["por_participar", "presentada", "en_revision", "ganada", "orden_proceder", "no_ganada"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
+const MODALIDAD_SHORT: Record<Modalidad, string> = {
+  licitacion_publica: "LP",
+  compra_menor: "CM",
+  contratacion_menor: "CM contr.",
+  otro: "Otro",
+};
 
 // Fecha LOCAL de Panamá (UTC-5): toISOString() es UTC y después de las 7pm
 // local ya devuelve "mañana" — corría follow-ups un día antes.
@@ -1980,6 +1987,29 @@ function LicitacionesTab({
     return { vivas, ganadas, montoGanadas, montoRef };
   }, [filtered]);
 
+  // Analítica del pipeline por etapa (sobre lo FILTRADO — respeta modalidad/búsqueda).
+  // Participadas agrupa presentada + el legacy por_partir.
+  const analitica = useMemo(() => {
+    const grupos: { key: string; label: string; color: string; estados: TenderStatus[] }[] = [
+      { key: "por_participar", label: "Por participar", color: TENDER_STATUS_COLOR.por_participar, estados: ["por_participar"] },
+      { key: "participadas", label: "Participadas", color: TENDER_STATUS_COLOR.presentada, estados: ["presentada", "por_partir"] },
+      { key: "en_revision", label: "En revisión", color: TENDER_STATUS_COLOR.en_revision, estados: ["en_revision"] },
+      { key: "ganada", label: "Ganadas", color: TENDER_STATUS_COLOR.ganada, estados: ["ganada"] },
+      { key: "orden_proceder", label: "Orden de proceder", color: TENDER_STATUS_COLOR.orden_proceder, estados: ["orden_proceder"] },
+      { key: "no_ganada", label: "Perdidas", color: TENDER_STATUS_COLOR.no_ganada, estados: ["no_ganada"] },
+    ];
+    return grupos.map((g) => {
+      const rows = filtered.filter((t) => g.estados.includes(t.status));
+      const monto = rows.reduce((s, t) => s + (t.amount_ref_usd ?? 0), 0);
+      const porMod = new Map<Modalidad, number>();
+      for (const t of rows) if (t.modalidad) porMod.set(t.modalidad, (porMod.get(t.modalidad) ?? 0) + 1);
+      const tipos = Array.from(porMod.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([m, n]) => `${n} ${MODALIDAD_SHORT[m]}`);
+      return { ...g, count: rows.length, monto, tipos };
+    });
+  }, [filtered]);
+
   // Conteo para el badge del tab gobierno (lee de la base; el board lo refresca).
   const [govBadge, setGovBadge] = useState<number | null>(null);
   useEffect(() => {
@@ -2052,11 +2082,37 @@ function LicitacionesTab({
           <Plus className="size-4" /> Agregar licitación
         </button>
       </div>
-      <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <section className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi label="Vivas" value={String(kpis.vivas)} sub="presentadas / en revisión" icon={Clock} accent="#2563EB" />
         <Kpi label="Ganadas" value={String(kpis.ganadas)} sub={formatMoneyExact(kpis.montoGanadas)} icon={CheckCircle2} accent="#10B981" />
         <Kpi label="Registradas" value={String(filtered.length)} sub={`${formatMoneyExact(kpis.montoRef)} ref.`} icon={Gavel} accent="#6366F1" />
         <Kpi label="Monto referencial" value={formatMoneyExact(kpis.montoRef)} sub="suma filtrada" icon={DollarSign} accent="#F59E0B" />
+      </section>
+
+      {/* Analítica del pipeline por etapa (respeta los filtros de modalidad/búsqueda). */}
+      <section className="mb-6">
+        <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">Analítica por etapa</p>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+          {analitica.map((g) => (
+            <div key={g.key} className="rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
+              <div className="flex items-center gap-1.5">
+                <span className="size-2 rounded-full" style={{ backgroundColor: g.color }} />
+                <p className="truncate text-[11px] font-semibold text-slate-500">{g.label}</p>
+              </div>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900">{g.count}</p>
+              <p className="text-[11px] font-semibold tabular-nums" style={{ color: g.color }}>
+                {formatMoneyExact(g.monto)}
+              </p>
+              {g.tipos.length > 0 ? (
+                <p className="mt-1 truncate text-[10px] text-slate-400" title={g.tipos.join(" · ")}>
+                  {g.tipos.join(" · ")}
+                </p>
+              ) : (
+                <p className="mt-1 text-[10px] text-slate-300">—</p>
+              )}
+            </div>
+          ))}
+        </div>
       </section>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -2149,12 +2205,12 @@ function LicitacionesTab({
                           >
                             <CheckCircle2 className="size-3" /> QBO
                           </span>
-                        ) : x.status === "ganada" ? (
+                        ) : x.status === "orden_proceder" || x.status === "ganada" ? (
                           <button
                             type="button"
                             onClick={() => setSendingTenderQbo(x)}
-                            className="inline-flex items-center gap-0.5 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-1 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"
-                            title="Ganada: crear el proyecto en QuickBooks"
+                            className="inline-flex items-center gap-0.5 rounded-md border border-teal-200 bg-teal-50 px-1.5 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-100"
+                            title={x.status === "orden_proceder" ? "Orden de proceder: crear el proyecto en QuickBooks" : "Ganada: al recibir la orden de proceder, crea el proyecto en QuickBooks"}
                           >
                             <ArrowUpRight className="size-3" /> Proyecto
                           </button>
