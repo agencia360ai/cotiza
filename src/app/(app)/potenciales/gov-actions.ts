@@ -11,10 +11,12 @@ import {
   pcLoginCached,
   pcPliegoRaw,
   pcDownloadArchivo,
+  pcProponentes,
   extractDetalle,
   extractArchivos,
   extractPrecioBreakdown,
   type GovDetalle,
+  type PcProponente,
 } from "@/lib/panamacompra/client";
 import { hasDropboxConfig, createFolder, getSharedLink, listFolder, uploadFile, copyFile, searchFiles, type DbxEntry } from "@/lib/dropbox/client";
 import { analyzeTenderDocs, type GovDocAnalisis } from "@/lib/panamacompra/docs";
@@ -444,6 +446,37 @@ export async function uploadGovTenderDocToDropbox(
     return { ok: true, data: { nombre: safe, subido: true, path: up.path } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo bajar/subir el documento" };
+  }
+}
+
+// Competidores / propuestas recibidas de OTROS contratistas (bajo demanda, con
+// botón). TANTEO: prueba varias vistas de PanamaCompra. Solo hay data en procesos
+// YA CERRADOS (antes del acto las propuestas son secretas). Devuelve la lista y
+// qué vista funcionó (o un aviso si no se encontró).
+export async function getGovTenderCompetidores(
+  govId: string,
+): Promise<Result<{ proponentes: PcProponente[]; vistaUsada: string | null; cerrada: boolean }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("tipo, raw, fecha_cierre")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { tipo: string | null; raw: unknown; fecha_cierre: string | null } | null };
+  if (!g) return { error: "No encontrada" };
+  const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
+  const idFlujos = rw?.idProcesosContratacionFlujos;
+  const idTipo = g.tipo ? TIPO_TO_ID[g.tipo] : undefined;
+  if (!idFlujos || !idTipo) return { error: "Este proceso no tiene detalle consultable en PanamaCompra." };
+  const cerrada = !!g.fecha_cierre && +new Date(g.fecha_cierre) < Date.now();
+  try {
+    const session = await pcLogin();
+    const { proponentes, vistaUsada } = await pcProponentes(session, idTipo, String(idFlujos));
+    return { ok: true, data: { proponentes, vistaUsada, cerrada } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudieron consultar las propuestas" };
   }
 }
 
