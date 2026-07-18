@@ -25,6 +25,7 @@ import {
   Search,
   Snowflake,
   Sparkles,
+  Users,
   Target,
   User,
   Wind,
@@ -47,8 +48,10 @@ import {
   analyzeSubmissionDocs,
   resolveSubmissionDoc,
   saveSubmissionPlan,
+  getGovTenderCompetidores,
   type GovTenderRow,
 } from "./gov-actions";
+import type { PcProponente } from "@/lib/panamacompra/client";
 import type { SubmissionDoc } from "@/lib/panamacompra/submit-docs";
 
 function relTime(ts: number): string {
@@ -339,6 +342,81 @@ function ParticiparUnificado({
   );
 }
 
+// Competidores / propuestas recibidas (bajo demanda). TANTEO de endpoints de
+// PanamaCompra: solo hay data en procesos ya cerrados (antes del acto las
+// propuestas son secretas). Autocontenido; se pide solo al tocar el botón.
+function CompetidoresCard({ tenderId }: { tenderId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<{ proponentes: PcProponente[]; vistaUsada: string | null; cerrada: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function ver() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await getGovTenderCompetidores(tenderId);
+      if ("error" in r) setError(r.error);
+      else setRes(r.data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo consultar");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Competidores · propuestas recibidas</p>
+        <button
+          type="button"
+          onClick={ver}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Users className="size-3.5" />}
+          {busy ? "Consultando…" : res ? "Volver a consultar" : "Ver competidores"}
+        </button>
+      </div>
+      {error ? <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700 ring-1 ring-inset ring-red-600/20">{error}</p> : null}
+      {res ? (
+        res.proponentes.length > 0 ? (
+          <div className="mt-2 overflow-x-auto rounded-lg ring-1 ring-slate-100">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50 text-left text-[10px] uppercase tracking-wide text-slate-400">
+                  <th className="px-2 py-1.5 font-semibold">Oferente</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">Propuesta</th>
+                  <th className="px-2 py-1.5 font-semibold">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {res.proponentes.map((p, i) => (
+                  <tr key={i} className="border-b border-slate-50 last:border-0">
+                    <td className="px-2 py-1.5 text-slate-700">{p.nombre}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{p.monto !== null ? formatMoneyExact(p.monto) : "—"}</td>
+                    <td className="px-2 py-1.5 text-slate-500">{p.extra ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="mt-2 text-[11px] italic text-slate-400">
+            {res.cerrada
+              ? "PanamaCompra no expuso las propuestas para este proceso (o cambió la vista). Si tienes el link de la tabla de propuestas, lo afino para que salga siempre."
+              : "Aún no cierra — las propuestas de otros oferentes son secretas hasta el acto de apertura."}
+          </p>
+        )
+      ) : (
+        <p className="mt-1.5 text-[11px] text-slate-400">
+          Solo hay datos en procesos ya cerrados: antes del acto de apertura, las propuestas de la competencia son confidenciales por ley.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DetallePliego({
   r,
   busy,
@@ -355,6 +433,7 @@ function DetallePliego({
   onVerMisLicitaciones: () => void;
 }) {
   const d = r.detalle;
+  const competidores = <CompetidoresCard tenderId={r.id} />;
   // Título COMPLETO al expandir (en la fila va recortado a 2 líneas).
   const encabezado = (
     <div className="rounded-xl border border-slate-100 bg-white p-3.5">
@@ -400,6 +479,7 @@ function DetallePliego({
     <div className="space-y-3">
       {encabezado}
       {proceso}
+      {competidores}
       <div className="space-y-3 rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Detalle del pliego</p>

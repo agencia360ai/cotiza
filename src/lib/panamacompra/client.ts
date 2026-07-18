@@ -175,6 +175,96 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
   return res.json().catch(() => null);
 }
 
+// ── Competidores / propuestas recibidas (TANTEO) ─────────────────────────────
+// Las propuestas de otros oferentes son SECRETAS hasta el acto de apertura; solo
+// aparecen en procesos ya cerrados/adjudicados. PanamaCompra las publica en una
+// vista distinta al pliego, cuyo endpoint exacto no está confirmado — probamos
+// varios candidatos con el mismo patrón `pagina-componentes` y devolvemos el
+// primero que traiga una tabla de proponentes. Si ninguno pega, [] (degradación).
+export type PcProponente = { nombre: string; monto: number | null; extra: string | null };
+
+// Vistas candidatas del detalle del proceso donde suele vivir el cuadro de
+// propuestas / acto público. Se prueban en orden hasta encontrar proponentes.
+const VISTAS_PROPUESTAS = [
+  "procesoVistaResumen",
+  "procesoVistaActoPublico",
+  "procesoVistaActo",
+  "procesoVistaPropuestas",
+  "procesoVistaOfertas",
+  "procesoVistaAdjudicacion",
+  "procesoVistaEvaluacion",
+];
+
+const RE_PROP_NOMBRE = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa|contratista|participante|proveedor/i;
+const RE_PROP_MONTO = /monto|precio|oferta|valor|total|importe/i;
+
+// Busca recursivamente el array que MEJOR luce como lista de proponentes: sus
+// elementos son objetos con una clave de nombre y (idealmente) una de monto.
+function buscarProponentes(node: unknown): PcProponente[] {
+  let mejor: PcProponente[] = [];
+  const visit = (n: unknown): void => {
+    if (Array.isArray(n)) {
+      const objetos = n.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<string, unknown>[];
+      if (objetos.length > 0) {
+        const conNombre = objetos.filter((o) => Object.keys(o).some((k) => RE_PROP_NOMBRE.test(k)));
+        // Un array de proponentes: la mayoría de sus filas tienen clave de nombre.
+        if (conNombre.length >= Math.max(1, Math.floor(objetos.length * 0.6))) {
+          const parsed = conNombre.map((o) => parseProp(o)).filter((p): p is PcProponente => p !== null);
+          if (parsed.length > mejor.length) mejor = parsed;
+        }
+      }
+      for (const x of n) visit(x);
+      return;
+    }
+    if (n && typeof n === "object") for (const v of Object.values(n as Record<string, unknown>)) visit(v);
+  };
+  visit(node);
+  return mejor;
+}
+
+function parseProp(o: Record<string, unknown>): PcProponente | null {
+  let nombre: string | null = null;
+  let monto: number | null = null;
+  for (const [k, v] of Object.entries(o)) {
+    if (nombre === null && RE_PROP_NOMBRE.test(k) && typeof v === "string" && v.trim()) nombre = v.trim();
+    if (monto === null && RE_PROP_MONTO.test(k)) {
+      const num = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/[^0-9.-]/g, "")) : NaN;
+      if (Number.isFinite(num) && num > 0) monto = num;
+    }
+  }
+  if (!nombre) return null;
+  // Estado/resultado si viene (adjudicado, descalificado…).
+  const estadoKey = Object.keys(o).find((k) => /estado|resultado|condicion|posicion|lugar/i.test(k));
+  const estadoVal = estadoKey ? o[estadoKey] : null;
+  const extra = typeof estadoVal === "string" && estadoVal.trim() ? estadoVal.trim() : null;
+  return { nombre, monto, extra };
+}
+
+export async function pcProponentes(
+  session: PcSession,
+  idTipoProceso: string,
+  idFlujos: string,
+): Promise<{ proponentes: PcProponente[]; vistaUsada: string | null }> {
+  for (const vista of VISTAS_PROPUESTAS) {
+    let json: unknown = null;
+    try {
+      const res = await fetch(`${BASE}/procesos-configuracion/pagina-componentes/${idTipoProceso}/${vista}/${idFlujos}`, {
+        method: "GET",
+        headers: baseHeaders(session),
+        cache: "no-store",
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) continue; // 404 = esa vista no existe para este tipo → probar la siguiente
+      json = await res.json().catch(() => null);
+    } catch {
+      continue; // red/timeout en una vista no tumba el intento
+    }
+    const props = json ? buscarProponentes(json) : [];
+    if (props.length > 0) return { proponentes: props, vistaUsada: vista };
+  }
+  return { proponentes: [], vistaUsada: null };
+}
+
 // Solo el endpoint de archivos de PanamaCompra (no SSRF a otros hosts). El
 // hostname debe SER panamacompra.gob.pa o un subdominio real (no un dominio
 // hermano tipo "evilpanamacompra.gob.pa").
