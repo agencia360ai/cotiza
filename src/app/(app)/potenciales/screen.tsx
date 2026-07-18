@@ -100,7 +100,7 @@ const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_rev
 // Orden del flujo, con la RAMIFICACIÓN tras la revisión:
 // Por participar → Participada → En revisión → (No ganada | Ganada → Orden de proceder).
 // "por_partir" es legacy (Participada) y se muestra solo si una fila ya lo tiene.
-const TENDER_STATUS_PICKER: TenderStatus[] = ["por_participar", "presentada", "en_revision", "no_ganada", "ganada", "orden_proceder"];
+const TENDER_STATUS_PICKER: TenderStatus[] = ["por_participar", "presentada", "en_revision", "no_ganada", "ganada", "orden_proceder", "por_cobrar", "cobrado"];
 const MODALIDADES: Modalidad[] = ["licitacion_publica", "compra_menor", "contratacion_menor", "otro"];
 const MODALIDAD_SHORT: Record<Modalidad, string> = {
   licitacion_publica: "LP",
@@ -2042,6 +2042,8 @@ function LicitacionesTab({
       { key: "en_revision", label: "En revisión", color: TENDER_STATUS_COLOR.en_revision, estados: ["en_revision"] },
       { key: "ganada", label: "Ganadas", color: TENDER_STATUS_COLOR.ganada, estados: ["ganada"] },
       { key: "orden_proceder", label: "Orden de proceder", color: TENDER_STATUS_COLOR.orden_proceder, estados: ["orden_proceder"] },
+      { key: "por_cobrar", label: "Por cobrar", color: TENDER_STATUS_COLOR.por_cobrar, estados: ["por_cobrar"] },
+      { key: "cobrado", label: "Cobrado", color: TENDER_STATUS_COLOR.cobrado, estados: ["cobrado"] },
       { key: "no_ganada", label: "Perdidas", color: TENDER_STATUS_COLOR.no_ganada, estados: ["no_ganada"] },
     ];
     return grupos.map((g) => {
@@ -2138,7 +2140,7 @@ function LicitacionesTab({
       {/* Analítica del pipeline por etapa (respeta los filtros de modalidad/búsqueda). */}
       <section className="mb-6">
         <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">Analítica por etapa</p>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 2xl:grid-cols-8">
           {analitica.map((g) => (
             <div key={g.key} className="rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
               <div className="flex items-center gap-1.5">
@@ -2266,12 +2268,12 @@ function LicitacionesTab({
                           >
                             <CheckCircle2 className="size-3" /> QBO
                           </span>
-                        ) : x.status === "orden_proceder" || x.status === "ganada" ? (
+                        ) : x.status === "orden_proceder" || x.status === "ganada" || x.status === "por_cobrar" || x.status === "cobrado" ? (
                           <button
                             type="button"
                             onClick={() => setSendingTenderQbo(x)}
                             className="inline-flex items-center gap-0.5 rounded-md border border-teal-200 bg-teal-50 px-1.5 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-100"
-                            title={x.status === "orden_proceder" ? "Orden de proceder: crear el proyecto en QuickBooks" : "Ganada: al recibir la orden de proceder, crea el proyecto en QuickBooks"}
+                            title={x.status === "orden_proceder" ? "Orden de proceder: crear el proyecto en QuickBooks" : "Crear el proyecto en QuickBooks"}
                           >
                             <ArrowUpRight className="size-3" /> Proyecto
                           </button>
@@ -2438,7 +2440,14 @@ function BuscarInfoCard({
       {res ? (
         <div className="mt-2 space-y-1 text-[11px] text-slate-600">
           <p>{PC_TXT[res.pc]}</p>
-          {typeof res.aplicado.delivery_date === "string" ? <p>✓ Fecha de participación: {res.aplicado.delivery_date}</p> : null}
+          {typeof res.aplicado.delivery_date === "string" ? (
+            <p>
+              ✓ Fecha de participación: {res.aplicado.delivery_date}
+              {res.pc !== "vinculada" && res.pc !== "ya_vinculada" ? (
+                <span className="text-slate-400"> (aprox., del archivo más antiguo en Dropbox)</span>
+              ) : null}
+            </p>
+          ) : null}
           {res.auto?.estatus === "ganada" ? (
             <p className="font-semibold text-emerald-700">✓ Adjudicada a DICEC — marcada Ganada.</p>
           ) : res.auto?.estatus === "no_ganada" ? (
