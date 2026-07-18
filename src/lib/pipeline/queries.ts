@@ -147,7 +147,7 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
 }
 
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
-const TENDER_STATUSES: TenderStatus[] = ["por_participar", "ganada", "orden_proceder", "no_ganada", "presentada", "en_revision", "por_partir"];
+const TENDER_STATUSES: TenderStatus[] = ["por_participar", "ganada", "orden_proceder", "por_cobrar", "cobrado", "no_ganada", "presentada", "en_revision", "por_partir"];
 
 type QuoteAggRow = {
   quote_number: string;

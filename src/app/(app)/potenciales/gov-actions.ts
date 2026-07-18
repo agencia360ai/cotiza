@@ -681,7 +681,7 @@ function tituloDeCarpeta(carpetaPath: string, acto: string): string | null {
   return resto.length > 3 ? resto : null;
 }
 
-async function buscarCarpetaActo(acto: string): Promise<{ path: string; url: string | null } | null> {
+async function buscarCarpetaActo(acto: string): Promise<{ path: string; url: string | null; fecha: string | null } | null> {
   let matches: DbxEntry[] = [];
   try {
     matches = await searchFiles(acto, { path: LICITACIONES_ROOT, maxResults: 25 });
@@ -696,7 +696,21 @@ async function buscarCarpetaActo(acto: string): Promise<{ path: string; url: str
   } catch {
     url = null; // carpeta hallada; el link se reintenta en otra corrida
   }
-  return { path: carpeta, url };
+  // Fecha APROXIMADA de participación para actos que PanamaCompra no expone: el
+  // archivo más antiguo de la carpeta ≈ cuándo se preparó/subió la oferta. No es
+  // exacta; solo se usa cuando no hay fecha del gobierno.
+  let fecha: string | null = null;
+  try {
+    const entries = await listFolder(carpeta);
+    const fechas = entries
+      .filter((e) => e.tag === "file" && e.modified)
+      .map((e) => e.modified as string)
+      .sort();
+    if (fechas[0]) fecha = fechas[0].slice(0, 10);
+  } catch {
+    /* la fecha del folder es opcional */
+  }
+  return { path: carpeta, url, fecha };
 }
 
 export async function syncTendersFromGov(): Promise<void> {
@@ -775,6 +789,7 @@ export async function syncTendersFromGov(): Promise<void> {
           const titulo = tituloDeCarpeta(hit.path, t.acto_number!.trim());
           if (titulo) patch.objeto = titulo;
         }
+        if (hit.fecha && !t.delivery_date) patch.delivery_date = hit.fecha; // fecha aprox del folder
         await supabase.from("tenders").update(patch).eq("id", t.id).eq("org_id", orgId);
       }
     }
@@ -1151,15 +1166,17 @@ export async function buscarInfoTender(tenderId: string): Promise<Result<BuscarI
     auto = a;
   }
 
-  // 4) Carpeta en Dropbox si sigue faltando.
+  // 4) Carpeta en Dropbox si sigue faltando (+ fecha aprox si PanamaCompra no la dio).
   const folderTras = (aplicado.folder_url as string | undefined) ?? t.folder_url;
-  if (hasDropboxConfig() && esFolderPisable(folderTras ?? null)) {
+  const yaHayFecha = typeof aplicado.delivery_date === "string" || !!t.delivery_date;
+  if (hasDropboxConfig() && (esFolderPisable(folderTras ?? null) || !yaHayFecha)) {
     const hit = await buscarCarpetaActo(acto);
-    if (hit?.url) aplicado.folder_url = hit.url;
+    if (hit?.url && esFolderPisable(folderTras ?? null)) aplicado.folder_url = hit.url;
     if (hit && !t.objeto && !aplicado.objeto) {
       const titulo = tituloDeCarpeta(hit.path, acto);
       if (titulo) aplicado.objeto = titulo;
     }
+    if (hit?.fecha && !yaHayFecha) aplicado.delivery_date = hit.fecha; // aprox del folder
   }
 
   if (Object.keys(aplicado).length > 0) {
