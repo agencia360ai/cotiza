@@ -183,19 +183,20 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
 // primero que traiga una tabla de proponentes. Si ninguno pega, [] (degradación).
 export type PcProponente = { nombre: string; monto: number | null; extra: string | null };
 
-// Endpoints candidatos, en orden. Los dos primeros están CONFIRMADOS con
-// capturas del portal:
-//   1. "Lista de propuestas" (POST con ids numéricos) → la lista de OFERENTES.
-//   2. "Cuadro de propuestas" (GET) → matriz renglones × proponentes con montos.
-// El tercero queda de respaldo. {t}=idTipoProceso {f}=idFlujos.
+// Endpoints candidatos, en orden. El cuadroPropuesta es EL confirmado con un
+// response real completo del portal (CM-021746): `result.ofertasGlobal[]` trae
+// UNA oferta por proponente con empresa.nombreComercial (anidado), precioTotal
+// (el total de la propuesta, no el de un renglón) y los flags esAdjudicado /
+// cumple. La lista de propuestas (POST) y el resumen quedan de respaldo para
+// procesos donde el cuadro no esté expuesto. {t}=idTipoProceso {f}=idFlujos.
 type EndpointPropuestas = { url: string; method: "GET" | "POST"; body?: string };
 const ENDPOINTS_PROPUESTAS: ((t: string, f: string) => EndpointPropuestas)[] = [
+  (t, f) => ({ url: `${BASE}/documentos-actos-publico/cuadroPropuesta/${t}/procesoVistaCuadroPropuesta/${f}`, method: "GET" }),
   (t, f) => ({
     url: `${BASE}/ps/procesos/ofertar/lista-propuesta-page/get-page`,
     method: "POST",
     body: JSON.stringify({ idTipoProceso: Number(t), idProcesosContratacionFlujos: Number(f) }),
   }),
-  (t, f) => ({ url: `${BASE}/documentos-actos-publico/cuadroPropuesta/${t}/procesoVistaCuadroPropuesta/${f}`, method: "GET" }),
   (t, f) => ({ url: `${BASE}/procesos-configuracion/pagina-componentes/${t}/procesoVistaResumen/${f}`, method: "GET" }),
 ];
 
@@ -300,11 +301,28 @@ function buscarProponentes(node: unknown): PcProponente[] {
   return Array.from(porNombre.values());
 }
 
-function parseProp(o: Record<string, unknown>, reNombre: RegExp): PcProponente | null {
-  let nombre: string | null = null;
+// La empresa puede venir ANIDADA: el cuadroPropuesta real guarda cada oferta
+// como { empresa: { nombreComercial }, precioTotal, esAdjudicado, … }. Si el
+// objeto no trae el nombre como string directo, mirar UN nivel adentro de sus
+// valores-objeto "empresa-ish" (nunca más hondo: a dos saltos ya viven los
+// renglones, cuyos precios parciales contaminarían el monto).
+const RE_OBJETO_EMPRESA = /empresa|proponente|oferente|razon/i;
+
+function nombreDirecto(o: Record<string, unknown>, reNombre: RegExp): string | null {
   for (const [k, v] of Object.entries(o)) {
-    if (nombre === null && reNombre.test(k) && !RE_NOMBRE_EXCLUIR.test(k) && typeof v === "string" && v.trim()) {
-      nombre = v.trim();
+    if (reNombre.test(k) && !RE_NOMBRE_EXCLUIR.test(k) && typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+function parseProp(o: Record<string, unknown>, reNombre: RegExp): PcProponente | null {
+  let nombre = nombreDirecto(o, reNombre);
+  if (nombre === null) {
+    for (const [k, v] of Object.entries(o)) {
+      if (v && typeof v === "object" && !Array.isArray(v) && RE_OBJETO_EMPRESA.test(k)) {
+        nombre = nombreDirecto(v as Record<string, unknown>, RE_NOMBRE_EN_CONTENEDOR);
+        if (nombre !== null) break;
+      }
     }
   }
   const monto = extraerMonto(o);
@@ -313,7 +331,13 @@ function parseProp(o: Record<string, unknown>, reNombre: RegExp): PcProponente |
   // Estado/resultado si viene (adjudicado, descalificado…).
   const estadoKey = Object.keys(o).find((k) => /estado|resultado|condicion|posicion|lugar/i.test(k));
   const estadoVal = estadoKey ? o[estadoKey] : null;
-  const extra = typeof estadoVal === "string" && estadoVal.trim() ? estadoVal.trim() : null;
+  let extra = typeof estadoVal === "string" && estadoVal.trim() ? estadoVal.trim() : null;
+  // El cuadro real no trae estado en texto sino FLAGS: esAdjudicado / cumple.
+  if (extra === null) {
+    if (o.esAdjudicado === 1 || o.esAdjudicado === true) extra = "Adjudicado";
+    else if (o.cumple === 0 || o.cumple === false) extra = "No cumple";
+    else if (o.cumple === 1 || o.cumple === true) extra = "Cumple";
+  }
   return { nombre, monto, extra };
 }
 
