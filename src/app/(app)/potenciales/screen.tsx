@@ -92,7 +92,7 @@ const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
 
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
-type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad";
+type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad" | "delivery_date";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "no_ganada", "ganada", "orden_proceder"];
 // Orden del flujo, con la RAMIFICACIÓN tras la revisión:
@@ -2188,6 +2188,7 @@ function LicitacionesTab({
                 <SortTh label="Entidad" k="entity" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Objeto</th>
                 <SortTh label="Modalidad" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <SortTh label="Participación" k="delivery_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
                 <SortTh label="Ref. ($)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estatus" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold sm:table-cell">Rubro</th>
@@ -2196,7 +2197,7 @@ function LicitacionesTab({
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={7} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin licitaciones con estos filtros.
                   </td>
                 </tr>
@@ -2217,6 +2218,7 @@ function LicitacionesTab({
                     </td>
                     <td className="hidden max-w-[300px] truncate px-3 py-2.5 text-slate-500 md:table-cell">{x.objeto ?? "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.modalidad ? MODALIDAD_LABEL[x.modalidad] : "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.delivery_date ? fmtDate(x.delivery_date.slice(0, 10)) : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
                       {x.amount_ref_usd === null ? "—" : formatMoneyExact(x.amount_ref_usd)}
                     </td>
