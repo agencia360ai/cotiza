@@ -209,6 +209,15 @@ const RE_NOMBRE_DEBIL = /proponente|oferente|razonsocial|razon_social|nombreempr
 // artículo, no la empresa. Estas claves NUNCA cuentan como nombre.
 const RE_NOMBRE_EXCLUIR = /especificacion|descripcion|detalle|observacion|justificacion/i;
 const RE_PROP_MONTO = /monto|precio|oferta|valor|total|importe/i;
+// Clave CONTENEDORA (la que sostiene el array) que indica inequívocamente una
+// lista de proponentes. Cuando el array vive bajo una de estas, confiamos en él
+// aunque sus filas nombren la empresa con un campo genérico ("nombre",
+// "razonSocial") que las regex de arriba no cubren — así la vista lista-propuesta
+// (nombres bajo `nombre`) deja de venir vacía.
+const RE_CONTENEDOR_PROP = /proponente|propuesta|oferente|oferta|participante|competidor/i;
+// Nombre de empresa dentro de un objeto YA sabido proponente (contenedor
+// confiable): acepta claves genéricas además de las fuertes.
+const RE_NOMBRE_EN_CONTENEDOR = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa|nombre|empresa|contratista|proveedor|participante/i;
 
 // Monto de la propuesta: preferir el TOTAL del proponente (no impuestos) sobre
 // precios de renglón; si no hay total, el primer monto positivo que aparezca.
@@ -256,7 +265,29 @@ function buscarProponentes(node: unknown): PcProponente[] {
     visit(node);
     return mejor;
   };
-  const fuerte = conRegex(RE_NOMBRE_FUERTE);
+  // Pasada por CONTENEDOR: un array sostenido por una clave proponente-ish se
+  // trata como lista de proponentes aunque sus filas nombren la empresa con un
+  // campo genérico (los otros pases exigen la clave "proponente" en cada fila).
+  const desdeContenedor = (): PcProponente[] => {
+    let mejor: PcProponente[] = [];
+    const visit = (n: unknown, keyPadre: string | null): void => {
+      if (Array.isArray(n)) {
+        if (keyPadre && RE_CONTENEDOR_PROP.test(keyPadre)) {
+          const objetos = n.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<string, unknown>[];
+          const parsed = objetos.map((o) => parseProp(o, RE_NOMBRE_EN_CONTENEDOR)).filter((p): p is PcProponente => p !== null);
+          if (parsed.length > mejor.length) mejor = parsed;
+        }
+        for (const x of n) visit(x, keyPadre);
+        return;
+      }
+      if (n && typeof n === "object") for (const [k, v] of Object.entries(n as Record<string, unknown>)) visit(v, k);
+    };
+    visit(node, null);
+    return mejor;
+  };
+
+  const contenedor = desdeContenedor();
+  const fuerte = contenedor.length > 0 ? contenedor : conRegex(RE_NOMBRE_FUERTE);
   const lista = fuerte.length > 0 ? fuerte : conRegex(RE_NOMBRE_DEBIL);
   // Dedup por nombre (el cuadro repite al proponente por renglón); conservar el
   // que traiga monto.
@@ -284,6 +315,23 @@ function parseProp(o: Record<string, unknown>, reNombre: RegExp): PcProponente |
   const estadoVal = estadoKey ? o[estadoKey] : null;
   const extra = typeof estadoVal === "string" && estadoVal.trim() ? estadoVal.trim() : null;
   return { nombre, monto, extra };
+}
+
+// Diagnóstico: estructura compacta (claves + tipos + muestras cortas) de un JSON
+// para poder mapear los campos reales desde los logs de Vercel sin adivinar. Los
+// valores string se recortan a 40 chars — es data pública de licitación, no hay
+// secretos, pero se acota para no inflar el log.
+function shapePreview(node: unknown, depth = 0): unknown {
+  if (depth > 4) return "…";
+  if (Array.isArray(node)) return node.length === 0 ? [] : [`${node.length}×`, shapePreview(node[0], depth + 1)];
+  if (node && typeof node === "object") {
+    const o = node as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(o).slice(0, 25)) out[k] = shapePreview(o[k], depth + 1);
+    return out;
+  }
+  if (typeof node === "string") return node.length > 40 ? node.slice(0, 40) + "…" : node;
+  return typeof node;
 }
 
 export async function pcProponentes(
@@ -327,7 +375,19 @@ export async function pcProponentes(
       continue; // red/timeout en un endpoint no tumba el intento
     }
     const props = json ? buscarProponentes(json) : [];
-    if (props.length === 0) continue;
+    if (props.length === 0) {
+      // El endpoint respondió pero no supimos leer proponentes: registrar el
+      // shape real (campos + muestras) para poder mapearlo desde los logs sin
+      // adivinar. Solo cuando trajo cuerpo (json != null); no ensucia el caso 404.
+      if (json) {
+        try {
+          console.warn(`[pcProponentes] sin proponentes de ${ep.url}: ${JSON.stringify(shapePreview(json)).slice(0, 1500)}`);
+        } catch {
+          /* preview mejor-esfuerzo */
+        }
+      }
+      continue;
+    }
     if (base.length === 0) {
       base = props;
       vistaUsada = ep.url;

@@ -2186,7 +2186,7 @@ function LicitacionesTab({
             <thead>
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
                 <SortTh label="Entidad" k="entity" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
-                <th className="hidden px-3 py-2.5 font-semibold md:table-cell">Objeto</th>
+                <th className="hidden px-3 py-2.5 font-semibold 2xl:table-cell">Objeto</th>
                 <SortTh label="Modalidad" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Participación" k="delivery_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
                 <SortTh label="Ref. ($)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
@@ -2208,7 +2208,7 @@ function LicitacionesTab({
                     onClick={() => setEditing(x)}
                     className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
                   >
-                    <td className="max-w-[220px] px-3 py-2.5">
+                    <td className="max-w-[180px] px-3 py-2.5">
                       <div className="truncate font-medium text-slate-900">{x.client_std_name ?? x.entity ?? "—"}</div>
                       {!x.client_id && x.entity ? (
                         <span className="text-[10px] font-medium text-amber-600">sin estandarizar</span>
@@ -2216,8 +2216,8 @@ function LicitacionesTab({
                         <span className="block truncate text-[10px] text-slate-400">{x.entity}</span>
                       ) : null}
                     </td>
-                    <td className="hidden max-w-[300px] truncate px-3 py-2.5 text-slate-500 md:table-cell">{x.objeto ?? "—"}</td>
-                    <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.modalidad ? MODALIDAD_LABEL[x.modalidad] : "—"}</td>
+                    <td className="hidden max-w-[240px] truncate px-3 py-2.5 text-slate-500 2xl:table-cell" title={x.objeto ?? undefined}>{x.objeto ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-slate-600" title={x.modalidad ? MODALIDAD_LABEL[x.modalidad] : undefined}>{x.modalidad ? MODALIDAD_SHORT[x.modalidad] : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.delivery_date ? fmtDate(x.delivery_date.slice(0, 10)) : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
                       {x.amount_ref_usd === null ? "—" : formatMoneyExact(x.amount_ref_usd)}

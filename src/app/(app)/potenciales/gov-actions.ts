@@ -455,7 +455,7 @@ export async function uploadGovTenderDocToDropbox(
 // qué vista funcionó (o un aviso si no se encontró).
 export async function getGovTenderCompetidores(
   govId: string,
-): Promise<Result<{ proponentes: PcProponente[]; vistaUsada: string | null; cerrada: boolean }>> {
+): Promise<Result<{ proponentes: PcProponente[]; vistaUsada: string | null; abierta: boolean }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
@@ -470,11 +470,15 @@ export async function getGovTenderCompetidores(
   const idFlujos = rw?.idProcesosContratacionFlujos;
   const idTipo = g.tipo ? TIPO_TO_ID[g.tipo] : undefined;
   if (!idFlujos || !idTipo) return { error: "Este proceso no tiene detalle consultable en PanamaCompra." };
-  const cerrada = !!g.fecha_cierre && +new Date(g.fecha_cierre) < Date.now();
+  // "Abierta" = SABEMOS que sigue abierta (cierra en el futuro) → ahí sí las
+  // propuestas son secretas. fecha_cierre null o pasada NO es "abierta": una
+  // ganada/adjudicada ya cerró, así que no afirmamos "aún no cierra" cuando en
+  // realidad no expusieron la tabla o no supimos leerla.
+  const abierta = !!g.fecha_cierre && +new Date(g.fecha_cierre) > Date.now();
   try {
     const session = await pcLogin();
     const { proponentes, vistaUsada } = await pcProponentes(session, idTipo, String(idFlujos));
-    return { ok: true, data: { proponentes, vistaUsada, cerrada } };
+    return { ok: true, data: { proponentes, vistaUsada, abierta } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudieron consultar las propuestas" };
   }
