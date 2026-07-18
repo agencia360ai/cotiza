@@ -204,7 +204,33 @@ const ENDPOINTS_PROPUESTAS: ((t: string, f: string) => EndpointPropuestas)[] = [
 // comparativo mezcló "proveedor"/"casa" y salían descripciones como oferente).
 const RE_NOMBRE_FUERTE = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa/i;
 const RE_NOMBRE_DEBIL = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa|contratista|participante|proveedor/i;
+// El cuadro por proponente tiene en cada RENGLÓN la columna "Especificaciones
+// del Proponente" — contiene "proponente" pero su valor es la descripción del
+// artículo, no la empresa. Estas claves NUNCA cuentan como nombre.
+const RE_NOMBRE_EXCLUIR = /especificacion|descripcion|detalle|observacion|justificacion/i;
 const RE_PROP_MONTO = /monto|precio|oferta|valor|total|importe/i;
+
+// Monto de la propuesta: preferir el TOTAL del proponente (no impuestos) sobre
+// precios de renglón; si no hay total, el primer monto positivo que aparezca.
+function extraerMonto(o: Record<string, unknown>): number | null {
+  const leer = (v: unknown): number | null => {
+    const num = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/[^0-9.-]/g, "")) : NaN;
+    return Number.isFinite(num) && num > 0 ? num : null;
+  };
+  for (const [k, v] of Object.entries(o)) {
+    if (/total/i.test(k) && !/impuesto/i.test(k)) {
+      const n = leer(v);
+      if (n !== null) return n;
+    }
+  }
+  for (const [k, v] of Object.entries(o)) {
+    if (RE_PROP_MONTO.test(k)) {
+      const n = leer(v);
+      if (n !== null) return n;
+    }
+  }
+  return null;
+}
 
 // Busca recursivamente el array que MEJOR luce como lista de proponentes. Dos
 // pasadas: primero solo claves fuertes; si nada, con las débiles.
@@ -215,7 +241,7 @@ function buscarProponentes(node: unknown): PcProponente[] {
       if (Array.isArray(n)) {
         const objetos = n.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<string, unknown>[];
         if (objetos.length > 0) {
-          const conNombre = objetos.filter((o) => Object.keys(o).some((k) => re.test(k)));
+          const conNombre = objetos.filter((o) => Object.keys(o).some((k) => re.test(k) && !RE_NOMBRE_EXCLUIR.test(k)));
           // Un array de proponentes: la mayoría de sus filas tienen clave de nombre.
           if (conNombre.length >= Math.max(1, Math.floor(objetos.length * 0.6))) {
             const parsed = conNombre.map((o) => parseProp(o, re)).filter((p): p is PcProponente => p !== null);
@@ -245,14 +271,12 @@ function buscarProponentes(node: unknown): PcProponente[] {
 
 function parseProp(o: Record<string, unknown>, reNombre: RegExp): PcProponente | null {
   let nombre: string | null = null;
-  let monto: number | null = null;
   for (const [k, v] of Object.entries(o)) {
-    if (nombre === null && reNombre.test(k) && typeof v === "string" && v.trim()) nombre = v.trim();
-    if (monto === null && RE_PROP_MONTO.test(k)) {
-      const num = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/[^0-9.-]/g, "")) : NaN;
-      if (Number.isFinite(num) && num > 0) monto = num;
+    if (nombre === null && reNombre.test(k) && !RE_NOMBRE_EXCLUIR.test(k) && typeof v === "string" && v.trim()) {
+      nombre = v.trim();
     }
   }
+  const monto = extraerMonto(o);
   // Un "nombre" de >140 chars es una descripción de renglón, no una empresa.
   if (!nombre || nombre.length > 140) return null;
   // Estado/resultado si viene (adjudicado, descalificado…).
