@@ -36,19 +36,25 @@ export type AttEventRow = {
 
 const fmtFecha = (iso: string) =>
   new Intl.DateTimeFormat("es-PA", { day: "2-digit", month: "short", timeZone: "America/Panama" }).format(new Date(iso));
+const fmtMes = (yyyymm: string) =>
+  new Intl.DateTimeFormat("es-PA", { month: "long", year: "numeric", timeZone: "America/Panama" }).format(new Date(yyyymm + "-15T12:00:00Z"));
 const panamaMinutes = (iso: string) => {
   const d = new Date(new Date(iso).getTime() - 5 * 3600_000);
   return d.getUTCHours() * 60 + d.getUTCMinutes();
 };
 
+const RANGO_LABEL: Record<string, string> = { "30d": "30 días", "3m": "3 meses", "6m": "6 meses", "12m": "12 meses" };
+
 export function AsistenciaScreen({
-  settings, techs, locs, events, migracionPendiente,
+  settings, techs, locs, events, migracionPendiente, rango, truncado,
 }: {
   settings: AttSettings | null;
   techs: AttTech[];
   locs: AttLoc[];
   events: AttEventRow[];
   migracionPendiente: boolean;
+  rango: string;
+  truncado: boolean;
 }) {
   const [tab, setTab] = useState<"hoy" | "historial" | "config">("hoy");
   const activos = techs.filter((t) => t.active);
@@ -86,7 +92,7 @@ export function AsistenciaScreen({
           <ArrowLeft className="size-3.5" /> Personal
         </Link>
       </div>
-      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Asistencia</h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -95,13 +101,33 @@ export function AsistenciaScreen({
         </div>
         <button
           type="button"
-          onClick={() => exportCsv(events, nombre, locName)}
+          onClick={() => exportCsv(events, nombre, locName, rango)}
           disabled={events.length === 0}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          title={`Descargar CSV de los últimos ${RANGO_LABEL[rango]}`}
         >
-          <Download className="size-4" /> Exportar CSV
+          <Download className="size-4" /> Exportar {RANGO_LABEL[rango]}
         </button>
       </header>
+
+      {/* Período de historial y exportación (el tablero Hoy no cambia). */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span className="font-semibold uppercase tracking-wider">Período</span>
+        <div className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
+          {Object.keys(RANGO_LABEL).map((k) => (
+            <Link
+              key={k}
+              href={`/personal/asistencia?rango=${k}`}
+              scroll={false}
+              className={cn("rounded-md px-2.5 py-1 font-semibold transition-colors", rango === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100")}
+            >
+              {RANGO_LABEL[k]}
+            </Link>
+          ))}
+        </div>
+        <span className="text-slate-400">· historial y exportación</span>
+        {truncado ? <span className="text-amber-600">· mostrando el máximo (50.000 marcas); acota el período para verlo completo</span> : null}
+      </div>
 
       {migracionPendiente ? (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -267,13 +293,51 @@ function Historial({ activos, porTech, filaSitio }: { activos: AttTech[]; porTec
     return [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   }, [eventos]);
 
+  // Resumen por mes (días trabajados + horas): para ver 12 meses de un vistazo.
+  const meses = useMemo(() => {
+    const m = new Map<string, { horasMs: number; dias: number }>();
+    for (const [dia, evs] of dias) {
+      const ms = sumShiftMs(pairShifts([...evs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))));
+      const cur = m.get(dia.slice(0, 7)) ?? { horasMs: 0, dias: 0 };
+      cur.horasMs += ms;
+      cur.dias += 1; // día con al menos una marca
+      m.set(dia.slice(0, 7), cur);
+    }
+    return [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  }, [dias]);
+
   return (
     <div className="space-y-3">
       <select value={techId} onChange={(e) => setTechId(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
         {activos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
       </select>
+
+      {meses.length > 1 ? (
+        <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 bg-slate-50 text-left text-[10px] uppercase tracking-wide text-slate-400">
+                <th className="px-3 py-2 font-semibold">Mes</th>
+                <th className="px-3 py-2 text-right font-semibold">Días marcados</th>
+                <th className="px-3 py-2 text-right font-semibold">Horas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {meses.map(([mes, r]) => (
+                <tr key={mes} className="border-b border-slate-50 last:border-0">
+                  <td className="px-3 py-2 capitalize text-slate-700">{fmtMes(mes)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">{r.dias}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">{r.horasMs > 0 ? fmtDuracion(r.horasMs) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {dias.length > 0 ? <p className="px-1 pt-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Detalle por día</p> : null}
       {dias.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">Sin marcas en los últimos 21 días.</p>
+        <p className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">Sin marcas en este período.</p>
       ) : (
         dias.map(([dia, evs]) => {
           const shifts = pairShifts([...evs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at)));
@@ -443,7 +507,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 // ── Export CSV (cliente) ──────────────────────────────────────────────────────
-function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: Map<string, string>) {
+function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: Map<string, string>, rango: string) {
   const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const rows = [["Fecha", "Hora", "Tecnico", "Marca", "Sitio", "Distancia_m", "Estado"].join(",")];
   for (const e of events) {
@@ -458,7 +522,7 @@ function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: 
   const blob = new Blob(["﻿" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `asistencia-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `asistencia-${rango}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
