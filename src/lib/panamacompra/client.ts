@@ -183,53 +183,102 @@ export async function pcPliegoRaw(session: PcSession, idTipoProceso: string, idF
 // primero que traiga una tabla de proponentes. Si ninguno pega, [] (degradación).
 export type PcProponente = { nombre: string; monto: number | null; extra: string | null };
 
-// Endpoints candidatos del cuadro de propuestas / acto público. El PRIMERO es
-// el CONFIRMADO (capturado del portal): "cuadroPropuesta". Los demás quedan como
-// respaldo por si algún tipo de proceso usa otra ruta. {t}=idTipoProceso {f}=idFlujos.
-const ENDPOINTS_PROPUESTAS: ((t: string, f: string) => string)[] = [
-  (t, f) => `${BASE}/documentos-actos-publico/cuadroPropuesta/${t}/procesoVistaCuadroPropuesta/${f}`,
-  (t, f) => `${BASE}/procesos-configuracion/pagina-componentes/${t}/procesoVistaResumen/${f}`,
-  (t, f) => `${BASE}/procesos-configuracion/pagina-componentes/${t}/procesoVistaActoPublico/${f}`,
+// Endpoints candidatos, en orden. Los dos primeros están CONFIRMADOS con
+// capturas del portal:
+//   1. "Lista de propuestas" (POST con ids numéricos) → la lista de OFERENTES.
+//   2. "Cuadro de propuestas" (GET) → matriz renglones × proponentes con montos.
+// El tercero queda de respaldo. {t}=idTipoProceso {f}=idFlujos.
+type EndpointPropuestas = { url: string; method: "GET" | "POST"; body?: string };
+const ENDPOINTS_PROPUESTAS: ((t: string, f: string) => EndpointPropuestas)[] = [
+  (t, f) => ({
+    url: `${BASE}/ps/procesos/ofertar/lista-propuesta-page/get-page`,
+    method: "POST",
+    body: JSON.stringify({ idTipoProceso: Number(t), idProcesosContratacionFlujos: Number(f) }),
+  }),
+  (t, f) => ({ url: `${BASE}/documentos-actos-publico/cuadroPropuesta/${t}/procesoVistaCuadroPropuesta/${f}`, method: "GET" }),
+  (t, f) => ({ url: `${BASE}/procesos-configuracion/pagina-componentes/${t}/procesoVistaResumen/${f}`, method: "GET" }),
 ];
 
-const RE_PROP_NOMBRE = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa|contratista|participante|proveedor/i;
+// Claves de NOMBRE en dos niveles: las fuertes identifican inequívocamente a la
+// empresa; las débiles pueden aparecer también en filas de renglones (el cuadro
+// comparativo mezcló "proveedor"/"casa" y salían descripciones como oferente).
+const RE_NOMBRE_FUERTE = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa/i;
+const RE_NOMBRE_DEBIL = /proponente|oferente|razonsocial|razon_social|nombreempresa|nombre_empresa|contratista|participante|proveedor/i;
+// El cuadro por proponente tiene en cada RENGLÓN la columna "Especificaciones
+// del Proponente" — contiene "proponente" pero su valor es la descripción del
+// artículo, no la empresa. Estas claves NUNCA cuentan como nombre.
+const RE_NOMBRE_EXCLUIR = /especificacion|descripcion|detalle|observacion|justificacion/i;
 const RE_PROP_MONTO = /monto|precio|oferta|valor|total|importe/i;
 
-// Busca recursivamente el array que MEJOR luce como lista de proponentes: sus
-// elementos son objetos con una clave de nombre y (idealmente) una de monto.
-function buscarProponentes(node: unknown): PcProponente[] {
-  let mejor: PcProponente[] = [];
-  const visit = (n: unknown): void => {
-    if (Array.isArray(n)) {
-      const objetos = n.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<string, unknown>[];
-      if (objetos.length > 0) {
-        const conNombre = objetos.filter((o) => Object.keys(o).some((k) => RE_PROP_NOMBRE.test(k)));
-        // Un array de proponentes: la mayoría de sus filas tienen clave de nombre.
-        if (conNombre.length >= Math.max(1, Math.floor(objetos.length * 0.6))) {
-          const parsed = conNombre.map((o) => parseProp(o)).filter((p): p is PcProponente => p !== null);
-          if (parsed.length > mejor.length) mejor = parsed;
-        }
-      }
-      for (const x of n) visit(x);
-      return;
-    }
-    if (n && typeof n === "object") for (const v of Object.values(n as Record<string, unknown>)) visit(v);
+// Monto de la propuesta: preferir el TOTAL del proponente (no impuestos) sobre
+// precios de renglón; si no hay total, el primer monto positivo que aparezca.
+function extraerMonto(o: Record<string, unknown>): number | null {
+  const leer = (v: unknown): number | null => {
+    const num = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/[^0-9.-]/g, "")) : NaN;
+    return Number.isFinite(num) && num > 0 ? num : null;
   };
-  visit(node);
-  return mejor;
-}
-
-function parseProp(o: Record<string, unknown>): PcProponente | null {
-  let nombre: string | null = null;
-  let monto: number | null = null;
   for (const [k, v] of Object.entries(o)) {
-    if (nombre === null && RE_PROP_NOMBRE.test(k) && typeof v === "string" && v.trim()) nombre = v.trim();
-    if (monto === null && RE_PROP_MONTO.test(k)) {
-      const num = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/[^0-9.-]/g, "")) : NaN;
-      if (Number.isFinite(num) && num > 0) monto = num;
+    if (/total/i.test(k) && !/impuesto/i.test(k)) {
+      const n = leer(v);
+      if (n !== null) return n;
     }
   }
-  if (!nombre) return null;
+  for (const [k, v] of Object.entries(o)) {
+    if (RE_PROP_MONTO.test(k)) {
+      const n = leer(v);
+      if (n !== null) return n;
+    }
+  }
+  return null;
+}
+
+// Busca recursivamente el array que MEJOR luce como lista de proponentes. Dos
+// pasadas: primero solo claves fuertes; si nada, con las débiles.
+function buscarProponentes(node: unknown): PcProponente[] {
+  const conRegex = (re: RegExp): PcProponente[] => {
+    let mejor: PcProponente[] = [];
+    const visit = (n: unknown): void => {
+      if (Array.isArray(n)) {
+        const objetos = n.filter((x) => x && typeof x === "object" && !Array.isArray(x)) as Record<string, unknown>[];
+        if (objetos.length > 0) {
+          const conNombre = objetos.filter((o) => Object.keys(o).some((k) => re.test(k) && !RE_NOMBRE_EXCLUIR.test(k)));
+          // Un array de proponentes: la mayoría de sus filas tienen clave de nombre.
+          if (conNombre.length >= Math.max(1, Math.floor(objetos.length * 0.6))) {
+            const parsed = conNombre.map((o) => parseProp(o, re)).filter((p): p is PcProponente => p !== null);
+            if (parsed.length > mejor.length) mejor = parsed;
+          }
+        }
+        for (const x of n) visit(x);
+        return;
+      }
+      if (n && typeof n === "object") for (const v of Object.values(n as Record<string, unknown>)) visit(v);
+    };
+    visit(node);
+    return mejor;
+  };
+  const fuerte = conRegex(RE_NOMBRE_FUERTE);
+  const lista = fuerte.length > 0 ? fuerte : conRegex(RE_NOMBRE_DEBIL);
+  // Dedup por nombre (el cuadro repite al proponente por renglón); conservar el
+  // que traiga monto.
+  const porNombre = new Map<string, PcProponente>();
+  for (const p of lista) {
+    const k = p.nombre.toLowerCase();
+    const prev = porNombre.get(k);
+    if (!prev || (prev.monto === null && p.monto !== null)) porNombre.set(k, p);
+  }
+  return Array.from(porNombre.values());
+}
+
+function parseProp(o: Record<string, unknown>, reNombre: RegExp): PcProponente | null {
+  let nombre: string | null = null;
+  for (const [k, v] of Object.entries(o)) {
+    if (nombre === null && reNombre.test(k) && !RE_NOMBRE_EXCLUIR.test(k) && typeof v === "string" && v.trim()) {
+      nombre = v.trim();
+    }
+  }
+  const monto = extraerMonto(o);
+  // Un "nombre" de >140 chars es una descripción de renglón, no una empresa.
+  if (!nombre || nombre.length > 140) return null;
   // Estado/resultado si viene (adjudicado, descalificado…).
   const estadoKey = Object.keys(o).find((k) => /estado|resultado|condicion|posicion|lugar/i.test(k));
   const estadoVal = estadoKey ? o[estadoKey] : null;
@@ -242,19 +291,24 @@ export async function pcProponentes(
   idTipoProceso: string,
   idFlujos: string,
 ): Promise<{ proponentes: PcProponente[]; vistaUsada: string | null }> {
+  let base: PcProponente[] = [];
+  let vistaUsada: string | null = null;
   for (const build of ENDPOINTS_PROPUESTAS) {
-    const url = build(idTipoProceso, idFlujos);
+    // Si ya tenemos proponentes CON monto, no hace falta seguir consultando.
+    if (base.length > 0 && base.every((p) => p.monto !== null)) break;
+    const ep = build(idTipoProceso, idFlujos);
     let json: unknown = null;
     try {
-      const res = await fetch(url, {
-        method: "GET",
+      const res = await fetch(ep.url, {
+        method: ep.method,
         headers: baseHeaders(session),
+        body: ep.body,
         cache: "no-store",
         signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) continue; // 404 = ese endpoint no aplica para este tipo → siguiente
-      // El cuadro de propuestas responde con Content-Type text/html pero el
-      // cuerpo es JSON → parsear el texto (json() fallaría por el header).
+      // Estas APIs responden con Content-Type text/html pero el cuerpo es JSON
+      // → parsear el texto (json() fallaría por el header).
       const text = await res.text();
       try {
         json = JSON.parse(text);
@@ -273,9 +327,20 @@ export async function pcProponentes(
       continue; // red/timeout en un endpoint no tumba el intento
     }
     const props = json ? buscarProponentes(json) : [];
-    if (props.length > 0) return { proponentes: props, vistaUsada: url };
+    if (props.length === 0) continue;
+    if (base.length === 0) {
+      base = props;
+      vistaUsada = ep.url;
+      continue;
+    }
+    // Enriquecer: la lista trae los nombres; el cuadro puede traer los montos.
+    for (const b of base) {
+      if (b.monto !== null) continue;
+      const match = props.find((p) => p.nombre.toLowerCase() === b.nombre.toLowerCase() && p.monto !== null);
+      if (match) b.monto = match.monto;
+    }
   }
-  return { proponentes: [], vistaUsada: null };
+  return { proponentes: base, vistaUsada };
 }
 
 // Solo el endpoint de archivos de PanamaCompra (no SSRF a otros hosts). El
