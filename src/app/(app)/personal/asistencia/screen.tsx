@@ -4,11 +4,15 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, MapPin, Clock, Users, Settings2, Download, AlertTriangle, CheckCircle2, LogIn, LogOut, CircleDashed, ExternalLink, Save,
+  ArrowLeft, MapPin, Clock, Users, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion, type AttEvent } from "@/lib/whatsapp/attendance-core";
-import { saveAttendanceSettings, setLocationGeofence, type AttendanceSettingsInput } from "./actions";
+import {
+  saveAttendanceSettings, setLocationGeofence,
+  createAttendanceSite, updateAttendanceSite, deleteAttendanceSite,
+  type AttendanceSettingsInput,
+} from "./actions";
 
 export type AttSettings = {
   wa_phone_number_id: string | null;
@@ -22,6 +26,7 @@ export type AttSettings = {
 };
 export type AttTech = { id: string; name: string; phone: string | null; wa_id: string | null; active: boolean };
 export type AttLoc = { id: string; name: string; clientName: string; lat: number | null; lng: number | null; radius: number };
+export type AttSite = { id: string; name: string; lat: number | null; lng: number | null; radius: number };
 export type AttEventRow = {
   id: string;
   technician_id: string;
@@ -31,6 +36,7 @@ export type AttEventRow = {
   distance_m: number | null;
   matched_location_id: string | null;
   matched_hq: boolean;
+  matched_name?: string | null;
   wa_location_name: string | null;
 };
 
@@ -46,11 +52,12 @@ const panamaMinutes = (iso: string) => {
 const RANGO_LABEL: Record<string, string> = { "30d": "30 días", "3m": "3 meses", "6m": "6 meses", "12m": "12 meses" };
 
 export function AsistenciaScreen({
-  settings, techs, locs, events, migracionPendiente, rango, truncado,
+  settings, techs, locs, sites, events, migracionPendiente, rango, truncado,
 }: {
   settings: AttSettings | null;
   techs: AttTech[];
   locs: AttLoc[];
+  sites: AttSite[];
   events: AttEventRow[];
   migracionPendiente: boolean;
   rango: string;
@@ -81,7 +88,7 @@ export function AsistenciaScreen({
     if (!evId) return null;
     const e = eventoById.get(evId);
     if (!e) return null;
-    const site = e.matched_hq ? "Sede" : e.matched_location_id ? locName.get(e.matched_location_id) ?? "Sitio" : null;
+    const site = e.matched_name ?? (e.matched_hq ? "Sede" : e.matched_location_id ? locName.get(e.matched_location_id) ?? "Sitio" : null);
     return { site, dist: e.distance_m, status: e.status };
   };
 
@@ -160,7 +167,7 @@ export function AsistenciaScreen({
       ) : tab === "historial" ? (
         <Historial activos={activos} porTech={porTech} filaSitio={filaSitio} />
       ) : (
-        <Config settings={settings} locs={locs} />
+        <Config settings={settings} locs={locs} sites={sites} />
       )}
     </div>
   );
@@ -373,7 +380,7 @@ function Historial({ activos, porTech, filaSitio }: { activos: AttTech[]; porTec
 // ── Configuración ─────────────────────────────────────────────────────────────
 const inputCls = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none";
 
-function Config({ settings, locs }: { settings: AttSettings | null; locs: AttLoc[] }) {
+function Config({ settings, locs, sites }: { settings: AttSettings | null; locs: AttLoc[]; sites: AttSite[] }) {
   const router = useRouter();
   const [f, setF] = useState<AttendanceSettingsInput>({
     wa_phone_number_id: settings?.wa_phone_number_id ?? null,
@@ -439,17 +446,17 @@ function Config({ settings, locs }: { settings: AttSettings | null; locs: AttLoc
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-        <p className="mb-1 text-sm font-semibold text-slate-800">Geocercas de los sitios</p>
-        <p className="mb-3 text-xs text-slate-500">Pega el link de Google Maps de cada sitio (o &ldquo;lat, lng&rdquo;) y el radio en metros. Solo los sitios con coordenadas cuentan para el matcheo.</p>
-        {locs.length === 0 ? (
-          <p className="py-6 text-center text-sm text-slate-400">No hay sitios de cliente cargados.</p>
-        ) : (
+      <SitiosPropios sites={sites} />
+
+      {locs.length > 0 ? (
+        <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <p className="mb-1 text-sm font-semibold text-slate-800">Sitios de clientes</p>
+          <p className="mb-3 text-xs text-slate-500">Geocerca también los sitios de tus clientes (se administran en Clientes). Pega el link de Google Maps o &ldquo;lat, lng&rdquo; y el radio.</p>
           <ul className="divide-y divide-slate-100">
             {locs.map((l) => <GeocercaRow key={l.id} loc={l} />)}
           </ul>
-        )}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -496,6 +503,100 @@ function GeocercaRow({ loc }: { loc: AttLoc }) {
   );
 }
 
+// ── Sitios de asistencia propios (agregar / editar / eliminar) ────────────────
+function SitiosPropios({ sites }: { sites: AttSite[] }) {
+  const router = useRouter();
+  const [name, setName] = useState("");
+  const [link, setLink] = useState("");
+  const [radius, setRadius] = useState(150);
+  const [adding, startAdd] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+
+  function agregar() {
+    setErr(null);
+    if (!name.trim()) { setErr("Ponle un nombre al sitio."); return; }
+    const parsed = link.trim() ? parseLatLng(link) : null;
+    if (link.trim() && !parsed) { setErr("No reconocí las coordenadas. Pega un link de Google Maps o 'lat, lng'."); return; }
+    startAdd(async () => {
+      const r = await createAttendanceSite({ name: name.trim(), lat: parsed?.lat ?? null, lng: parsed?.lng ?? null, radius });
+      if ("error" in r) setErr(r.error);
+      else { setName(""); setLink(""); setRadius(150); router.refresh(); }
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+      <p className="mb-1 text-sm font-semibold text-slate-800">Sitios de asistencia</p>
+      <p className="mb-3 text-xs text-slate-500">Agrega los lugares donde marca el personal. Pega el link de Google Maps (o &ldquo;lat, lng&rdquo;) y el radio en metros.</p>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-2.5">
+        <input className={cn(inputCls, "min-w-[140px] flex-1")} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre (ej. Hospital Nacional)" />
+        <input className={cn(inputCls, "min-w-[200px] flex-[2]")} value={link} onChange={(e) => setLink(e.target.value)} placeholder="link de Google Maps o 8.98, -79.5" />
+        <input type="number" min={20} className={cn(inputCls, "w-20")} value={radius} onChange={(e) => setRadius(Number(e.target.value))} title="Radio (m)" />
+        <button type="button" onClick={agregar} disabled={adding} className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
+          <Plus className="size-3.5" /> {adding ? "…" : "Agregar"}
+        </button>
+      </div>
+      {err ? <p className="mb-2 text-[11px] text-red-600">{err}</p> : null}
+
+      {sites.length === 0 ? (
+        <p className="py-4 text-center text-sm text-slate-400">Aún no hay sitios. Agrega el primero arriba.</p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {sites.map((s) => <SitioPropioRow key={s.id} site={s} />)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SitioPropioRow({ site }: { site: AttSite }) {
+  const router = useRouter();
+  const [name, setName] = useState(site.name);
+  const [link, setLink] = useState(site.lat != null ? `${site.lat}, ${site.lng}` : "");
+  const [radius, setRadius] = useState(site.radius);
+  const [busy, startBusy] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const puesto = site.lat != null && site.lng != null;
+
+  function guardar() {
+    setErr(null);
+    if (!name.trim()) { setErr("El nombre no puede quedar vacío."); return; }
+    const parsed = link.trim() ? parseLatLng(link) : null;
+    if (link.trim() && !parsed) { setErr("No reconocí las coordenadas."); return; }
+    startBusy(async () => {
+      const r = await updateAttendanceSite(site.id, { name: name.trim(), lat: parsed?.lat ?? null, lng: parsed?.lng ?? null, radius });
+      if ("error" in r) setErr(r.error);
+      else router.refresh();
+    });
+  }
+  function eliminar() {
+    if (!confirm(`¿Eliminar el sitio "${site.name}"?`)) return;
+    setErr(null);
+    startBusy(async () => {
+      const r = await deleteAttendanceSite(site.id);
+      if ("error" in r) setErr(r.error);
+      else router.refresh();
+    });
+  }
+
+  return (
+    <li className="py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <input className={cn(inputCls, "min-w-[140px] flex-1")} value={name} onChange={(e) => setName(e.target.value)} />
+        <input className={cn(inputCls, "min-w-[200px] flex-[2]")} value={link} onChange={(e) => setLink(e.target.value)} placeholder="link de Google Maps o 8.98, -79.5" />
+        <input type="number" min={20} className={cn(inputCls, "w-20")} value={radius} onChange={(e) => setRadius(Number(e.target.value))} title="Radio (m)" />
+        <button type="button" onClick={guardar} disabled={busy} className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50">{busy ? "…" : "Guardar"}</button>
+        {puesto ? (
+          <a href={`https://maps.google.com/?q=${site.lat},${site.lng}`} target="_blank" rel="noreferrer" className="inline-flex items-center text-xs font-semibold text-blue-600 hover:underline" title="Ver en el mapa"><MapPin className="size-3.5" /></a>
+        ) : <span className="inline-flex items-center gap-1 text-[11px] text-slate-400"><AlertTriangle className="size-3" /> sin coords</span>}
+        <button type="button" onClick={eliminar} disabled={busy} className="inline-flex items-center rounded-lg px-2 py-2 text-red-500 hover:bg-red-50" title="Eliminar"><Trash2 className="size-3.5" /></button>
+      </div>
+      {err ? <p className="mt-1 text-[11px] text-red-600">{err}</p> : null}
+    </li>
+  );
+}
+
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -513,7 +614,7 @@ function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: 
   for (const e of events) {
     const d = new Date(e.occurred_at);
     const fecha = new Intl.DateTimeFormat("es-PA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "America/Panama" }).format(d);
-    const sitio = e.matched_hq ? "Sede" : e.matched_location_id ? locName.get(e.matched_location_id) ?? "" : "";
+    const sitio = e.matched_name ?? (e.matched_hq ? "Sede" : e.matched_location_id ? locName.get(e.matched_location_id) ?? "" : "");
     rows.push([
       esc(fecha), esc(fmtHora(d)), esc(nombre.get(e.technician_id) ?? ""), e.direction === "in" ? "Entrada" : "Salida",
       esc(sitio), e.distance_m ?? "", esc(e.status),

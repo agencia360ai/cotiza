@@ -219,18 +219,23 @@ export function buildConfirmation(input: {
   const hora = fmtHora(input.when);
   const verbo = input.direction === "in" ? "Entrada" : "Salida";
   const emoji = input.direction === "in" ? "✅" : "🕔";
+  // Guía del PRÓXIMO paso — que el empleado siempre sepa qué sigue (chatbot).
+  const guia =
+    input.direction === "in"
+      ? "\n\n📍 Cuando te vayas, manda tu ubicación de nuevo para marcar tu *salida*."
+      : input.shiftMs != null
+        ? `\n\n🕒 Turno de hoy: ${fmtDuracion(input.shiftMs)}. ¡Gracias!`
+        : "\n\n¡Gracias!";
+
   if (input.status === "pin_sospechoso") {
-    return `⚠️ Registrado, pero enviaste un lugar buscado, no tu ubicación actual. Usa 📎 → Ubicación → *Enviar tu ubicación actual*.`;
-  }
-  if (input.status === "fuera_de_sitio" && input.siteName) {
-    return `⚠️ ${verbo} registrada ${hora} — estás a ${input.distanceM} m de ${input.siteName}. Tu supervisor lo verá marcado.`;
-  }
-  if (input.status === "sin_sitio") {
-    return `${emoji} ${verbo} registrada ${hora}. (Sitio sin coordenadas — avísale a tu supervisor.)`;
+    return "⚠️ Recibí un *lugar buscado*, no tu ubicación real. Para marcar, usa 📎 → *Ubicación* → *Enviar tu ubicación actual* (esa, no la de 'tiempo real').";
   }
   const sitio = input.siteName ? ` — ${input.siteName}${input.distanceM != null ? ` (a ${input.distanceM} m)` : ""}` : "";
-  if (input.direction === "out" && input.shiftMs != null) {
-    return `${emoji} ${verbo} registrada ${hora}${sitio}. Turno: ${fmtDuracion(input.shiftMs)}`;
+  if (input.status === "fuera_de_sitio" && input.siteName) {
+    return `⚠️ ${verbo} registrada ${hora} — estás a ${input.distanceM} m de ${input.siteName}. Tu supervisor lo verá marcado.${guia}`;
   }
-  return `${emoji} ${verbo} registrada ${hora}${sitio}`;
+  if (input.status === "sin_sitio") {
+    return `${emoji} ${verbo} registrada ${hora}. (No hay un sitio con coordenadas cerca — tu supervisor lo revisará.)${guia}`;
+  }
+  return `${emoji} ${verbo} registrada ${hora}${sitio}.${guia}`;
 }
