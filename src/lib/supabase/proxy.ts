@@ -33,9 +33,13 @@ export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/auth");
   const isPublicShareRoute = pathname.startsWith("/p/") || pathname.startsWith("/t/") || pathname.startsWith("/q/");
-  const isPublicRoute = isAuthRoute || isPublicShareRoute || pathname === "/";
+  // Webhook de WhatsApp: público sí o sí — Meta no trae sesión. Tiene su propia
+  // seguridad (verify token en GET, firma HMAC del body en POST). Sin esto, el
+  // middleware lo redirige a /login y el handshake de Meta falla.
+  const isWebhook = pathname.startsWith("/api/whatsapp/");
+  const isPublicRoute = isAuthRoute || isPublicShareRoute || isWebhook || pathname === "/";
 
-  if (!user && process.env.DEMO_MODE !== "false" && !isPublicShareRoute) {
+  if (!user && process.env.DEMO_MODE !== "false" && !isPublicShareRoute && !isWebhook) {
     const { error } = await supabase.auth.signInWithPassword({
       email: "demo@cotiza.local",
       password: "demo-cotiza-public-2025",
