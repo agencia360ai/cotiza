@@ -26,10 +26,6 @@ const DEBOUNCE_MS = 5 * 60_000;
 
 type Settings = {
   org_id: string;
-  hq_name: string | null;
-  hq_lat: number | null;
-  hq_lng: number | null;
-  hq_radius_m: number;
   require_geofence: boolean;
 };
 type Tech = { id: string; name: string };
@@ -44,7 +40,7 @@ function panamaDayStart(now: Date): Date {
 async function resolverOrg(admin: Admin, phoneNumberId: string): Promise<Settings | null> {
   const { data } = (await admin
     .from("attendance_settings")
-    .select("org_id, hq_name, hq_lat, hq_lng, hq_radius_m, require_geofence")
+    .select("org_id, require_geofence")
     .eq("wa_phone_number_id", phoneNumberId)
     .maybeSingle()) as { data: Settings | null };
   return data;
@@ -72,8 +68,9 @@ async function eventosDeHoy(admin: Admin, orgId: string, techId: string, now: Da
   return data ?? [];
 }
 
-// Sitios candidatos para la geocerca: los del cliente asignados al técnico +
-// todos los de la org (fallback) + la sede propia (settings).
+// Sitios candidatos para la geocerca: los sitios propios (incluida la sede, que
+// ahora es un sitio más) + los del cliente asignados al técnico + todos los de
+// la org (fallback).
 async function reunirSitios(admin: Admin, s: Settings, techId: string): Promise<GeoSite[]> {
   const sites: GeoSite[] = [];
 
@@ -112,9 +109,6 @@ async function reunirSitios(admin: Admin, s: Settings, techId: string): Promise<
       const assigned = asignaciones.some((a) => a.location_id === l.id || (a.location_id === null && a.client_id === l.client_id));
       sites.push({ locationId: l.id, name: l.name ?? "Sitio", lat: l.lat, lng: l.lng, radiusM: l.geofence_radius_m ?? 150, isHq: false, assigned });
     }
-  }
-  if (s.hq_lat != null && s.hq_lng != null) {
-    sites.push({ locationId: null, name: s.hq_name ?? "Oficina", lat: s.hq_lat, lng: s.hq_lng, radiusM: s.hq_radius_m ?? 150, isHq: true, assigned: true });
   }
   return sites;
 }
