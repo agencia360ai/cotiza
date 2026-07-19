@@ -156,6 +156,72 @@ export function panamaDayKey(iso: string): string {
   return new Date(new Date(iso).getTime() - 5 * 3600_000).toISOString().slice(0, 10);
 }
 
+// ── Períodos del tablero (Hoy / Ayer / 7d / 30d / Personalizado) ──────────────
+export type PeriodId = "hoy" | "ayer" | "7d" | "30d" | "custom";
+
+// Día de hoy en Panamá a partir del reloj.
+export function panamaTodayKey(now: Date): string {
+  return panamaDayKey(now.toISOString());
+}
+// 00:00 Panamá de un día 'YYYY-MM-DD' en UTC = ese día a las 05:00 UTC.
+export function panamaDayStartUtc(dayKey: string): string {
+  return `${dayKey}T05:00:00.000Z`;
+}
+// Día de la semana (0=Dom … 6=Sáb) de una fecha calendario Panamá.
+export function weekdayOf(dayKey: string): number {
+  return new Date(dayKey + "T12:00:00.000Z").getUTCDay();
+}
+// Suma (o resta) días a una fecha calendario 'YYYY-MM-DD'.
+export function addDaysKey(dayKey: string, delta: number): string {
+  const d = new Date(dayKey + "T12:00:00.000Z");
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+// Último día laborable ANTES de `beforeKey`, según los días marcados como
+// laborables (0=Dom … 6=Sáb). Si no hay config, cae en día calendario anterior.
+export function lastWorkday(beforeKey: string, workdays: number[]): string {
+  const dias = workdays.length ? workdays : [1, 2, 3, 4, 5];
+  let k = addDaysKey(beforeKey, -1);
+  for (let i = 0; i < 14; i++) {
+    if (dias.includes(weekdayOf(k))) return k;
+    k = addDaysKey(k, -1);
+  }
+  return addDaysKey(beforeKey, -1);
+}
+
+export type PeriodRange = { period: PeriodId; desdeKey: string; hastaKey: string; desdeIso: string; hastaIso: string; singleDay: boolean };
+
+// Traduce un período a un rango de fechas Panamá + límites UTC para el query
+// (desdeIso ≤ occurred_at < hastaIso). 'ayer' usa los días laborables.
+export function computePeriod(period: PeriodId, now: Date, opts: { workdays: number[]; from?: string; to?: string }): PeriodRange {
+  const today = panamaTodayKey(now);
+  let desdeKey = today;
+  let hastaKey = today;
+  if (period === "ayer") {
+    const y = lastWorkday(today, opts.workdays);
+    desdeKey = y;
+    hastaKey = y;
+  } else if (period === "7d") {
+    desdeKey = addDaysKey(today, -6);
+    hastaKey = today;
+  } else if (period === "30d") {
+    desdeKey = addDaysKey(today, -29);
+    hastaKey = today;
+  } else if (period === "custom") {
+    desdeKey = opts.from || today;
+    hastaKey = opts.to || today;
+    if (desdeKey > hastaKey) [desdeKey, hastaKey] = [hastaKey, desdeKey];
+  }
+  return {
+    period,
+    desdeKey,
+    hastaKey,
+    desdeIso: panamaDayStartUtc(desdeKey),
+    hastaIso: panamaDayStartUtc(addDaysKey(hastaKey, 1)), // fin exclusivo
+    singleDay: desdeKey === hastaKey,
+  };
+}
+
 // Empareja los eventos (cronológicos) de UN técnico en turnos in→out. Un 'in'
 // abre turno; el siguiente 'out' lo cierra. Un 'in' seguido de otro 'in' deja el
 // primero abierto (out=null). Un 'out' sin 'in' previo abierto queda suelto.

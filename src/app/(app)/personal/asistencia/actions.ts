@@ -19,24 +19,29 @@ async function ctx() {
 export type AttendanceSettingsInput = {
   wa_phone_number_id: string | null;
   workday_start: string; // "HH:MM"
+  workday_end: string; // "HH:MM"
+  workday_days: number[]; // 0=Dom … 6=Sáb
   late_after_min: number;
   require_geofence: boolean;
 };
 
-// Config de asistencia por org (1 fila, PK = org_id). Upsert.
+// Config de asistencia por org (1 fila, PK = org_id). Upsert. workday_days y
+// workday_end son de 0034: si la columna falta, se reintenta sin ellas.
 export async function saveAttendanceSettings(input: AttendanceSettingsInput): Promise<Result> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const { error } = await c.supabase.from("attendance_settings").upsert(
-    {
-      org_id: c.orgId,
-      wa_phone_number_id: input.wa_phone_number_id?.trim() || null,
-      workday_start: input.workday_start,
-      late_after_min: input.late_after_min,
-      require_geofence: input.require_geofence,
-    },
-    { onConflict: "org_id" },
-  );
+  const base = {
+    org_id: c.orgId,
+    wa_phone_number_id: input.wa_phone_number_id?.trim() || null,
+    workday_start: input.workday_start,
+    late_after_min: input.late_after_min,
+    require_geofence: input.require_geofence,
+  };
+  const full = { ...base, workday_end: input.workday_end, workday_days: input.workday_days };
+  let { error } = await c.supabase.from("attendance_settings").upsert(full, { onConflict: "org_id" });
+  if (error && (error as { code?: string }).code === "42703") {
+    ({ error } = await c.supabase.from("attendance_settings").upsert(base, { onConflict: "org_id" }));
+  }
   if (error) return { error: /does not exist|schema cache/i.test(error.message) ? "Falta la migración 0031 — corre el SQL y reintenta." : error.message };
   revalidatePath("/personal/asistencia");
   return { ok: true };
