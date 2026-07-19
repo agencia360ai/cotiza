@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { getActiveOrgId } from "@/lib/org-context";
-import { AsistenciaScreen, type AttSettings, type AttTech, type AttLoc, type AttSite, type AttEventRow } from "./screen";
+import { getActiveOrgContext } from "@/lib/org-context";
+import { AsistenciaScreen, type AttSettings, type AttTech, type AttLoc, type AttSite, type AttEventRow, type AttAudit } from "./screen";
 
 export const dynamic = "force-dynamic";
 
@@ -20,17 +20,34 @@ export default async function AsistenciaPage({ searchParams }: { searchParams: P
   const dias = RANGOS[rango];
 
   const supabase = await createClient();
-  const { data: u } = await supabase.auth.getUser();
-  if (!u.user) redirect("/login");
-  const orgId = await getActiveOrgId();
-  if (!orgId) redirect("/onboarding");
+  const auth = await getActiveOrgContext();
+  if (!auth) redirect("/login");
+  const orgId = auth.orgId;
 
-  // Settings (1 fila por org; puede no existir todavía).
-  const { data: settingsData } = (await supabase
-    .from("attendance_settings")
-    .select("wa_phone_number_id, hq_name, hq_lat, hq_lng, hq_radius_m, workday_start, late_after_min, require_geofence")
-    .eq("org_id", orgId)
-    .maybeSingle()) as { data: AttSettings | null };
+  // Settings (1 fila por org; puede no existir todavía). power_user_emails es de
+  // 0033: si aún no existe, se reintenta sin esa columna.
+  const SEL_FULL = "wa_phone_number_id, workday_start, late_after_min, require_geofence, power_user_emails";
+  const SEL_BASE = "wa_phone_number_id, workday_start, late_after_min, require_geofence";
+  let sres = (await supabase.from("attendance_settings").select(SEL_FULL).eq("org_id", orgId).maybeSingle()) as {
+    data: (AttSettings & { power_user_emails?: string[] | null }) | null;
+    error: { message?: string; code?: string } | null;
+  };
+  if (sres.error?.code === "42703") {
+    sres = (await supabase.from("attendance_settings").select(SEL_BASE).eq("org_id", orgId).maybeSingle()) as typeof sres;
+  }
+  const settingsData: AttSettings | null = sres.data
+    ? {
+        wa_phone_number_id: sres.data.wa_phone_number_id,
+        workday_start: sres.data.workday_start,
+        late_after_min: sres.data.late_after_min,
+        require_geofence: sres.data.require_geofence,
+      }
+    : null;
+
+  // Power users: quién puede editar marcas. Sin lista → cae en owner/admin.
+  const email = (auth.user.email ?? "").toLowerCase();
+  const powerEmails = (sres.data?.power_user_emails ?? []).map((e) => e.toLowerCase());
+  const isPowerUser = powerEmails.length > 0 ? powerEmails.includes(email) : auth.role === "owner" || auth.role === "admin";
 
   // Técnicos (con wa_id; fallback si la columna no existe).
   let techs: AttTech[] = [];
@@ -121,13 +138,28 @@ export default async function AsistenciaPage({ searchParams }: { searchParams: P
     }
   }
 
+  // Auditoría (solo power users; tabla 0033, degrada si aún no existe).
+  let audit: AttAudit[] = [];
+  if (isPowerUser) {
+    const res = (await supabase
+      .from("attendance_audit")
+      .select("id, event_id, technician_id, actor_email, action, changes, created_at")
+      .eq("org_id", orgId)
+      .order("created_at", { ascending: false })
+      .limit(200)) as { data: AttAudit[] | null; error: { message?: string; code?: string } | null };
+    if (!missing(res.error)) audit = res.data ?? [];
+  }
+
   return (
     <AsistenciaScreen
-      settings={settingsData ?? null}
+      settings={settingsData}
       techs={techs}
       locs={locs}
       sites={sites}
       events={events}
+      audit={audit}
+      isPowerUser={isPowerUser}
+      powerEmails={powerEmails}
       migracionPendiente={migracionPendiente}
       rango={rango}
       truncado={truncado}

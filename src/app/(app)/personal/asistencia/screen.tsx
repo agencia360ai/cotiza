@@ -4,22 +4,19 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, MapPin, Clock, Users, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2,
+  ArrowLeft, MapPin, Clock, Users, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2, Pencil, ShieldCheck, ScrollText, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion, type AttEvent } from "@/lib/whatsapp/attendance-core";
 import {
-  saveAttendanceSettings, setLocationGeofence,
+  saveAttendanceSettings, setLocationGeofence, resolveMapsLink,
   createAttendanceSite, updateAttendanceSite, deleteAttendanceSite,
+  savePowerUsers, updateAttendanceEvent, deleteAttendanceEvent, createManualAttendanceEvent,
   type AttendanceSettingsInput,
 } from "./actions";
 
 export type AttSettings = {
   wa_phone_number_id: string | null;
-  hq_name: string | null;
-  hq_lat: number | null;
-  hq_lng: number | null;
-  hq_radius_m: number;
   workday_start: string;
   late_after_min: number;
   require_geofence: boolean;
@@ -39,9 +36,20 @@ export type AttEventRow = {
   matched_name?: string | null;
   wa_location_name: string | null;
 };
+export type AttAudit = {
+  id: string;
+  event_id: string | null;
+  technician_id: string | null;
+  actor_email: string | null;
+  action: "create" | "update" | "delete";
+  changes: Record<string, unknown>;
+  created_at: string;
+};
 
 const fmtFecha = (iso: string) =>
   new Intl.DateTimeFormat("es-PA", { day: "2-digit", month: "short", timeZone: "America/Panama" }).format(new Date(iso));
+const fmtFechaHora = (iso: string) =>
+  new Intl.DateTimeFormat("es-PA", { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Panama" }).format(new Date(iso));
 const fmtMes = (yyyymm: string) =>
   new Intl.DateTimeFormat("es-PA", { month: "long", year: "numeric", timeZone: "America/Panama" }).format(new Date(yyyymm + "-15T12:00:00Z"));
 const panamaMinutes = (iso: string) => {
@@ -49,21 +57,43 @@ const panamaMinutes = (iso: string) => {
   return d.getUTCHours() * 60 + d.getUTCMinutes();
 };
 
+// <input datetime-local> ⇄ instante UTC, interpretando el valor como hora Panamá (UTC-5).
+function isoToPanamaLocal(iso: string): string {
+  return new Date(new Date(iso).getTime() - 5 * 3600_000).toISOString().slice(0, 16);
+}
+function panamaLocalToIso(local: string): string | null {
+  if (!local) return null;
+  const d = new Date(local + ":00-05:00");
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// Resuelve coordenadas de un texto: primero local (parseLatLng), y si falla —el
+// caso de los links cortos maps.app.goo.gl— lo resuelve el servidor siguiendo el
+// redirect. Devuelve las coords o un mensaje de error.
+async function resolveCoords(link: string): Promise<{ lat: number; lng: number } | { error: string }> {
+  const local = parseLatLng(link);
+  if (local) return local;
+  return resolveMapsLink(link);
+}
+
 const RANGO_LABEL: Record<string, string> = { "30d": "30 días", "3m": "3 meses", "6m": "6 meses", "12m": "12 meses" };
 
 export function AsistenciaScreen({
-  settings, techs, locs, sites, events, migracionPendiente, rango, truncado,
+  settings, techs, locs, sites, events, audit, isPowerUser, powerEmails, migracionPendiente, rango, truncado,
 }: {
   settings: AttSettings | null;
   techs: AttTech[];
   locs: AttLoc[];
   sites: AttSite[];
   events: AttEventRow[];
+  audit: AttAudit[];
+  isPowerUser: boolean;
+  powerEmails: string[];
   migracionPendiente: boolean;
   rango: string;
   truncado: boolean;
 }) {
-  const [tab, setTab] = useState<"hoy" | "historial" | "config">("hoy");
+  const [tab, setTab] = useState<"hoy" | "historial" | "config" | "auditoria">("hoy");
   const activos = techs.filter((t) => t.active);
   const nombre = useMemo(() => new Map(techs.map((t) => [t.id, t.name])), [techs]);
   const locName = useMemo(() => new Map(locs.map((l) => [l.id, l.name])), [locs]);
@@ -91,6 +121,13 @@ export function AsistenciaScreen({
     const site = e.matched_name ?? (e.matched_hq ? "Sede" : e.matched_location_id ? locName.get(e.matched_location_id) ?? "Sitio" : null);
     return { site, dist: e.distance_m, status: e.status };
   };
+
+  const tabs: [string, string, React.ComponentType<{ className?: string }>][] = [
+    ["hoy", "Hoy", Clock],
+    ["historial", "Historial", Users],
+    ["config", "Configuración", Settings2],
+  ];
+  if (isPowerUser) tabs.push(["auditoria", "Auditoría", ScrollText]);
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
@@ -150,11 +187,11 @@ export function AsistenciaScreen({
       ) : null}
 
       <div className="mb-4 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1 text-sm font-semibold shadow-sm">
-        {([["hoy", "Hoy", Clock], ["historial", "Historial", Users], ["config", "Configuración", Settings2]] as const).map(([k, label, Icon]) => (
+        {tabs.map(([k, label, Icon]) => (
           <button
             key={k}
             type="button"
-            onClick={() => setTab(k)}
+            onClick={() => setTab(k as typeof tab)}
             className={cn("inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition-colors", tab === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100")}
           >
             <Icon className="size-4" /> {label}
@@ -165,9 +202,11 @@ export function AsistenciaScreen({
       {tab === "hoy" ? (
         <TableroHoy activos={activos} porTech={porTech} hoyKey={hoyKey} filaSitio={filaSitio} lateThreshold={lateThreshold} />
       ) : tab === "historial" ? (
-        <Historial activos={activos} porTech={porTech} filaSitio={filaSitio} />
+        <Historial activos={activos} porTech={porTech} filaSitio={filaSitio} isPowerUser={isPowerUser} />
+      ) : tab === "config" ? (
+        <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} />
       ) : (
-        <Config settings={settings} locs={locs} sites={sites} />
+        <Auditoria audit={audit} nombre={nombre} />
       )}
     </div>
   );
@@ -281,15 +320,19 @@ function EstadoChip({ estado }: { estado: string }) {
   if (estado === "salio") return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"><LogOut className="size-3" /> Salió</span>;
   return <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-400"><CircleDashed className="size-3" /> Sin marcar</span>;
 }
-function Chip({ tone, children }: { tone: "amber" | "rose" | "slate"; children: React.ReactNode }) {
-  const c = tone === "amber" ? "bg-amber-100 text-amber-700" : tone === "rose" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-500";
+function Chip({ tone, children }: { tone: "amber" | "rose" | "slate" | "emerald"; children: React.ReactNode }) {
+  const c = tone === "amber" ? "bg-amber-100 text-amber-700" : tone === "rose" ? "bg-rose-100 text-rose-700" : tone === "emerald" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500";
   return <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", c)}>{children}</span>;
 }
 
 // ── Historial ─────────────────────────────────────────────────────────────────
-function Historial({ activos, porTech, filaSitio }: { activos: AttTech[]; porTech: Map<string, AttEvent[]>; filaSitio: FilaSitio }) {
+function Historial({ activos, porTech, filaSitio, isPowerUser }: { activos: AttTech[]; porTech: Map<string, AttEvent[]>; filaSitio: FilaSitio; isPowerUser: boolean }) {
+  const router = useRouter();
   const [techId, setTechId] = useState(activos[0]?.id ?? "");
+  const [modoEdicion, setModoEdicion] = useState(false);
   const eventos = porTech.get(techId) ?? [];
+  const refrescar = () => router.refresh();
+
   // Agrupar por día Panamá (desc).
   const dias = useMemo(() => {
     const m = new Map<string, AttEvent[]>();
@@ -315,9 +358,22 @@ function Historial({ activos, porTech, filaSitio }: { activos: AttTech[]; porTec
 
   return (
     <div className="space-y-3">
-      <select value={techId} onChange={(e) => setTechId(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-        {activos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-      </select>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <select value={techId} onChange={(e) => setTechId(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+          {activos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        {isPowerUser ? (
+          <button
+            type="button"
+            onClick={() => setModoEdicion((v) => !v)}
+            className={cn("inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors", modoEdicion ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}
+          >
+            <Pencil className="size-4" /> {modoEdicion ? "Listo" : "Editar marcas"}
+          </button>
+        ) : null}
+      </div>
+
+      {modoEdicion && techId ? <AgregarMarca techId={techId} onDone={refrescar} /> : null}
 
       {meses.length > 1 ? (
         <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
@@ -347,7 +403,8 @@ function Historial({ activos, porTech, filaSitio }: { activos: AttTech[]; porTec
         <p className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">Sin marcas en este período.</p>
       ) : (
         dias.map(([dia, evs]) => {
-          const shifts = pairShifts([...evs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at)));
+          const ordenados = [...evs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+          const shifts = pairShifts(ordenados);
           const total = sumShiftMs(shifts);
           return (
             <div key={dia} className="rounded-xl border border-slate-100 bg-white p-3.5">
@@ -355,20 +412,26 @@ function Historial({ activos, porTech, filaSitio }: { activos: AttTech[]; porTec
                 <p className="text-sm font-semibold text-slate-800">{fmtFecha(dia + "T12:00:00Z")}</p>
                 <p className="text-xs font-semibold tabular-nums text-slate-500">{total > 0 ? fmtDuracion(total) : "—"}</p>
               </div>
-              <div className="space-y-1">
-                {shifts.map((s, i) => {
-                  const inS = filaSitio(s.in?.id);
-                  return (
-                    <div key={i} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
-                      <span className="inline-flex items-center gap-1"><LogIn className="size-3 text-emerald-600" />{s.in ? fmtHora(new Date(s.in.occurred_at)) : "—"}</span>
-                      <span className="text-slate-300">→</span>
-                      <span className="inline-flex items-center gap-1"><LogOut className="size-3 text-slate-500" />{s.out ? fmtHora(new Date(s.out.occurred_at)) : <span className="text-amber-600">sin salida</span>}</span>
-                      {s.ms != null ? <span className="tabular-nums text-slate-400">({fmtDuracion(s.ms)})</span> : null}
-                      {inS?.site ? <span className="text-slate-400">· {inS.site}{inS.dist != null ? ` (${inS.dist} m)` : ""}</span> : null}
-                    </div>
-                  );
-                })}
-              </div>
+              {modoEdicion ? (
+                <div className="space-y-1.5">
+                  {ordenados.map((ev) => <MarcaRow key={ev.id} ev={ev} onDone={refrescar} />)}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {shifts.map((s, i) => {
+                    const inS = filaSitio(s.in?.id);
+                    return (
+                      <div key={i} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+                        <span className="inline-flex items-center gap-1"><LogIn className="size-3 text-emerald-600" />{s.in ? fmtHora(new Date(s.in.occurred_at)) : "—"}</span>
+                        <span className="text-slate-300">→</span>
+                        <span className="inline-flex items-center gap-1"><LogOut className="size-3 text-slate-500" />{s.out ? fmtHora(new Date(s.out.occurred_at)) : <span className="text-amber-600">sin salida</span>}</span>
+                        {s.ms != null ? <span className="tabular-nums text-slate-400">({fmtDuracion(s.ms)})</span> : null}
+                        {inS?.site ? <span className="text-slate-400">· {inS.site}{inS.dist != null ? ` (${inS.dist} m)` : ""}</span> : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })
@@ -377,32 +440,175 @@ function Historial({ activos, porTech, filaSitio }: { activos: AttTech[]; porTec
   );
 }
 
+// Fila editable de una marca (power users): cambiar tipo/hora o eliminar.
+function MarcaRow({ ev, onDone }: { ev: AttEvent; onDone: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [dir, setDir] = useState<"in" | "out">(ev.direction);
+  const [when, setWhen] = useState(isoToPanamaLocal(ev.occurred_at));
+  const [busy, startBusy] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+
+  function guardar() {
+    setErr(null);
+    const iso = panamaLocalToIso(when);
+    if (!iso) { setErr("Fecha y hora inválidas."); return; }
+    startBusy(async () => {
+      const r = await updateAttendanceEvent(ev.id, { direction: dir, occurred_at: iso });
+      if ("error" in r) setErr(r.error);
+      else { setEditing(false); onDone(); }
+    });
+  }
+  function borrar() {
+    if (!confirm("¿Eliminar esta marca?")) return;
+    setErr(null);
+    startBusy(async () => {
+      const r = await deleteAttendanceEvent(ev.id);
+      if ("error" in r) setErr(r.error);
+      else onDone();
+    });
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs">
+        <select value={dir} onChange={(e) => setDir(e.target.value as "in" | "out")} className="rounded border border-slate-200 bg-white px-2 py-1">
+          <option value="in">Entrada</option>
+          <option value="out">Salida</option>
+        </select>
+        <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="rounded border border-slate-200 bg-white px-2 py-1" />
+        <button type="button" onClick={guardar} disabled={busy} className="rounded bg-slate-900 px-2.5 py-1 font-semibold text-white disabled:opacity-50">{busy ? "…" : "Guardar"}</button>
+        <button type="button" onClick={() => { setEditing(false); setErr(null); }} className="rounded px-2 py-1 text-slate-500 hover:bg-slate-100">Cancelar</button>
+        {err ? <span className="text-red-600">{err}</span> : null}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className={cn("inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold", ev.direction === "in" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600")}>
+        {ev.direction === "in" ? <LogIn className="size-3" /> : <LogOut className="size-3" />}
+        {ev.direction === "in" ? "Entrada" : "Salida"}
+      </span>
+      <span className="tabular-nums text-slate-700">{fmtHora(new Date(ev.occurred_at))}</span>
+      {ev.status && ev.status !== "ok" ? <span className="text-[10px] text-slate-400">{ALERTA_LABEL[ev.status] ?? ev.status}</span> : null}
+      <button type="button" onClick={() => setEditing(true)} className="ml-auto inline-flex items-center rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Editar"><Pencil className="size-3.5" /></button>
+      <button type="button" onClick={borrar} disabled={busy} className="inline-flex items-center rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600" title="Eliminar"><Trash2 className="size-3.5" /></button>
+      {err ? <span className="text-red-600">{err}</span> : null}
+    </div>
+  );
+}
+
+// Agregar una marca a mano (power users) para el técnico seleccionado.
+function AgregarMarca({ techId, onDone }: { techId: string; onDone: () => void }) {
+  const [dir, setDir] = useState<"in" | "out">("in");
+  const [when, setWhen] = useState(isoToPanamaLocal(new Date().toISOString()));
+  const [busy, startBusy] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+
+  function agregar() {
+    setErr(null);
+    const iso = panamaLocalToIso(when);
+    if (!iso) { setErr("Fecha y hora inválidas."); return; }
+    startBusy(async () => {
+      const r = await createManualAttendanceEvent({ technician_id: techId, direction: dir, occurred_at: iso });
+      if ("error" in r) setErr(r.error);
+      else onDone();
+    });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-2.5 text-xs">
+      <span className="font-semibold text-slate-500">Agregar marca a mano:</span>
+      <select value={dir} onChange={(e) => setDir(e.target.value as "in" | "out")} className="rounded border border-slate-200 bg-white px-2 py-1">
+        <option value="in">Entrada</option>
+        <option value="out">Salida</option>
+      </select>
+      <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="rounded border border-slate-200 bg-white px-2 py-1" />
+      <button type="button" onClick={agregar} disabled={busy} className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
+        <Plus className="size-3.5" /> {busy ? "…" : "Agregar"}
+      </button>
+      {err ? <span className="text-red-600">{err}</span> : null}
+    </div>
+  );
+}
+
+// ── Auditoría ─────────────────────────────────────────────────────────────────
+function Auditoria({ audit, nombre }: { audit: AttAudit[]; nombre: Map<string, string> }) {
+  if (audit.length === 0) {
+    return (
+      <div className="rounded-2xl border border-slate-100 bg-white p-8 text-center text-sm text-slate-400 shadow-sm">
+        Aún no hay cambios manuales registrados. Cada edición, alta o borrado de una marca queda aquí: quién, qué y cuándo.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+      <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-800">Cambios manuales a marcas</div>
+      <ul className="divide-y divide-slate-50">
+        {audit.map((a) => {
+          const d = describeAudit(a);
+          return (
+            <li key={a.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3 text-sm">
+              <div className="min-w-[120px] text-xs text-slate-400">{fmtFechaHora(a.created_at)}</div>
+              <div className="flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip tone={d.tono}>{d.verbo}</Chip>
+                  <span className="font-medium text-slate-800">{a.technician_id ? nombre.get(a.technician_id) ?? "Técnico" : "Técnico"}</span>
+                  <span className="text-xs text-slate-400">por {a.actor_email ?? "—"}</span>
+                </div>
+                <div className="mt-0.5 space-y-0.5 text-xs text-slate-500">
+                  {d.lineas.map((l, i) => <div key={i}>{l}</div>)}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function describeAudit(a: AttAudit): { verbo: string; tono: "emerald" | "amber" | "rose"; lineas: string[] } {
+  const ch = (a.changes ?? {}) as Record<string, unknown>;
+  const dir = (d: unknown) => (d === "in" ? "Entrada" : d === "out" ? "Salida" : String(d ?? "—"));
+  const when = (v: unknown) => (typeof v === "string" ? fmtFechaHora(v) : "—");
+  const pair = (k: string) => ch[k] as { from?: unknown; to?: unknown } | undefined;
+  if (a.action === "create") {
+    return { verbo: "Creó marca", tono: "emerald", lineas: [`${dir(ch.direction)} · ${when(ch.occurred_at)}`] };
+  }
+  if (a.action === "delete") {
+    return { verbo: "Eliminó marca", tono: "rose", lineas: [`${dir(ch.direction)} · ${when(ch.occurred_at)}`] };
+  }
+  const lineas: string[] = [];
+  const d = pair("direction");
+  if (d) lineas.push(`Tipo: ${dir(d.from)} → ${dir(d.to)}`);
+  const o = pair("occurred_at");
+  if (o) lineas.push(`Hora: ${when(o.from)} → ${when(o.to)}`);
+  const n = pair("note");
+  if (n) lineas.push(`Nota: “${String(n.from ?? "")}” → “${String(n.to ?? "")}”`);
+  return { verbo: "Editó marca", tono: "amber", lineas: lineas.length ? lineas : ["(sin cambios)"] };
+}
+
 // ── Configuración ─────────────────────────────────────────────────────────────
 const inputCls = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none";
 
-function Config({ settings, locs, sites }: { settings: AttSettings | null; locs: AttLoc[]; sites: AttSite[] }) {
+function Config({ settings, locs, sites, isPowerUser, powerEmails }: { settings: AttSettings | null; locs: AttLoc[]; sites: AttSite[]; isPowerUser: boolean; powerEmails: string[] }) {
   const router = useRouter();
   const [f, setF] = useState<AttendanceSettingsInput>({
     wa_phone_number_id: settings?.wa_phone_number_id ?? null,
-    hq_name: settings?.hq_name ?? null,
-    hq_lat: settings?.hq_lat ?? null,
-    hq_lng: settings?.hq_lng ?? null,
-    hq_radius_m: settings?.hq_radius_m ?? 150,
     workday_start: settings?.workday_start?.slice(0, 5) ?? "08:00",
     late_after_min: settings?.late_after_min ?? 15,
     require_geofence: settings?.require_geofence ?? false,
   });
-  const [hqLink, setHqLink] = useState(settings?.hq_lat != null ? `${settings.hq_lat}, ${settings.hq_lng}` : "");
+  const [editingPhone, setEditingPhone] = useState(!settings?.wa_phone_number_id);
   const [saving, startSave] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
 
   function saveConfig() {
     setMsg(null);
-    const parsed = hqLink.trim() ? parseLatLng(hqLink) : null;
     startSave(async () => {
-      const r = await saveAttendanceSettings({ ...f, hq_lat: parsed?.lat ?? (hqLink.trim() ? f.hq_lat : null), hq_lng: parsed?.lng ?? (hqLink.trim() ? f.hq_lng : null) });
+      const r = await saveAttendanceSettings(f);
       if ("error" in r) setMsg(r.error);
-      else { setMsg("Guardado ✓"); router.refresh(); }
+      else { setMsg("Guardado ✓"); setEditingPhone(false); router.refresh(); }
     });
   }
 
@@ -412,7 +618,16 @@ function Config({ settings, locs, sites }: { settings: AttSettings | null; locs:
         <p className="mb-3 text-sm font-semibold text-slate-800">Conexión y horario</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Phone Number ID de WhatsApp" hint="El ID (no el número) que da Meta al conectar. Resuelve la empresa desde el webhook.">
-            <input className={inputCls} value={f.wa_phone_number_id ?? ""} onChange={(e) => setF({ ...f, wa_phone_number_id: e.target.value || null })} placeholder="106540352242922" />
+            {editingPhone ? (
+              <input className={inputCls} value={f.wa_phone_number_id ?? ""} onChange={(e) => setF({ ...f, wa_phone_number_id: e.target.value || null })} placeholder="106540352242922" autoFocus />
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="flex-1 truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-700">{f.wa_phone_number_id || "— sin configurar —"}</span>
+                <button type="button" onClick={() => setEditingPhone(true)} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                  <Pencil className="size-3.5" /> Editar
+                </button>
+              </div>
+            )}
           </Field>
           <Field label="Hora de entrada esperada" hint="Para el chip de tardanza.">
             <div className="flex items-center gap-2">
@@ -420,17 +635,6 @@ function Config({ settings, locs, sites }: { settings: AttSettings | null; locs:
               <span className="whitespace-nowrap text-xs text-slate-500">+ tolerancia</span>
               <input type="number" min={0} className={cn(inputCls, "w-20")} value={f.late_after_min} onChange={(e) => setF({ ...f, late_after_min: Number(e.target.value) })} />
               <span className="text-xs text-slate-500">min</span>
-            </div>
-          </Field>
-        </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <Field label="Sede propia (oficina/taller)" hint="Nombre para marcar en la sede, si aplica.">
-            <input className={inputCls} value={f.hq_name ?? ""} onChange={(e) => setF({ ...f, hq_name: e.target.value || null })} placeholder="Taller DICEC" />
-          </Field>
-          <Field label="Ubicación de la sede" hint="Pega el link de Google Maps o 'lat, lng'.">
-            <div className="flex items-center gap-2">
-              <input className={inputCls} value={hqLink} onChange={(e) => setHqLink(e.target.value)} placeholder="https://maps.google… o 8.98, -79.5" />
-              <input type="number" min={20} className={cn(inputCls, "w-24")} value={f.hq_radius_m} onChange={(e) => setF({ ...f, hq_radius_m: Number(e.target.value) })} title="Radio (m)" />
             </div>
           </Field>
         </div>
@@ -457,6 +661,65 @@ function Config({ settings, locs, sites }: { settings: AttSettings | null; locs:
           </ul>
         </div>
       ) : null}
+
+      {isPowerUser ? <PowerUsersCard emails={powerEmails} /> : null}
+    </div>
+  );
+}
+
+// Power users: emails que pueden editar/borrar/crear marcas a mano.
+function PowerUsersCard({ emails }: { emails: string[] }) {
+  const router = useRouter();
+  const [list, setList] = useState<string[]>(emails);
+  const [nuevo, setNuevo] = useState("");
+  const [busy, startBusy] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  function persist(next: string[]) {
+    setMsg(null);
+    startBusy(async () => {
+      const r = await savePowerUsers(next);
+      if ("error" in r) setMsg(r.error);
+      else { setList(next); setMsg("Guardado ✓"); router.refresh(); }
+    });
+  }
+  function add() {
+    const e = nuevo.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) { setMsg("Email inválido."); return; }
+    if (list.includes(e)) { setNuevo(""); return; }
+    persist([...list, e]);
+    setNuevo("");
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+      <p className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-800"><ShieldCheck className="size-4 text-slate-500" /> Power users</p>
+      <p className="mb-3 text-xs text-slate-500">Estos correos pueden editar, borrar y agregar marcas a mano desde el Historial. Todo cambio queda en Auditoría.</p>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          className={cn(inputCls, "min-w-[220px] flex-1")}
+          value={nuevo}
+          onChange={(e) => setNuevo(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="correo@dicecpanama.com"
+        />
+        <button type="button" onClick={add} disabled={busy} className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
+          <Plus className="size-3.5" /> {busy ? "…" : "Agregar"}
+        </button>
+        {msg ? <span className={cn("text-xs", msg.startsWith("Guardado") ? "text-emerald-600" : "text-red-600")}>{msg}</span> : null}
+      </div>
+      {list.length === 0 ? (
+        <p className="py-2 text-xs text-slate-400">Sin power users configurados — por ahora solo el dueño/admin puede editar marcas.</p>
+      ) : (
+        <ul className="flex flex-wrap gap-2">
+          {list.map((e) => (
+            <li key={e} className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+              {e}
+              <button type="button" onClick={() => persist(list.filter((x) => x !== e))} disabled={busy} className="text-slate-400 hover:text-red-600" title="Quitar"><X className="size-3.5" /></button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -471,11 +734,15 @@ function GeocercaRow({ loc }: { loc: AttLoc }) {
 
   function save() {
     setErr(null);
-    const parsed = link.trim() ? parseLatLng(link) : null;
-    if (link.trim() && !parsed) { setErr("No reconocí las coordenadas. Pega un link de Google Maps o 'lat, lng'."); return; }
     startSave(async () => {
-      const r = await setLocationGeofence(loc.id, { lat: parsed?.lat ?? null, lng: parsed?.lng ?? null, radius });
-      if ("error" in r) setErr(r.error);
+      let coords: { lat: number; lng: number } | null = null;
+      if (link.trim()) {
+        const r = await resolveCoords(link);
+        if ("error" in r) { setErr(r.error); return; }
+        coords = r;
+      }
+      const res = await setLocationGeofence(loc.id, { lat: coords?.lat ?? null, lng: coords?.lng ?? null, radius });
+      if ("error" in res) setErr(res.error);
       else router.refresh();
     });
   }
@@ -515,11 +782,15 @@ function SitiosPropios({ sites }: { sites: AttSite[] }) {
   function agregar() {
     setErr(null);
     if (!name.trim()) { setErr("Ponle un nombre al sitio."); return; }
-    const parsed = link.trim() ? parseLatLng(link) : null;
-    if (link.trim() && !parsed) { setErr("No reconocí las coordenadas. Pega un link de Google Maps o 'lat, lng'."); return; }
     startAdd(async () => {
-      const r = await createAttendanceSite({ name: name.trim(), lat: parsed?.lat ?? null, lng: parsed?.lng ?? null, radius });
-      if ("error" in r) setErr(r.error);
+      let coords: { lat: number; lng: number } | null = null;
+      if (link.trim()) {
+        const r = await resolveCoords(link);
+        if ("error" in r) { setErr(r.error); return; }
+        coords = r;
+      }
+      const res = await createAttendanceSite({ name: name.trim(), lat: coords?.lat ?? null, lng: coords?.lng ?? null, radius });
+      if ("error" in res) setErr(res.error);
       else { setName(""); setLink(""); setRadius(150); router.refresh(); }
     });
   }
@@ -527,7 +798,7 @@ function SitiosPropios({ sites }: { sites: AttSite[] }) {
   return (
     <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
       <p className="mb-1 text-sm font-semibold text-slate-800">Sitios de asistencia</p>
-      <p className="mb-3 text-xs text-slate-500">Agrega los lugares donde marca el personal. Pega el link de Google Maps (o &ldquo;lat, lng&rdquo;) y el radio en metros.</p>
+      <p className="mb-3 text-xs text-slate-500">Agrega los lugares donde marca el personal (incluida tu sede). Pega el link de Google Maps —también el corto de compartir— o &ldquo;lat, lng&rdquo; y el radio en metros.</p>
 
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-2.5">
         <input className={cn(inputCls, "min-w-[140px] flex-1")} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre (ej. Hospital Nacional)" />
@@ -562,11 +833,15 @@ function SitioPropioRow({ site }: { site: AttSite }) {
   function guardar() {
     setErr(null);
     if (!name.trim()) { setErr("El nombre no puede quedar vacío."); return; }
-    const parsed = link.trim() ? parseLatLng(link) : null;
-    if (link.trim() && !parsed) { setErr("No reconocí las coordenadas."); return; }
     startBusy(async () => {
-      const r = await updateAttendanceSite(site.id, { name: name.trim(), lat: parsed?.lat ?? null, lng: parsed?.lng ?? null, radius });
-      if ("error" in r) setErr(r.error);
+      let coords: { lat: number; lng: number } | null = null;
+      if (link.trim()) {
+        const r = await resolveCoords(link);
+        if ("error" in r) { setErr(r.error); return; }
+        coords = r;
+      }
+      const res = await updateAttendanceSite(site.id, { name: name.trim(), lat: coords?.lat ?? null, lng: coords?.lng ?? null, radius });
+      if ("error" in res) setErr(res.error);
       else router.refresh();
     });
   }
