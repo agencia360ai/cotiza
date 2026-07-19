@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, MapPin, Clock, Users, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2, Pencil, ShieldCheck, ScrollText, X,
+  ArrowLeft, MapPin, Clock, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2, Pencil, ShieldCheck, ScrollText, X, ChevronDown, ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion, type AttEvent } from "@/lib/whatsapp/attendance-core";
+import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion, type AttEvent, type PeriodId } from "@/lib/whatsapp/attendance-core";
 import {
   saveAttendanceSettings, setLocationGeofence, resolveMapsLink,
   createAttendanceSite, updateAttendanceSite, deleteAttendanceSite,
@@ -18,6 +18,8 @@ import {
 export type AttSettings = {
   wa_phone_number_id: string | null;
   workday_start: string;
+  workday_end: string;
+  workday_days: number[];
   late_after_min: number;
   require_geofence: boolean;
 };
@@ -48,10 +50,10 @@ export type AttAudit = {
 
 const fmtFecha = (iso: string) =>
   new Intl.DateTimeFormat("es-PA", { day: "2-digit", month: "short", timeZone: "America/Panama" }).format(new Date(iso));
+const fmtFechaLarga = (dayKey: string) =>
+  new Intl.DateTimeFormat("es-PA", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Panama" }).format(new Date(dayKey + "T12:00:00Z"));
 const fmtFechaHora = (iso: string) =>
   new Intl.DateTimeFormat("es-PA", { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Panama" }).format(new Date(iso));
-const fmtMes = (yyyymm: string) =>
-  new Intl.DateTimeFormat("es-PA", { month: "long", year: "numeric", timeZone: "America/Panama" }).format(new Date(yyyymm + "-15T12:00:00Z"));
 const panamaMinutes = (iso: string) => {
   const d = new Date(new Date(iso).getTime() - 5 * 3600_000);
   return d.getUTCHours() * 60 + d.getUTCMinutes();
@@ -76,10 +78,18 @@ async function resolveCoords(link: string): Promise<{ lat: number; lng: number }
   return resolveMapsLink(link);
 }
 
-const RANGO_LABEL: Record<string, string> = { "30d": "30 días", "3m": "3 meses", "6m": "6 meses", "12m": "12 meses" };
+function periodLabel(period: PeriodId, desdeKey: string, hastaKey: string, singleDay: boolean): string {
+  if (period === "hoy") return "Hoy";
+  if (period === "ayer") return `Ayer · ${fmtFecha(desdeKey + "T12:00:00Z")}`;
+  if (period === "7d") return "Últimos 7 días";
+  if (period === "30d") return "Últimos 30 días";
+  return singleDay ? fmtFecha(desdeKey + "T12:00:00Z") : `${fmtFecha(desdeKey + "T12:00:00Z")} – ${fmtFecha(hastaKey + "T12:00:00Z")}`;
+}
+
+const DIAS_SEMANA: [number, string][] = [[1, "Lun"], [2, "Mar"], [3, "Mié"], [4, "Jue"], [5, "Vie"], [6, "Sáb"], [0, "Dom"]];
 
 export function AsistenciaScreen({
-  settings, techs, locs, sites, events, audit, isPowerUser, powerEmails, migracionPendiente, rango, truncado,
+  settings, techs, locs, sites, events, audit, isPowerUser, powerEmails, migracionPendiente, period, desdeKey, hastaKey, singleDay, truncado,
 }: {
   settings: AttSettings | null;
   techs: AttTech[];
@@ -90,14 +100,18 @@ export function AsistenciaScreen({
   isPowerUser: boolean;
   powerEmails: string[];
   migracionPendiente: boolean;
-  rango: string;
+  period: PeriodId;
+  desdeKey: string;
+  hastaKey: string;
+  singleDay: boolean;
   truncado: boolean;
 }) {
-  const [tab, setTab] = useState<"hoy" | "historial" | "config" | "auditoria">("hoy");
+  const [tab, setTab] = useState<"tablero" | "config" | "auditoria">("tablero");
   const activos = techs.filter((t) => t.active);
   const nombre = useMemo(() => new Map(techs.map((t) => [t.id, t.name])), [techs]);
   const locName = useMemo(() => new Map(locs.map((l) => [l.id, l.name])), [locs]);
   const sinWa = activos.filter((t) => !t.wa_id);
+  const label = periodLabel(period, desdeKey, hastaKey, singleDay);
 
   const lateThreshold = (settings?.late_after_min ?? 15) + hhmmToMin(settings?.workday_start ?? "08:00");
 
@@ -112,7 +126,6 @@ export function AsistenciaScreen({
     return m;
   }, [events]);
   const eventoById = useMemo(() => new Map(events.map((e) => [e.id, e])), [events]);
-  const hoyKey = panamaDayKey(new Date().toISOString());
 
   const filaSitio = (evId: string | undefined) => {
     if (!evId) return null;
@@ -123,8 +136,7 @@ export function AsistenciaScreen({
   };
 
   const tabs: [string, string, React.ComponentType<{ className?: string }>][] = [
-    ["hoy", "Hoy", Clock],
-    ["historial", "Historial", Users],
+    ["tablero", "Asistencia", Clock],
     ["config", "Configuración", Settings2],
   ];
   if (isPowerUser) tabs.push(["auditoria", "Auditoría", ScrollText]);
@@ -145,33 +157,17 @@ export function AsistenciaScreen({
         </div>
         <button
           type="button"
-          onClick={() => exportCsv(events, nombre, locName, rango)}
+          onClick={() => exportCsv(events, nombre, locName, period)}
           disabled={events.length === 0}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-          title={`Descargar CSV de los últimos ${RANGO_LABEL[rango]}`}
+          title="Descarga la vista actual en CSV"
         >
-          <Download className="size-4" /> Exportar {RANGO_LABEL[rango]}
+          <Download className="size-4" /> Exportar
         </button>
       </header>
 
-      {/* Período de historial y exportación (el tablero Hoy no cambia). */}
-      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-        <span className="font-semibold uppercase tracking-wider">Período</span>
-        <div className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
-          {Object.keys(RANGO_LABEL).map((k) => (
-            <Link
-              key={k}
-              href={`/personal/asistencia?rango=${k}`}
-              scroll={false}
-              className={cn("rounded-md px-2.5 py-1 font-semibold transition-colors", rango === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100")}
-            >
-              {RANGO_LABEL[k]}
-            </Link>
-          ))}
-        </div>
-        <span className="text-slate-400">· historial y exportación</span>
-        {truncado ? <span className="text-amber-600">· mostrando el máximo (50.000 marcas); acota el período para verlo completo</span> : null}
-      </div>
+      {/* Período: manda sobre el tablero y sobre lo que exportas. */}
+      {tab === "tablero" ? <PeriodControl period={period} desdeKey={desdeKey} hastaKey={hastaKey} truncado={truncado} /> : null}
 
       {migracionPendiente ? (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -187,22 +183,20 @@ export function AsistenciaScreen({
       ) : null}
 
       <div className="mb-4 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1 text-sm font-semibold shadow-sm">
-        {tabs.map(([k, label, Icon]) => (
+        {tabs.map(([k, lbl, Icon]) => (
           <button
             key={k}
             type="button"
             onClick={() => setTab(k as typeof tab)}
             className={cn("inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition-colors", tab === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100")}
           >
-            <Icon className="size-4" /> {label}
+            <Icon className="size-4" /> {lbl}
           </button>
         ))}
       </div>
 
-      {tab === "hoy" ? (
-        <TableroHoy activos={activos} porTech={porTech} hoyKey={hoyKey} filaSitio={filaSitio} lateThreshold={lateThreshold} />
-      ) : tab === "historial" ? (
-        <Historial activos={activos} porTech={porTech} filaSitio={filaSitio} isPowerUser={isPowerUser} />
+      {tab === "tablero" ? (
+        <Tablero activos={activos} porTech={porTech} period={period} desdeKey={desdeKey} hastaKey={hastaKey} singleDay={singleDay} filaSitio={filaSitio} lateThreshold={lateThreshold} isPowerUser={isPowerUser} label={label} />
       ) : tab === "config" ? (
         <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} />
       ) : (
@@ -217,33 +211,117 @@ function hhmmToMin(s: string): number {
   return (h || 0) * 60 + (m || 0);
 }
 
-// ── Tablero HOY ───────────────────────────────────────────────────────────────
+// ── Control de período ────────────────────────────────────────────────────────
+function PeriodControl({ period, desdeKey, hastaKey, truncado }: { period: PeriodId; desdeKey: string; hastaKey: string; truncado: boolean }) {
+  const router = useRouter();
+  const [d, setD] = useState(desdeKey);
+  const [h, setH] = useState(hastaKey);
+  const opciones: [PeriodId, string][] = [["hoy", "Hoy"], ["ayer", "Ayer"], ["7d", "Últimos 7 días"], ["30d", "Últimos 30 días"], ["custom", "Personalizado"]];
+  const ir = (p: PeriodId) => {
+    if (p === "custom") router.push(`/personal/asistencia?period=custom&desde=${d}&hasta=${h}`);
+    else router.push(`/personal/asistencia?period=${p}`);
+  };
+
+  return (
+    <div className="mb-4">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span className="font-semibold uppercase tracking-wider">Período</span>
+        <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
+          {opciones.map(([id, lbl]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => ir(id)}
+              className={cn("rounded-md px-2.5 py-1 font-semibold transition-colors", period === id ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100")}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+        {truncado ? <span className="text-amber-600">· mostrando el máximo (50.000 marcas); acota el rango</span> : null}
+      </div>
+      {period === "custom" ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <span>Desde</span>
+          <input type="date" value={d} max={h} onChange={(e) => setD(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-2 py-1" />
+          <span>hasta</span>
+          <input type="date" value={h} min={d} onChange={(e) => setH(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-2 py-1" />
+          <button type="button" onClick={() => router.push(`/personal/asistencia?period=custom&desde=${d}&hasta=${h}`)} className="rounded-lg bg-slate-900 px-3 py-1 font-semibold text-white hover:bg-slate-800">
+            Aplicar
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Tablero (dispatch: día vivo / día pasado / rango) ─────────────────────────
 type FilaSitio = (evId: string | undefined) => { site: string | null; dist: number | null; status: string } | null;
 
-function TableroHoy({
-  activos, porTech, hoyKey, filaSitio, lateThreshold,
+type ResumenDia = ReturnType<typeof resumenDia>;
+function resumenDia(dia: AttEvent[], live: boolean, lateThreshold: number) {
+  const shifts = pairShifts(dia);
+  const primeraIn = dia.find((e) => e.direction === "in");
+  const ultimaOut = [...dia].reverse().find((e) => e.direction === "out");
+  const abierto = shifts.find((s) => s.in && !s.out);
+  let ms = sumShiftMs(shifts);
+  if (live && abierto?.in) ms += Date.now() - +new Date(abierto.in.occurred_at);
+  const estado = dia.length === 0 ? "sin" : abierto ? "adentro" : "salio";
+  const tarde = primeraIn ? panamaMinutes(primeraIn.occurred_at) > lateThreshold : false;
+  const alertas = new Set(dia.map((e) => e.status).filter((s): s is string => !!s && s !== "ok" && s !== "corregido"));
+  return { shifts, primeraIn, ultimaOut, ms, estado, tarde, alertas, tieneMarca: dia.length > 0 };
+}
+
+function Tablero({
+  activos, porTech, period, desdeKey, hastaKey, singleDay, filaSitio, lateThreshold, isPowerUser, label,
 }: {
   activos: AttTech[];
   porTech: Map<string, AttEvent[]>;
-  hoyKey: string;
+  period: PeriodId;
+  desdeKey: string;
+  hastaKey: string;
+  singleDay: boolean;
   filaSitio: FilaSitio;
   lateThreshold: number;
+  isPowerUser: boolean;
+  label: string;
 }) {
+  const [modoEdicion, setModoEdicion] = useState(false);
+  const live = period === "hoy";
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-semibold capitalize text-slate-700">{singleDay && period === "custom" ? fmtFechaLarga(desdeKey) : label}</p>
+        {isPowerUser ? (
+          <button
+            type="button"
+            onClick={() => setModoEdicion((v) => !v)}
+            className={cn("inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors", modoEdicion ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}
+          >
+            <Pencil className="size-4" /> {modoEdicion ? "Listo" : "Editar marcas"}
+          </button>
+        ) : null}
+      </div>
+
+      {modoEdicion ? (
+        <TableroEdicion activos={activos} porTech={porTech} desdeKey={desdeKey} hastaKey={hastaKey} />
+      ) : singleDay ? (
+        <TableroDia activos={activos} porTech={porTech} dayKey={desdeKey} live={live} filaSitio={filaSitio} lateThreshold={lateThreshold} />
+      ) : (
+        <TableroRango activos={activos} porTech={porTech} filaSitio={filaSitio} lateThreshold={lateThreshold} />
+      )}
+    </div>
+  );
+}
+
+// ── Tablero de UN día (vivo si es hoy) ────────────────────────────────────────
+function TableroDia({ activos, porTech, dayKey, live, filaSitio, lateThreshold }: { activos: AttTech[]; porTech: Map<string, AttEvent[]>; dayKey: string; live: boolean; filaSitio: FilaSitio; lateThreshold: number }) {
   const filas = activos.map((t) => {
-    const hoy = (porTech.get(t.id) ?? []).filter((e) => panamaDayKey(e.occurred_at) === hoyKey);
-    const shifts = pairShifts(hoy);
-    const primeraIn = hoy.find((e) => e.direction === "in");
-    const ultimaOut = [...hoy].reverse().find((e) => e.direction === "out");
-    const abierto = shifts.find((s) => s.in && !s.out);
-    let ms = sumShiftMs(shifts);
-    if (abierto?.in) ms += Date.now() - +new Date(abierto.in.occurred_at);
-    const estado = hoy.length === 0 ? "sin" : abierto ? "adentro" : "salio";
-    const tarde = primeraIn ? panamaMinutes(primeraIn.occurred_at) > lateThreshold : false;
-    const alertas = new Set(hoy.map((e) => e.status).filter((s): s is string => !!s && s !== "ok" && s !== "corregido"));
-    return { t, estado, primeraIn, ultimaOut, ms, tarde, alertas, tieneMarca: hoy.length > 0 };
+    const dia = (porTech.get(t.id) ?? []).filter((e) => panamaDayKey(e.occurred_at) === dayKey);
+    return { t, r: resumenDia(dia, live, lateThreshold) };
   });
-  // Anomalías / adentro primero.
-  filas.sort((a, b) => rank(a) - rank(b) || a.t.name.localeCompare(b.t.name));
+  filas.sort((a, b) => rank(a.r) - rank(b.r) || a.t.name.localeCompare(b.t.name));
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -252,7 +330,7 @@ function TableroHoy({
           <thead>
             <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
               <th className="px-3 py-2.5 font-semibold">Técnico</th>
-              <th className="px-3 py-2.5 font-semibold">Estado</th>
+              {live ? <th className="px-3 py-2.5 font-semibold">Estado</th> : null}
               <th className="px-3 py-2.5 font-semibold">Entrada</th>
               <th className="px-3 py-2.5 font-semibold">Salida</th>
               <th className="px-3 py-2.5 font-semibold">Horas</th>
@@ -261,37 +339,37 @@ function TableroHoy({
           </thead>
           <tbody>
             {filas.length === 0 ? (
-              <tr><td colSpan={6} className="px-3 py-10 text-center text-sm text-slate-400">Sin técnicos activos.</td></tr>
+              <tr><td colSpan={live ? 6 : 5} className="px-3 py-10 text-center text-sm text-slate-400">Sin técnicos activos.</td></tr>
             ) : (
-              filas.map(({ t, estado, primeraIn, ultimaOut, ms, tarde, alertas, tieneMarca }) => {
-                const inSitio = filaSitio(primeraIn?.id);
-                const outSitio = filaSitio(ultimaOut?.id);
+              filas.map(({ t, r }) => {
+                const inSitio = filaSitio(r.primeraIn?.id);
+                const outSitio = filaSitio(r.ultimaOut?.id);
                 return (
                   <tr key={t.id} className="border-b border-slate-50 last:border-0">
                     <td className="px-3 py-2.5 font-medium text-slate-900">{t.name}</td>
-                    <td className="px-3 py-2.5"><EstadoChip estado={estado} /></td>
+                    {live ? <td className="px-3 py-2.5"><EstadoChip estado={r.estado} /></td> : null}
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">
-                      {primeraIn ? (
+                      {r.primeraIn ? (
                         <div>
-                          <span className={cn("tabular-nums", tarde && "font-semibold text-amber-700")}>{fmtHora(new Date(primeraIn.occurred_at))}</span>
+                          <span className={cn("tabular-nums", r.tarde && "font-semibold text-amber-700")}>{fmtHora(new Date(r.primeraIn.occurred_at))}</span>
                           {inSitio?.site ? <span className="block text-[11px] text-slate-400">{inSitio.site}{inSitio.dist != null ? ` · ${inSitio.dist} m` : ""}</span> : null}
                         </div>
                       ) : "—"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">
-                      {ultimaOut ? (
+                      {r.ultimaOut ? (
                         <div>
-                          <span className="tabular-nums">{fmtHora(new Date(ultimaOut.occurred_at))}</span>
+                          <span className="tabular-nums">{fmtHora(new Date(r.ultimaOut.occurred_at))}</span>
                           {outSitio?.site ? <span className="block text-[11px] text-slate-400">{outSitio.site}{outSitio.dist != null ? ` · ${outSitio.dist} m` : ""}</span> : null}
                         </div>
                       ) : "—"}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-slate-700">{tieneMarca && ms > 0 ? fmtDuracion(ms) : "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-slate-700">{r.tieneMarca && r.ms > 0 ? fmtDuracion(r.ms) : "—"}</td>
                     <td className="px-3 py-2.5">
                       <div className="flex flex-wrap gap-1">
-                        {tarde ? <Chip tone="amber">tardanza</Chip> : null}
-                        {[...alertas].map((a) => <Chip key={a} tone={a === "fuera_de_sitio" ? "amber" : "rose"}>{ALERTA_LABEL[a] ?? a}</Chip>)}
-                        {estado === "adentro" ? <Chip tone="slate">sin salida</Chip> : null}
+                        {r.tarde ? <Chip tone="amber">tardanza</Chip> : null}
+                        {[...r.alertas].map((a) => <Chip key={a} tone={a === "fuera_de_sitio" ? "amber" : "rose"}>{ALERTA_LABEL[a] ?? a}</Chip>)}
+                        {r.estado === "adentro" ? <Chip tone={live ? "slate" : "amber"}>sin salida</Chip> : null}
                       </div>
                     </td>
                   </tr>
@@ -305,133 +383,141 @@ function TableroHoy({
   );
 }
 
-const ALERTA_LABEL: Record<string, string> = {
-  fuera_de_sitio: "fuera de sitio", sin_sitio: "sin sitio", pin_sospechoso: "pin sospechoso", hora_dudosa: "hora dudosa",
-};
-function rank(f: { estado: string; tarde: boolean; alertas: Set<string> }): number {
-  if (f.alertas.size > 0 || f.tarde) return 0;
-  if (f.estado === "adentro") return 1;
-  if (f.estado === "salio") return 2;
-  return 3; // sin marca
+// ── Tablero de un RANGO (resumen por técnico + detalle por día) ───────────────
+function TableroRango({ activos, porTech, filaSitio, lateThreshold }: { activos: AttTech[]; porTech: Map<string, AttEvent[]>; filaSitio: FilaSitio; lateThreshold: number }) {
+  const [abierto, setAbierto] = useState<Set<string>>(new Set());
+  const toggle = (id: string) => setAbierto((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const filas = activos.map((t) => {
+    const evs = porTech.get(t.id) ?? [];
+    const porDia = new Map<string, AttEvent[]>();
+    for (const e of evs) porDia.set(panamaDayKey(e.occurred_at), [...(porDia.get(panamaDayKey(e.occurred_at)) ?? []), e]);
+    let horasMs = 0;
+    let tardanzas = 0;
+    let alertas = 0;
+    for (const [, dia] of porDia) {
+      const r = resumenDia([...dia].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at)), false, lateThreshold);
+      horasMs += r.ms;
+      if (r.tarde) tardanzas++;
+      alertas += r.alertas.size + (r.estado === "adentro" ? 1 : 0);
+    }
+    const dias = [...porDia.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+    return { t, diasMarcados: porDia.size, horasMs, tardanzas, alertas, dias };
+  });
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
+              <th className="px-3 py-2.5 font-semibold">Técnico</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Días</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Horas</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Tardanzas</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Alertas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.length === 0 ? (
+              <tr><td colSpan={5} className="px-3 py-10 text-center text-sm text-slate-400">Sin técnicos activos.</td></tr>
+            ) : (
+              filas.map(({ t, diasMarcados, horasMs, tardanzas, alertas, dias }) => {
+                const open = abierto.has(t.id);
+                return (
+                  <Fragment key={t.id}>
+                    <tr className={cn("border-b border-slate-50 last:border-0", diasMarcados > 0 && "cursor-pointer hover:bg-slate-50")} onClick={() => diasMarcados > 0 && toggle(t.id)}>
+                      <td className="px-3 py-2.5 font-medium text-slate-900">
+                        <span className="inline-flex items-center gap-1.5">
+                          {diasMarcados > 0 ? (open ? <ChevronDown className="size-3.5 text-slate-400" /> : <ChevronRight className="size-3.5 text-slate-400" />) : <span className="inline-block size-3.5" />}
+                          {t.name}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{diasMarcados || "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-slate-700">{horasMs > 0 ? fmtDuracion(horasMs) : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{tardanzas || "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{alertas > 0 ? <span className="font-semibold text-rose-600">{alertas}</span> : "—"}</td>
+                    </tr>
+                    {open ? (
+                      <tr className="bg-slate-50/50">
+                        <td colSpan={5} className="px-3 py-2">
+                          <div className="space-y-1.5">
+                            {dias.map(([dia, evs]) => <DetalleDia key={dia} dayKey={dia} evs={evs} filaSitio={filaSitio} />)}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
-function EstadoChip({ estado }: { estado: string }) {
-  if (estado === "adentro") return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"><LogIn className="size-3" /> Adentro</span>;
-  if (estado === "salio") return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"><LogOut className="size-3" /> Salió</span>;
-  return <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-400"><CircleDashed className="size-3" /> Sin marcar</span>;
-}
-function Chip({ tone, children }: { tone: "amber" | "rose" | "slate" | "emerald"; children: React.ReactNode }) {
-  const c = tone === "amber" ? "bg-amber-100 text-amber-700" : tone === "rose" ? "bg-rose-100 text-rose-700" : tone === "emerald" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500";
-  return <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", c)}>{children}</span>;
+// Detalle de un día (lectura): turnos in→out.
+function DetalleDia({ dayKey, evs, filaSitio }: { dayKey: string; evs: AttEvent[]; filaSitio: FilaSitio }) {
+  const shifts = pairShifts([...evs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at)));
+  const total = sumShiftMs(shifts);
+  return (
+    <div className="rounded-lg border border-slate-100 bg-white p-2.5">
+      <div className="mb-1 flex items-center justify-between">
+        <p className="text-xs font-semibold text-slate-700">{fmtFecha(dayKey + "T12:00:00Z")}</p>
+        <p className="text-[11px] font-semibold tabular-nums text-slate-500">{total > 0 ? fmtDuracion(total) : "—"}</p>
+      </div>
+      <div className="space-y-0.5">
+        {shifts.map((s, i) => {
+          const inS = filaSitio(s.in?.id);
+          return (
+            <div key={i} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+              <span className="inline-flex items-center gap-1"><LogIn className="size-3 text-emerald-600" />{s.in ? fmtHora(new Date(s.in.occurred_at)) : "—"}</span>
+              <span className="text-slate-300">→</span>
+              <span className="inline-flex items-center gap-1"><LogOut className="size-3 text-slate-500" />{s.out ? fmtHora(new Date(s.out.occurred_at)) : <span className="text-amber-600">sin salida</span>}</span>
+              {s.ms != null ? <span className="tabular-nums text-slate-400">({fmtDuracion(s.ms)})</span> : null}
+              {inS?.site ? <span className="text-slate-400">· {inS.site}{inS.dist != null ? ` (${inS.dist} m)` : ""}</span> : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
-// ── Historial ─────────────────────────────────────────────────────────────────
-function Historial({ activos, porTech, filaSitio, isPowerUser }: { activos: AttTech[]; porTech: Map<string, AttEvent[]>; filaSitio: FilaSitio; isPowerUser: boolean }) {
+// ── Edición de marcas (power users) ───────────────────────────────────────────
+function TableroEdicion({ activos, porTech, desdeKey, hastaKey }: { activos: AttTech[]; porTech: Map<string, AttEvent[]>; desdeKey: string; hastaKey: string }) {
   const router = useRouter();
   const [techId, setTechId] = useState(activos[0]?.id ?? "");
-  const [modoEdicion, setModoEdicion] = useState(false);
-  const eventos = porTech.get(techId) ?? [];
   const refrescar = () => router.refresh();
-
-  // Agrupar por día Panamá (desc).
+  const evs = porTech.get(techId) ?? [];
   const dias = useMemo(() => {
     const m = new Map<string, AttEvent[]>();
-    for (const e of eventos) {
-      const k = panamaDayKey(e.occurred_at);
-      m.set(k, [...(m.get(k) ?? []), e]);
-    }
+    for (const e of evs) m.set(panamaDayKey(e.occurred_at), [...(m.get(panamaDayKey(e.occurred_at)) ?? []), e]);
     return [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-  }, [eventos]);
-
-  // Resumen por mes (días trabajados + horas): para ver 12 meses de un vistazo.
-  const meses = useMemo(() => {
-    const m = new Map<string, { horasMs: number; dias: number }>();
-    for (const [dia, evs] of dias) {
-      const ms = sumShiftMs(pairShifts([...evs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))));
-      const cur = m.get(dia.slice(0, 7)) ?? { horasMs: 0, dias: 0 };
-      cur.horasMs += ms;
-      cur.dias += 1; // día con al menos una marca
-      m.set(dia.slice(0, 7), cur);
-    }
-    return [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-  }, [dias]);
+  }, [evs]);
+  const defaultDay = hastaKey >= desdeKey ? hastaKey : desdeKey;
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <select value={techId} onChange={(e) => setTechId(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-          {activos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-        {isPowerUser ? (
-          <button
-            type="button"
-            onClick={() => setModoEdicion((v) => !v)}
-            className={cn("inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors", modoEdicion ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50")}
-          >
-            <Pencil className="size-4" /> {modoEdicion ? "Listo" : "Editar marcas"}
-          </button>
-        ) : null}
-      </div>
+      <select value={techId} onChange={(e) => setTechId(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+        {activos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+      </select>
 
-      {modoEdicion && techId ? <AgregarMarca techId={techId} onDone={refrescar} /> : null}
+      {techId ? <AgregarMarca techId={techId} defaultLocal={`${defaultDay}T08:00`} onDone={refrescar} /> : null}
 
-      {meses.length > 1 ? (
-        <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50 text-left text-[10px] uppercase tracking-wide text-slate-400">
-                <th className="px-3 py-2 font-semibold">Mes</th>
-                <th className="px-3 py-2 text-right font-semibold">Días marcados</th>
-                <th className="px-3 py-2 text-right font-semibold">Horas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {meses.map(([mes, r]) => (
-                <tr key={mes} className="border-b border-slate-50 last:border-0">
-                  <td className="px-3 py-2 capitalize text-slate-700">{fmtMes(mes)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">{r.dias}</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">{r.horasMs > 0 ? fmtDuracion(r.horasMs) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-
-      {dias.length > 0 ? <p className="px-1 pt-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Detalle por día</p> : null}
       {dias.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">Sin marcas en este período.</p>
+        <p className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">Sin marcas en este período para {activos.find((t) => t.id === techId)?.name ?? "el técnico"}.</p>
       ) : (
-        dias.map(([dia, evs]) => {
-          const ordenados = [...evs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
-          const shifts = pairShifts(ordenados);
-          const total = sumShiftMs(shifts);
+        dias.map(([dia, evsDia]) => {
+          const ordenados = [...evsDia].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
           return (
             <div key={dia} className="rounded-xl border border-slate-100 bg-white p-3.5">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-semibold text-slate-800">{fmtFecha(dia + "T12:00:00Z")}</p>
-                <p className="text-xs font-semibold tabular-nums text-slate-500">{total > 0 ? fmtDuracion(total) : "—"}</p>
+              <p className="mb-2 text-sm font-semibold text-slate-800">{fmtFecha(dia + "T12:00:00Z")}</p>
+              <div className="space-y-1.5">
+                {ordenados.map((ev) => <MarcaRow key={ev.id} ev={ev} onDone={refrescar} />)}
               </div>
-              {modoEdicion ? (
-                <div className="space-y-1.5">
-                  {ordenados.map((ev) => <MarcaRow key={ev.id} ev={ev} onDone={refrescar} />)}
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {shifts.map((s, i) => {
-                    const inS = filaSitio(s.in?.id);
-                    return (
-                      <div key={i} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
-                        <span className="inline-flex items-center gap-1"><LogIn className="size-3 text-emerald-600" />{s.in ? fmtHora(new Date(s.in.occurred_at)) : "—"}</span>
-                        <span className="text-slate-300">→</span>
-                        <span className="inline-flex items-center gap-1"><LogOut className="size-3 text-slate-500" />{s.out ? fmtHora(new Date(s.out.occurred_at)) : <span className="text-amber-600">sin salida</span>}</span>
-                        {s.ms != null ? <span className="tabular-nums text-slate-400">({fmtDuracion(s.ms)})</span> : null}
-                        {inS?.site ? <span className="text-slate-400">· {inS.site}{inS.dist != null ? ` (${inS.dist} m)` : ""}</span> : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
             </div>
           );
         })
@@ -498,9 +584,9 @@ function MarcaRow({ ev, onDone }: { ev: AttEvent; onDone: () => void }) {
 }
 
 // Agregar una marca a mano (power users) para el técnico seleccionado.
-function AgregarMarca({ techId, onDone }: { techId: string; onDone: () => void }) {
+function AgregarMarca({ techId, defaultLocal, onDone }: { techId: string; defaultLocal?: string; onDone: () => void }) {
   const [dir, setDir] = useState<"in" | "out">("in");
-  const [when, setWhen] = useState(isoToPanamaLocal(new Date().toISOString()));
+  const [when, setWhen] = useState(defaultLocal ?? isoToPanamaLocal(new Date().toISOString()));
   const [busy, startBusy] = useTransition();
   const [err, setErr] = useState<string | null>(null);
 
@@ -529,6 +615,26 @@ function AgregarMarca({ techId, onDone }: { techId: string; onDone: () => void }
       {err ? <span className="text-red-600">{err}</span> : null}
     </div>
   );
+}
+
+const ALERTA_LABEL: Record<string, string> = {
+  fuera_de_sitio: "fuera de sitio", sin_sitio: "sin sitio", pin_sospechoso: "pin sospechoso", hora_dudosa: "hora dudosa",
+};
+function rank(r: ResumenDia): number {
+  if (r.alertas.size > 0 || r.tarde) return 0;
+  if (r.estado === "adentro") return 1;
+  if (r.estado === "salio") return 2;
+  return 3; // sin marca
+}
+
+function EstadoChip({ estado }: { estado: string }) {
+  if (estado === "adentro") return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"><LogIn className="size-3" /> Adentro</span>;
+  if (estado === "salio") return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600"><LogOut className="size-3" /> Salió</span>;
+  return <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-400"><CircleDashed className="size-3" /> Sin marcar</span>;
+}
+function Chip({ tone, children }: { tone: "amber" | "rose" | "slate" | "emerald"; children: React.ReactNode }) {
+  const c = tone === "amber" ? "bg-amber-100 text-amber-700" : tone === "rose" ? "bg-rose-100 text-rose-700" : tone === "emerald" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500";
+  return <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", c)}>{children}</span>;
 }
 
 // ── Auditoría ─────────────────────────────────────────────────────────────────
@@ -596,12 +702,17 @@ function Config({ settings, locs, sites, isPowerUser, powerEmails }: { settings:
   const [f, setF] = useState<AttendanceSettingsInput>({
     wa_phone_number_id: settings?.wa_phone_number_id ?? null,
     workday_start: settings?.workday_start?.slice(0, 5) ?? "08:00",
+    workday_end: settings?.workday_end?.slice(0, 5) ?? "17:00",
+    workday_days: settings?.workday_days ?? [1, 2, 3, 4, 5],
     late_after_min: settings?.late_after_min ?? 15,
     require_geofence: settings?.require_geofence ?? false,
   });
   const [editingPhone, setEditingPhone] = useState(!settings?.wa_phone_number_id);
   const [saving, startSave] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+
+  const toggleDia = (n: number) =>
+    setF((prev) => ({ ...prev, workday_days: prev.workday_days.includes(n) ? prev.workday_days.filter((d) => d !== n) : [...prev.workday_days, n].sort() }));
 
   function saveConfig() {
     setMsg(null);
@@ -629,19 +740,48 @@ function Config({ settings, locs, sites, isPowerUser, powerEmails }: { settings:
               </div>
             )}
           </Field>
-          <Field label="Hora de entrada esperada" hint="Para el chip de tardanza.">
+          <Field label="Exigir geocerca" hint="Si se activa, no registra marcas fuera del sitio (solo avisa al empleado).">
+            <label className="flex h-[38px] items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={f.require_geofence} onChange={(e) => setF({ ...f, require_geofence: e.target.checked })} className="size-4 rounded border-slate-300" />
+              No registrar marcas fuera del sitio
+            </label>
+          </Field>
+        </div>
+
+        <div className="mt-4">
+          <span className="mb-1.5 block text-xs font-semibold text-slate-600">Días laborables</span>
+          <div className="flex flex-wrap gap-1.5">
+            {DIAS_SEMANA.map(([n, lbl]) => {
+              const on = f.workday_days.includes(n);
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => toggleDia(n)}
+                  className={cn("rounded-lg border px-3 py-1.5 text-sm font-semibold transition-colors", on ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50")}
+                >
+                  {lbl}
+                </button>
+              );
+            })}
+          </div>
+          <span className="mt-1 block text-[11px] text-slate-400">Se usa para calcular &ldquo;ayer / último día laborable&rdquo;.</span>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <Field label="Hora de entrada" hint="Con la tolerancia marca el chip de tardanza.">
             <div className="flex items-center gap-2">
               <input type="time" className={inputCls} value={f.workday_start} onChange={(e) => setF({ ...f, workday_start: e.target.value })} />
-              <span className="whitespace-nowrap text-xs text-slate-500">+ tolerancia</span>
+              <span className="whitespace-nowrap text-xs text-slate-500">+ tol.</span>
               <input type="number" min={0} className={cn(inputCls, "w-20")} value={f.late_after_min} onChange={(e) => setF({ ...f, late_after_min: Number(e.target.value) })} />
               <span className="text-xs text-slate-500">min</span>
             </div>
           </Field>
+          <Field label="Hora de salida" hint="Jornada esperada (referencia).">
+            <input type="time" className={cn(inputCls, "w-40")} value={f.workday_end} onChange={(e) => setF({ ...f, workday_end: e.target.value })} />
+          </Field>
         </div>
-        <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
-          <input type="checkbox" checked={f.require_geofence} onChange={(e) => setF({ ...f, require_geofence: e.target.checked })} className="size-4 rounded border-slate-300" />
-          Exigir geocerca (no registrar marcas fuera del sitio, solo avisar al empleado)
-        </label>
+
         <div className="mt-4 flex items-center gap-3">
           <button type="button" onClick={saveConfig} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
             <Save className="size-4" /> {saving ? "Guardando…" : "Guardar configuración"}
@@ -694,7 +834,7 @@ function PowerUsersCard({ emails }: { emails: string[] }) {
   return (
     <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
       <p className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-slate-800"><ShieldCheck className="size-4 text-slate-500" /> Power users</p>
-      <p className="mb-3 text-xs text-slate-500">Estos correos pueden editar, borrar y agregar marcas a mano desde el Historial. Todo cambio queda en Auditoría.</p>
+      <p className="mb-3 text-xs text-slate-500">Estos correos pueden editar, borrar y agregar marcas a mano desde el tablero. Todo cambio queda en Auditoría.</p>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input
           className={cn(inputCls, "min-w-[220px] flex-1")}
@@ -882,8 +1022,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-// ── Export CSV (cliente) ──────────────────────────────────────────────────────
-function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: Map<string, string>, rango: string) {
+// ── Export CSV (cliente) — exporta la vista/período actual ─────────────────────
+function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: Map<string, string>, period: string) {
   const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const rows = [["Fecha", "Hora", "Tecnico", "Marca", "Sitio", "Distancia_m", "Estado"].join(",")];
   for (const e of events) {
@@ -898,7 +1038,7 @@ function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: 
   const blob = new Blob(["﻿" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `asistencia-${rango}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `asistencia-${period}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 }

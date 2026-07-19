@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgContext } from "@/lib/org-context";
+import { computePeriod, type PeriodId } from "@/lib/whatsapp/attendance-core";
 import { AsistenciaScreen, type AttSettings, type AttTech, type AttLoc, type AttSite, type AttEventRow, type AttAudit } from "./screen";
 
 export const dynamic = "force-dynamic";
@@ -11,43 +12,45 @@ function missing(error: { message?: string; code?: string } | null): boolean {
   return /does not exist|schema cache|could not find/i.test(error.message ?? "");
 }
 
-// Períodos de historial/export (ventanas móviles en días).
-const RANGOS: Record<string, number> = { "30d": 30, "3m": 92, "6m": 183, "12m": 366 };
+const PERIODOS: PeriodId[] = ["hoy", "ayer", "7d", "30d", "custom"];
 
-export default async function AsistenciaPage({ searchParams }: { searchParams: Promise<{ rango?: string }> }) {
-  const { rango: rangoParam } = await searchParams;
-  const rango = rangoParam && RANGOS[rangoParam] ? rangoParam : "30d";
-  const dias = RANGOS[rango];
+export default async function AsistenciaPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ period?: string; desde?: string; hasta?: string }>;
+}) {
+  const sp = await searchParams;
 
   const supabase = await createClient();
   const auth = await getActiveOrgContext();
   if (!auth) redirect("/login");
   const orgId = auth.orgId;
 
-  // Settings (1 fila por org; puede no existir todavía). power_user_emails es de
-  // 0033: si aún no existe, se reintenta sin esa columna.
-  const SEL_FULL = "wa_phone_number_id, workday_start, late_after_min, require_geofence, power_user_emails";
-  const SEL_BASE = "wa_phone_number_id, workday_start, late_after_min, require_geofence";
-  let sres = (await supabase.from("attendance_settings").select(SEL_FULL).eq("org_id", orgId).maybeSingle()) as {
-    data: (AttSettings & { power_user_emails?: string[] | null }) | null;
-    error: { message?: string; code?: string } | null;
+  // Settings (1 fila por org). select('*') tolera columnas de migraciones aún no
+  // corridas (power_user_emails 0033, workday_days/end 0034).
+  const { data: raw } = (await supabase.from("attendance_settings").select("*").eq("org_id", orgId).maybeSingle()) as {
+    data: Record<string, unknown> | null;
   };
-  if (sres.error?.code === "42703") {
-    sres = (await supabase.from("attendance_settings").select(SEL_BASE).eq("org_id", orgId).maybeSingle()) as typeof sres;
-  }
-  const settingsData: AttSettings | null = sres.data
+  const workdayDays = (raw?.workday_days as number[] | null) ?? [1, 2, 3, 4, 5];
+  const settingsData: AttSettings | null = raw
     ? {
-        wa_phone_number_id: sres.data.wa_phone_number_id,
-        workday_start: sres.data.workday_start,
-        late_after_min: sres.data.late_after_min,
-        require_geofence: sres.data.require_geofence,
+        wa_phone_number_id: (raw.wa_phone_number_id as string | null) ?? null,
+        workday_start: (raw.workday_start as string | null) ?? "08:00",
+        workday_end: (raw.workday_end as string | null) ?? "17:00",
+        workday_days: workdayDays,
+        late_after_min: (raw.late_after_min as number | null) ?? 15,
+        require_geofence: (raw.require_geofence as boolean | null) ?? false,
       }
     : null;
 
   // Power users: quién puede editar marcas. Sin lista → cae en owner/admin.
   const email = (auth.user.email ?? "").toLowerCase();
-  const powerEmails = (sres.data?.power_user_emails ?? []).map((e) => e.toLowerCase());
+  const powerEmails = ((raw?.power_user_emails as string[] | null) ?? []).map((e) => e.toLowerCase());
   const isPowerUser = powerEmails.length > 0 ? powerEmails.includes(email) : auth.role === "owner" || auth.role === "admin";
+
+  // Período elegido → rango de fechas.
+  const period: PeriodId = PERIODOS.includes(sp.period as PeriodId) ? (sp.period as PeriodId) : "hoy";
+  const range = computePeriod(period, new Date(), { workdays: workdayDays, from: sp.desde, to: sp.hasta });
 
   // Técnicos (con wa_id; fallback si la columna no existe).
   let techs: AttTech[] = [];
@@ -112,21 +115,21 @@ export default async function AsistenciaPage({ searchParams }: { searchParams: P
     if (!missing(res.error)) sites = (res.data ?? []).map((s) => ({ id: s.id, name: s.name, lat: s.lat, lng: s.lng, radius: s.geofence_radius_m ?? 150 }));
   }
 
-  // Eventos del período elegido (tablero HOY + historial + export). matched_name
-  // es 0032: si aún no existe, se reintenta sin esa columna.
+  // Eventos del rango elegido. matched_name es 0032: si aún no existe, se
+  // reintenta sin esa columna.
   const COLS_FULL = "id, technician_id, direction, occurred_at, status, distance_m, matched_location_id, matched_hq, matched_name, wa_location_name";
   const COLS_BASE = "id, technician_id, direction, occurred_at, status, distance_m, matched_location_id, matched_hq, wa_location_name";
   let events: AttEventRow[] = [];
   let truncado = false;
   {
-    const desde = new Date(Date.now() - dias * 86400_000).toISOString();
     const LIMITE = 50000;
     const q = (cols: string) =>
       supabase
         .from("attendance_events")
         .select(cols)
         .eq("org_id", orgId)
-        .gte("occurred_at", desde)
+        .gte("occurred_at", range.desdeIso)
+        .lt("occurred_at", range.hastaIso)
         .order("occurred_at", { ascending: true })
         .limit(LIMITE) as unknown as Promise<{ data: AttEventRow[] | null; error: { message?: string; code?: string } | null }>;
     let res = await q(COLS_FULL);
@@ -161,7 +164,10 @@ export default async function AsistenciaPage({ searchParams }: { searchParams: P
       isPowerUser={isPowerUser}
       powerEmails={powerEmails}
       migracionPendiente={migracionPendiente}
-      rango={rango}
+      period={period}
+      desdeKey={range.desdeKey}
+      hastaKey={range.hastaKey}
+      singleDay={range.singleDay}
       truncado={truncado}
     />
   );
