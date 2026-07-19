@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
-import { AsistenciaScreen, type AttSettings, type AttTech, type AttLoc, type AttEventRow } from "./screen";
+import { AsistenciaScreen, type AttSettings, type AttTech, type AttLoc, type AttSite, type AttEventRow } from "./screen";
 
 export const dynamic = "force-dynamic";
 
@@ -81,19 +81,39 @@ export default async function AsistenciaPage({ searchParams }: { searchParams: P
     }));
   }
 
-  // Eventos del período elegido (tablero HOY + historial + export).
+  // Sitios de asistencia propios (tabla 0032; degrada si aún no existe).
+  let sites: AttSite[] = [];
+  {
+    const res = (await supabase
+      .from("attendance_sites")
+      .select("id, name, lat, lng, geofence_radius_m")
+      .eq("org_id", orgId)
+      .order("name")) as {
+      data: { id: string; name: string; lat: number | null; lng: number | null; geofence_radius_m: number | null }[] | null;
+      error: { message?: string; code?: string } | null;
+    };
+    if (!missing(res.error)) sites = (res.data ?? []).map((s) => ({ id: s.id, name: s.name, lat: s.lat, lng: s.lng, radius: s.geofence_radius_m ?? 150 }));
+  }
+
+  // Eventos del período elegido (tablero HOY + historial + export). matched_name
+  // es 0032: si aún no existe, se reintenta sin esa columna.
+  const COLS_FULL = "id, technician_id, direction, occurred_at, status, distance_m, matched_location_id, matched_hq, matched_name, wa_location_name";
+  const COLS_BASE = "id, technician_id, direction, occurred_at, status, distance_m, matched_location_id, matched_hq, wa_location_name";
   let events: AttEventRow[] = [];
   let truncado = false;
   {
     const desde = new Date(Date.now() - dias * 86400_000).toISOString();
     const LIMITE = 50000;
-    const res = (await supabase
-      .from("attendance_events")
-      .select("id, technician_id, direction, occurred_at, status, distance_m, matched_location_id, matched_hq, wa_location_name")
-      .eq("org_id", orgId)
-      .gte("occurred_at", desde)
-      .order("occurred_at", { ascending: true })
-      .limit(LIMITE)) as { data: AttEventRow[] | null; error: { message?: string; code?: string } | null };
+    const q = (cols: string) =>
+      supabase
+        .from("attendance_events")
+        .select(cols)
+        .eq("org_id", orgId)
+        .gte("occurred_at", desde)
+        .order("occurred_at", { ascending: true })
+        .limit(LIMITE) as unknown as Promise<{ data: AttEventRow[] | null; error: { message?: string; code?: string } | null }>;
+    let res = await q(COLS_FULL);
+    if (res.error?.code === "42703") res = await q(COLS_BASE); // 0032 pendiente
     if (missing(res.error)) migracionPendiente = true;
     else {
       events = res.data ?? [];
@@ -106,6 +126,7 @@ export default async function AsistenciaPage({ searchParams }: { searchParams: P
       settings={settingsData ?? null}
       techs={techs}
       locs={locs}
+      sites={sites}
       events={events}
       migracionPendiente={migracionPendiente}
       rango={rango}

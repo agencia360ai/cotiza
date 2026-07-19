@@ -75,11 +75,25 @@ async function eventosDeHoy(admin: Admin, orgId: string, techId: string, now: Da
 // Sitios candidatos para la geocerca: los del cliente asignados al técnico +
 // todos los de la org (fallback) + la sede propia (settings).
 async function reunirSitios(admin: Admin, s: Settings, techId: string): Promise<GeoSite[]> {
+  const sites: GeoSite[] = [];
+
+  // Sitios de asistencia propios (CRUD del manager, no atados a cliente).
+  const { data: propios } = (await admin
+    .from("attendance_sites")
+    .select("name, lat, lng, geofence_radius_m")
+    .eq("org_id", s.org_id)
+    .not("lat", "is", null)
+    .not("lng", "is", null)) as {
+    data: { name: string; lat: number; lng: number; geofence_radius_m: number }[] | null;
+  };
+  for (const a of propios ?? []) {
+    sites.push({ locationId: null, name: a.name, lat: a.lat, lng: a.lng, radiusM: a.geofence_radius_m ?? 150, isHq: false, assigned: true });
+  }
+
   const { data: clients } = (await admin.from("clients").select("id").eq("org_id", s.org_id)) as {
     data: { id: string }[] | null;
   };
   const clientIds = (clients ?? []).map((c) => c.id);
-  const sites: GeoSite[] = [];
   if (clientIds.length > 0) {
     const { data: locs } = (await admin
       .from("client_locations")
@@ -142,7 +156,7 @@ async function marcar(admin: Admin, s: Settings, tech: Tech, msg: IncomingMessag
     return;
   }
 
-  const { error } = await admin.from("attendance_events").insert({
+  const row: Record<string, unknown> = {
     org_id: s.org_id,
     technician_id: tech.id,
     direction,
@@ -154,12 +168,19 @@ async function marcar(admin: Admin, s: Settings, tech: Tech, msg: IncomingMessag
     wa_location_address: loc.address ?? null,
     matched_location_id: match.site?.locationId ?? null,
     matched_hq: match.site?.isHq ?? false,
+    matched_name: match.site?.name ?? null,
     distance_m: match.distanceM,
     status,
     source: "whatsapp",
     wa_message_id: msg.id,
     raw: msg as unknown,
-  });
+  };
+  let { error } = await admin.from("attendance_events").insert(row);
+  if (error && (error as { code?: string }).code === "42703") {
+    // migración 0032 (matched_name) pendiente: registrar sin esa columna.
+    delete row.matched_name;
+    ({ error } = await admin.from("attendance_events").insert(row));
+  }
   if (error) {
     // 23505 = carrera con el reintento de Meta (unique wamid) → ya quedó registrado.
     if ((error as { code?: string }).code === "23505") return;
@@ -196,13 +217,20 @@ async function corregir(admin: Admin, s: Settings, tech: Tech, to: string): Prom
 
 async function ayuda(admin: Admin, s: Settings, tech: Tech, to: string): Promise<void> {
   const hoy = await eventosDeHoy(admin, s.org_id, tech.id, new Date());
-  const resumen =
-    hoy.length === 0
-      ? "Hoy no has marcado todavía."
-      : "Hoy: " + hoy.map((e) => `${e.direction === "in" ? "entrada" : "salida"} ${fmtHora(new Date(e.occurred_at))}`).join(", ") + ".";
+  const ultima = hoy[hoy.length - 1];
+  let estado: string;
+  if (ultima?.direction === "in") {
+    estado = `Tienes tu *entrada* abierta desde las ${fmtHora(new Date(ultima.occurred_at))}. Cuando te vayas, manda tu ubicación para marcar la *salida*.`;
+  } else if (hoy.length > 0) {
+    estado = "Hoy: " + hoy.map((e) => `${e.direction === "in" ? "entrada" : "salida"} ${fmtHora(new Date(e.occurred_at))}`).join(", ") + ".";
+  } else {
+    estado = "Hoy no has marcado todavía. Manda tu ubicación al llegar. 📍";
+  }
   await sendText(
     to,
-    `Hola ${tech.name.split(" ")[0]} 👋 Para marcar, toca 📎 → *Ubicación* → *Enviar tu ubicación actual* (al llegar y al irte). ${resumen}`,
+    `Hola ${tech.name.split(" ")[0]} 👋 Soy el asistente de asistencia de DICEC.\n\n` +
+      `Para marcar, toca 📎 → *Ubicación* → *Enviar tu ubicación actual* (no la de 'tiempo real'): al *llegar* y al *irte*.\n\n` +
+      estado,
   );
 }
 

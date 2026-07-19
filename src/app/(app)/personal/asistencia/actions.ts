@@ -49,6 +49,51 @@ export async function saveAttendanceSettings(input: AttendanceSettingsInput): Pr
   return { ok: true };
 }
 
+// ── Sitios de asistencia propios (CRUD libre, no atados a cliente) ────────────
+const faltaMigracion = (m: string) => /does not exist|schema cache|could not find/i.test(m);
+
+export async function createAttendanceSite(input: { name: string; lat: number | null; lng: number | null; radius: number }): Promise<Result> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!input.name.trim()) return { error: "Ponle un nombre al sitio." };
+  const { error } = await c.supabase.from("attendance_sites").insert({
+    org_id: c.orgId,
+    name: input.name.trim(),
+    lat: input.lat,
+    lng: input.lng,
+    geofence_radius_m: input.radius,
+  });
+  if (error) return { error: faltaMigracion(error.message) ? "Falta la migración 0032 — corre el SQL y reintenta." : error.message };
+  revalidatePath("/personal/asistencia");
+  return { ok: true };
+}
+
+export async function updateAttendanceSite(
+  id: string,
+  patch: { name?: string; lat?: number | null; lng?: number | null; radius?: number },
+): Promise<Result> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const p: Record<string, unknown> = {};
+  if (patch.name !== undefined) p.name = patch.name.trim();
+  if (patch.lat !== undefined) p.lat = patch.lat;
+  if (patch.lng !== undefined) p.lng = patch.lng;
+  if (patch.radius !== undefined) p.geofence_radius_m = patch.radius;
+  const { error } = await c.supabase.from("attendance_sites").update(p).eq("id", id).eq("org_id", c.orgId);
+  if (error) return { error: error.message };
+  revalidatePath("/personal/asistencia");
+  return { ok: true };
+}
+
+export async function deleteAttendanceSite(id: string): Promise<Result> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { error } = await c.supabase.from("attendance_sites").delete().eq("id", id).eq("org_id", c.orgId);
+  if (error) return { error: error.message };
+  revalidatePath("/personal/asistencia");
+  return { ok: true };
+}
+
 // Geocerca de un sitio de cliente (lat/lng/radio). La RLS de client_locations
 // (join a clients) ya limita a sitios de la org.
 export async function setLocationGeofence(
