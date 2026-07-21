@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendText, sendButtons } from "./client";
+import { sendText } from "./client";
 import {
   parseWebhook,
   decideDirection,
@@ -185,28 +185,11 @@ async function marcar(admin: Admin, s: Settings, tech: Tech, msg: IncomingMessag
   let shiftMs: number | null = null;
   if (direction === "out" && ultima?.direction === "in") shiftMs = now.getTime() - new Date(ultima.occurred_at).getTime();
 
+  // Confirmación en texto plano: sin botón de corregir. La entrada/salida la
+  // decide la SECUENCIA (1ra ubicación del día = entrada, la siguiente = salida…);
+  // las correcciones se hacen en el tablero (power users + auditoría).
   const body = buildConfirmation({ direction, when: now, siteName: match.site?.name ?? null, distanceM: match.distanceM, status, shiftMs });
-  await sendButtons(msg.from, body, [{ id: "corregir", title: "Corregir" }]);
-}
-
-async function corregir(admin: Admin, s: Settings, tech: Tech, to: string): Promise<void> {
-  const now = new Date();
-  const { data: ult } = (await admin
-    .from("attendance_events")
-    .select("id, direction, occurred_at")
-    .eq("org_id", s.org_id)
-    .eq("technician_id", tech.id)
-    .gte("occurred_at", panamaDayStart(now).toISOString())
-    .order("occurred_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()) as { data: { id: string; direction: "in" | "out"; occurred_at: string } | null };
-  if (!ult) {
-    await sendText(to, "No hay una marca de hoy para corregir.");
-    return;
-  }
-  const nueva = ult.direction === "in" ? "out" : "in";
-  await admin.from("attendance_events").update({ direction: nueva, status: "corregido", note: "corregido por el empleado" }).eq("id", ult.id);
-  await sendText(to, `✏️ Corregido: tu marca de las ${fmtHora(new Date(ult.occurred_at))} ahora es *${nueva === "in" ? "Entrada" : "Salida"}*.`);
+  await sendText(msg.from, body);
 }
 
 async function ayuda(admin: Admin, s: Settings, tech: Tech, to: string): Promise<void> {
@@ -241,8 +224,6 @@ async function handle(admin: Admin, msg: IncomingMessage, phoneNumberId: string)
   }
   if (msg.type === "location" && msg.location) {
     await marcar(admin, s, tech, msg);
-  } else if (msg.type === "interactive" && msg.buttonReplyId === "corregir") {
-    await corregir(admin, s, tech, msg.from);
   } else {
     await ayuda(admin, s, tech, msg.from);
   }
