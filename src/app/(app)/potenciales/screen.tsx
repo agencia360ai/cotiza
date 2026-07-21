@@ -30,6 +30,8 @@ import {
   CloudUpload,
   Landmark,
   Undo2,
+  Archive,
+  ArchiveRestore,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { norm } from "@/lib/clients/normalize";
@@ -57,6 +59,7 @@ import {
   updateTender,
   createManualTender,
   setTenderStatus,
+  setTenderArchived,
   listMyTenders,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
@@ -1980,6 +1983,10 @@ function LicitacionesTab({
   const [editing, setEditing] = useState<TenderRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [sendingTenderQbo, setSendingTenderQbo] = useState<TenderRow | null>(null);
+  const [verArchivadas, setVerArchivadas] = useState(false);
+
+  const archivadasCount = useMemo(() => tenders.filter((t) => t.archived_at).length, [tenders]);
+  const activasCount = tenders.length - archivadasCount;
 
   // Cambio rápido de estatus desde la fila (optimista + revierte si falla).
   async function changeTenderStatus(t: TenderRow, next: TenderStatus) {
@@ -1992,9 +1999,22 @@ function LicitacionesTab({
     }
   }
 
+  // Archivar / desarchivar desde la fila (optimista + revierte si falla).
+  async function toggleArchivar(t: TenderRow) {
+    const nuevo = t.archived_at ? null : new Date().toISOString();
+    setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, archived_at: nuevo } : x)));
+    try {
+      const r = await setTenderArchived(t.id, !t.archived_at);
+      if ("error" in r) setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, archived_at: t.archived_at } : x)));
+    } catch {
+      setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, archived_at: t.archived_at } : x)));
+    }
+  }
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const arr = tenders.filter((x) => {
+      if (!verArchivadas && x.archived_at) return false; // archivadas ocultas por defecto
       if (estatus !== "all" && x.status !== estatus) return false;
       if (modalidad !== "all" && x.modalidad !== modalidad) return false;
       // Rango por fecha de participación (delivery_date). Recortar a YYYY-MM-DD:
@@ -2010,7 +2030,7 @@ function LicitacionesTab({
     });
     arr.sort((a, b) => compareVals(a[sort.key], b[sort.key], sort.dir));
     return arr;
-  }, [tenders, estatus, modalidad, q, from, to, sort]);
+  }, [tenders, estatus, modalidad, q, from, to, sort, verArchivadas]);
 
   const kpis = useMemo(() => {
     let vivas = 0;
@@ -2069,7 +2089,7 @@ function LicitacionesTab({
   }, []);
 
   const tabs = [
-    { k: "mias" as const, label: "Mis licitaciones", icon: Gavel, badge: tenders.length },
+    { k: "mias" as const, label: "Mis licitaciones", icon: Gavel, badge: activasCount },
     { k: "gobierno" as const, label: "Potenciales del gobierno", icon: Landmark, badge: govBadge },
   ];
   const toggle = (
@@ -2185,6 +2205,19 @@ function LicitacionesTab({
             className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-3 text-sm focus:border-slate-400 focus:outline-none"
           />
         </div>
+        {archivadasCount > 0 || verArchivadas ? (
+          <button
+            type="button"
+            onClick={() => setVerArchivadas((v) => !v)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors",
+              verArchivadas ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+            )}
+            title="Mostrar u ocultar las licitaciones archivadas"
+          >
+            <Archive className="size-4" /> Archivadas{archivadasCount > 0 ? ` (${archivadasCount})` : ""}
+          </button>
+        ) : null}
       </div>
 
       {/* Rango de fechas (por fecha de participación) */}
@@ -2201,7 +2234,8 @@ function LicitacionesTab({
       </div>
 
       <p className="mb-2 text-xs text-muted-foreground">
-        {filtered.length} de {tenders.length} licitaciones
+        {filtered.length} de {verArchivadas ? tenders.length : activasCount} licitaciones
+        {archivadasCount > 0 && !verArchivadas ? <span className="text-slate-400"> · {archivadasCount} archivada{archivadasCount === 1 ? "" : "s"} oculta{archivadasCount === 1 ? "" : "s"}</span> : null}
       </p>
 
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -2216,12 +2250,13 @@ function LicitacionesTab({
                 <SortTh label="Ref. ($)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estatus" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold sm:table-cell">Rubro</th>
+                <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin licitaciones con estos filtros.
                   </td>
                 </tr>
@@ -2230,10 +2265,20 @@ function LicitacionesTab({
                   <tr
                     key={x.id}
                     onClick={() => setEditing(x)}
-                    className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60"
+                    className={cn(
+                      "cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60",
+                      x.archived_at && "bg-slate-50/40 opacity-60",
+                    )}
                   >
                     <td className="max-w-[180px] px-3 py-2.5">
-                      <div className="truncate font-medium text-slate-900">{x.client_std_name ?? x.entity ?? "—"}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-medium text-slate-900">{x.client_std_name ?? x.entity ?? "—"}</span>
+                        {x.archived_at ? (
+                          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                            <Archive className="size-2.5" /> Archivada
+                          </span>
+                        ) : null}
+                      </div>
                       {!x.client_id && x.entity ? (
                         <span className="text-[10px] font-medium text-amber-600">sin estandarizar</span>
                       ) : x.client_std_name && x.entity && norm(x.client_std_name) !== norm(x.entity) ? (
@@ -2281,6 +2326,16 @@ function LicitacionesTab({
                       </div>
                     </td>
                     <td className="hidden px-3 py-2.5 sm:table-cell">{x.rubro ? <RubroChip rubro={x.rubro} /> : "—"}</td>
+                    <td className="px-3 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => toggleArchivar(x)}
+                        className="inline-flex size-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        title={x.archived_at ? "Desarchivar (volver a la lista)" : "Archivar (esconder de la lista)"}
+                      >
+                        {x.archived_at ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -2766,6 +2821,7 @@ function NewTenderDrawer({
         converted_project_id: null,
         qbo_job_id: null,
         qbo_sent_at: null,
+        archived_at: null,
       };
       onCreated(row);
     } catch (e) {
@@ -2926,6 +2982,17 @@ function TenderDrawer({
     onSaved(f);
   }
 
+  async function archivar() {
+    const archived = !f.archived_at;
+    setError(null);
+    const r = await setTenderArchived(tender.id, archived);
+    if ("error" in r) {
+      setError(r.error);
+      return;
+    }
+    onSaved({ ...f, archived_at: archived ? new Date().toISOString() : null });
+  }
+
   return (
     <Drawer title={f.entity ?? "Licitación"} onClose={onClose}>
       <div className="space-y-3">
@@ -3043,6 +3110,14 @@ function TenderDrawer({
           </button>
           <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">
             Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={archivar}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+            title={f.archived_at ? "Volver a la lista" : "Esconder de la lista sin borrarla"}
+          >
+            {f.archived_at ? <><ArchiveRestore className="size-4" /> Desarchivar</> : <><Archive className="size-4" /> Archivar</>}
           </button>
         </div>
       </div>
