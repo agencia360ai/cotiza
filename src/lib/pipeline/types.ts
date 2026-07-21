@@ -132,6 +132,7 @@ export type TenderRow = {
   converted_project_id: string | null;
   qbo_job_id: string | null; // proyecto QBO creado desde una licitación ganada
   qbo_sent_at: string | null;
+  archived_at: string | null; // archivada = fuera de la lista por defecto (0035)
 };
 
 export function formatMoney(n: number): string {

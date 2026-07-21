@@ -296,6 +296,20 @@ export async function setTenderStatus(id: string, status: TenderStatus): Promise
   return { ok: true };
 }
 
+// Archivar / desarchivar una licitación (la esconde de la lista, no la borra).
+export async function setTenderArchived(id: string, archived: boolean): Promise<Result> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const { error } = await c.supabase
+    .from("tenders")
+    .update({ archived_at: archived ? new Date().toISOString() : null })
+    .eq("id", id)
+    .eq("org_id", c.orgId);
+  if (error) return { error: /does not exist|schema cache|column/i.test(error.message) ? "Falta la migración 0035 — corre el SQL y reintenta." : error.message };
+  revalidatePath(REVALIDATE);
+  return { ok: true };
+}
+
 // Recarga las licitaciones propias (tras participar desde el board del gobierno).
 export async function listMyTenders(): Promise<Result<TenderRow[]>> {
   const c = await ctx();
