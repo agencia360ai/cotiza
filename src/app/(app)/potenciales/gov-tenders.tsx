@@ -933,12 +933,16 @@ export function GovTendersBoard({
           `Corrida ${pasada} · ${r.data.relevantes} relevantes${r.data.conPrecio > 0 ? ` · ${r.data.conPrecio} montos` : ""}` +
             (r.data.truncados.length > 0 ? ` · siguiendo con ${r.data.truncados.map((k) => TIPO_SHORT[k] ?? k).join(", ")}…` : " · completo"),
         );
-        await load();
+        // Nota: NO recargamos la tabla en cada pasada. Traer TODAS las filas
+        // (miles, con JSON de detalle/competidores) y re-renderizarlas hasta 8
+        // veces reventaba la memoria del navegador ("se cae el VM"). El progreso
+        // se ve por la barra + el texto; la tabla se refresca UNA vez al final.
         if (r.data.truncados.length === 0) {
           setScanPct(100);
           break;
         }
       }
+      await load(); // un solo refresh de la tabla al terminar el escaneo
     } catch (e) {
       // "An unexpected response…" = Vercel cortó la función; lo bajado quedó
       // guardado. El loop continúa donde quedó al reintentar.
@@ -1145,6 +1149,13 @@ export function GovTendersBoard({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeRows, q, tipoFiltro, bandaFiltro, soloSweet, ssMin, ssMax, sort, tamizDe]);
+
+  // Cap de filas RENDERIZADAS: en un VM con poca RAM, pintar miles de <tr> (cada
+  // una con chips, íconos y handlers) dispara la memoria del navegador hasta
+  // tumbarlo. Mostramos las primeras N por relevancia; el resto se alcanza
+  // afinando búsqueda/filtros. No afecta conteos ni el escaneo, solo el DOM.
+  const RENDER_CAP = 300;
+  const visibles = shown.length > RENDER_CAP ? shown.slice(0, RENDER_CAP) : shown;
 
   return (
     <div className="space-y-4">
@@ -1358,8 +1369,11 @@ export function GovTendersBoard({
         ) : (
           <>
             <p className="px-4 pb-1 text-xs text-slate-400">
-              {shown.length} de {rows.length} procesos · ordena por cualquier columna (las cerradas quedan al final) · haz clic en
-              una fila para ver el detalle del pliego
+              {shown.length} de {rows.length} procesos
+              {shown.length > RENDER_CAP ? (
+                <span className="font-semibold text-slate-500"> · mostrando los primeros {RENDER_CAP} (afina búsqueda o filtros para ver el resto)</span>
+              ) : null}{" "}
+              · ordena por cualquier columna · haz clic en una fila para ver el detalle del pliego
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -1382,7 +1396,7 @@ export function GovTendersBoard({
                   </tr>
                 </thead>
                 <tbody>
-                  {shown.map((r) => (
+                  {visibles.map((r) => (
                     <TenderTr
                       key={r.id}
                       r={r}
