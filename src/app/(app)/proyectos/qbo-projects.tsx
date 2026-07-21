@@ -42,6 +42,12 @@ const STATUS_META: Record<ProjectBizStatus, { label: string; dot: string; text: 
 };
 const STATUS_ORDER: ProjectBizStatus[] = ["activo", "por_cobrar", "cerrado"];
 
+// Cap de filas RENDERIZADAS: pintar cientos de proyectos (cada fila con su
+// selector de estado, barras y editor) dispara la memoria del navegador en
+// máquinas con poca RAM. Mostramos los primeros N según el orden elegido; el
+// resto se alcanza filtrando/buscando. No afecta los totales ni el resumen.
+const RENDER_CAP = 200;
+
 // Mismo $ que el resto de la app (los "B/." viejos desentonaban con el Inicio).
 function bal(n: number): string {
   return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -615,24 +621,31 @@ export function QboProjectsBoard() {
             Nada matchea los filtros{range ? ` en “${RANGE_LABEL[rangeKey]}”` : ""}.
           </p>
         ) : (
-          <ul className="divide-y divide-slate-50 px-2 py-2">
-            {sorted.map((e) => (
-              <ProjectRow
-                key={e.p.id}
-                e={e}
-                rangeActive={!!range}
-                status={statusOf(e.p)}
-                dates={datesOf(e.p)}
-                editing={editingDates === e.p.id}
-                onToggleEdit={() => setEditingDates((prev) => (prev === e.p.id ? null : e.p.id))}
-                onChangeStatus={(s) => changeStatus(e.p, s)}
-                onSaveDates={async (v) => {
-                  const ok = await saveDates(e.p, v);
-                  if (ok) setEditingDates(null);
-                }}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="divide-y divide-slate-50 px-2 py-2">
+              {sorted.slice(0, RENDER_CAP).map((e) => (
+                <ProjectRow
+                  key={e.p.id}
+                  e={e}
+                  rangeActive={!!range}
+                  status={statusOf(e.p)}
+                  dates={datesOf(e.p)}
+                  editing={editingDates === e.p.id}
+                  onToggleEdit={() => setEditingDates((prev) => (prev === e.p.id ? null : e.p.id))}
+                  onChangeStatus={(s) => changeStatus(e.p, s)}
+                  onSaveDates={async (v) => {
+                    const ok = await saveDates(e.p, v);
+                    if (ok) setEditingDates(null);
+                  }}
+                />
+              ))}
+            </ul>
+            {sorted.length > RENDER_CAP ? (
+              <p className="border-t border-slate-100 px-4 py-2.5 text-center text-xs text-slate-400">
+                Mostrando los primeros {RENDER_CAP} de {sorted.length} · afina el rango, el rubro o la búsqueda para ver el resto.
+              </p>
+            ) : null}
+          </>
         )}
       </div>
     </section>
