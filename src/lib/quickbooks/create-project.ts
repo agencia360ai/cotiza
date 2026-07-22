@@ -26,8 +26,6 @@ function pickCreateTool(tools: QboTool[]): QboTool | null {
   return best?.t ?? null;
 }
 
-type JsonSchema = { type?: string; properties?: Record<string, JsonSchema> };
-
 export type QboProjectInput = {
   displayName: string; // "DC26-08 Instalación … - STRI"
   parentId: string; // customer padre en QBO
@@ -45,58 +43,19 @@ type CreateFields = {
   notes: string | null;
 };
 
-// Variante 1: guiada por el schema del tool (cada campo solo si está declarado).
-function argsFromSchema(schema: unknown, f: CreateFields): Record<string, unknown> {
-  const top = (schema as JsonSchema | undefined)?.properties ?? {};
-  const paramsSchema = top.params;
-  const wrap = !!paramsSchema && (paramsSchema.type === "object" || !!paramsSchema.properties);
-  const props = (wrap ? paramsSchema!.properties : top) ?? {};
-  const has = (k: string) => k in props;
-  const inner: Record<string, unknown> = {};
-
-  let named = false;
-  for (const k of ["DisplayName", "displayName", "display_name", "name", "Name"]) {
-    if (has(k)) {
-      inner[k] = f.displayName;
-      named = true;
-      break;
-    }
-  }
-  if (!named) inner.DisplayName = f.displayName;
-
-  if (f.parentId) {
-    if (has("ParentRef")) inner.ParentRef = { value: f.parentId };
-    else if (has("parentRef")) inner.parentRef = { value: f.parentId };
-    else if (has("parent_id")) inner.parent_id = f.parentId;
-    else if (has("parentId")) inner.parentId = f.parentId;
-    else if (has("customer_id")) inner.customer_id = f.parentId;
-    else inner.ParentRef = { value: f.parentId };
-    if (has("Job")) inner.Job = true;
-    if (has("job")) inner.job = true;
-    if (has("IsProject")) inner.IsProject = true;
-    if (has("is_project")) inner.is_project = true;
-    if (has("BillWithParent")) inner.BillWithParent = false;
-  }
-  if (f.email) {
-    if (has("PrimaryEmailAddr")) inner.PrimaryEmailAddr = { Address: f.email };
-    else if (has("email")) inner.email = f.email;
-    else if (has("Email")) inner.Email = f.email;
-  }
-  if (f.notes) {
-    if (has("Notes")) inner.Notes = f.notes;
-    else if (has("notes")) inner.notes = f.notes;
-    else if (has("description")) inner.description = f.notes;
-    else inner.Notes = f.notes;
-  }
-  return wrap ? { params: inner } : inner;
-}
-
-// Variante 2: shape del API de QBO (Customer object puro).
-function argsQboApi(f: CreateFields): Record<string, unknown> {
+// El tool `create_customer` del gateway declara este shape EXACTO:
+//   { params: { customer: <objeto Customer crudo de la API de QBO> } }
+// (additionalProperties:false en ambos niveles). Antes envolvíamos los campos
+// solo en `params`, SIN el nivel `customer`, así que el handler leía
+// params.customer = undefined y mandaba un body VACÍO a Intuit →
+// "SAXParseException; Premature end of file". El objeto interno va en la forma
+// cruda de QBO (PascalCase), tal como customers.ts ya los LEE.
+function qboCustomerObject(f: CreateFields): Record<string, unknown> {
+  // Un proyecto es un sub-customer: ParentRef apunta al cliente padre. Job e
+  // IsProject son read-only en Intuit (los infiere de ParentRef) → no se mandan.
   const o: Record<string, unknown> = { DisplayName: f.displayName };
   if (f.parentId) {
     o.ParentRef = { value: f.parentId };
-    o.Job = true;
     o.BillWithParent = false;
   }
   if (f.email) o.PrimaryEmailAddr = { Address: f.email };
@@ -104,33 +63,18 @@ function argsQboApi(f: CreateFields): Record<string, unknown> {
   return o;
 }
 
-// Variante 3: camelCase plano (wrappers Node típicos). Para el padre se mandan
-// varias claves redundantes — los servers ignoran las desconocidas y con que
-// una aterrice el proyecto queda colgado del cliente correcto.
-function argsCamel(f: CreateFields): Record<string, unknown> {
-  const o: Record<string, unknown> = { displayName: f.displayName };
-  if (f.parentId) {
-    o.parentId = f.parentId;
-    o.parentRef = { value: f.parentId };
-    o.parent_id = f.parentId;
-    o.job = true;
-  }
-  if (f.email) o.email = f.email;
-  if (f.notes) o.notes = f.notes;
-  return o;
-}
-
-// Escalera de payloads: schema-driven primero, después los shapes conocidos,
-// cada uno directo y envuelto en {params}. Deduplicadas por contenido.
-function buildVariants(schema: unknown, f: CreateFields): Record<string, unknown>[] {
-  const raw = [argsFromSchema(schema, f), argsQboApi(f), argsCamel(f)];
-  const all: Record<string, unknown>[] = [];
-  for (const a of raw) {
-    all.push(a);
-    if (!("params" in a)) all.push({ params: a });
-  }
+// Escalera de payloads: el shape declarado por el tool va PRIMERO; los demás
+// quedan de red de seguridad ante otra versión del gateway. Deduplicadas.
+function buildVariants(_schema: unknown, f: CreateFields): Record<string, unknown>[] {
+  const customer = qboCustomerObject(f);
+  const combos: Record<string, unknown>[] = [
+    { params: { customer } }, // ← shape declarado por create_customer
+    { customer },
+    { params: customer },
+    customer,
+  ];
   const seen = new Set<string>();
-  return all.filter((a) => {
+  return combos.filter((a) => {
     const k = JSON.stringify(a);
     if (seen.has(k)) return false;
     seen.add(k);
@@ -267,7 +211,7 @@ async function createQboCustomer(f: CreateFields): Promise<{ id: string; name: s
   const final = await findByName(f.displayName);
   if (final) return final;
   throw new Error(
-    `QBO no aceptó la creación con ningún formato de argumentos${lastErr ? ` — último error: ${lastErr.slice(0, 250)}` : ""}. ` +
+    `QBO no aceptó la creación con ningún formato de argumentos (tool: ${tool.name})${lastErr ? ` — último error: ${lastErr.slice(0, 250)}` : ""}. ` +
       "Si el tool correcto es otro, setea QBO_CREATE_CUSTOMER_TOOL en Vercel.",
   );
 }
