@@ -97,7 +97,7 @@ const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
 
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
-type TSortKey = "entity" | "amount_ref_usd" | "status" | "modalidad" | "delivery_date";
+type TSortKey = "entity" | "acto_number" | "amount_ref_usd" | "status" | "modalidad" | "delivery_date";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "no_ganada", "ganada", "orden_proceder"];
 // Orden del flujo, con la RAMIFICACIÓN tras la revisión:
@@ -2244,6 +2244,7 @@ function LicitacionesTab({
             <thead>
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
                 <SortTh label="Entidad" k="entity" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <SortTh label="Acto" k="acto_number" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="hidden px-3 py-2.5 font-semibold 2xl:table-cell">Objeto</th>
                 <SortTh label="Modalidad" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Participación" k="delivery_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
@@ -2256,7 +2257,7 @@ function LicitacionesTab({
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={9} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin licitaciones con estos filtros.
                   </td>
                 </tr>
@@ -2285,6 +2286,7 @@ function LicitacionesTab({
                         <span className="block truncate text-[10px] text-slate-400">{x.entity}</span>
                       ) : null}
                     </td>
+                    <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-500" title={x.acto_number ?? undefined}>{x.acto_number ?? "—"}</td>
                     <td className="hidden max-w-[240px] truncate px-3 py-2.5 text-slate-500 2xl:table-cell" title={x.objeto ?? undefined}>{x.objeto ?? "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600" title={x.modalidad ? MODALIDAD_LABEL[x.modalidad] : undefined}>{x.modalidad ? MODALIDAD_SHORT[x.modalidad] : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.delivery_date ? fmtDate(x.delivery_date.slice(0, 10)) : "—"}</td>
