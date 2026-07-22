@@ -2245,7 +2245,6 @@ function LicitacionesTab({
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
                 <SortTh label="Entidad" k="entity" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Acto" k="acto_number" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
-                <th className="hidden px-3 py-2.5 font-semibold 2xl:table-cell">Objeto</th>
                 <SortTh label="Modalidad" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Participación" k="delivery_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
                 <SortTh label="Ref. ($)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
@@ -2257,7 +2256,7 @@ function LicitacionesTab({
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin licitaciones con estos filtros.
                   </td>
                 </tr>
@@ -2287,7 +2286,6 @@ function LicitacionesTab({
                       ) : null}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-500" title={x.acto_number ?? undefined}>{x.acto_number ?? "—"}</td>
-                    <td className="hidden max-w-[240px] truncate px-3 py-2.5 text-slate-500 2xl:table-cell" title={x.objeto ?? undefined}>{x.objeto ?? "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600" title={x.modalidad ? MODALIDAD_LABEL[x.modalidad] : undefined}>{x.modalidad ? MODALIDAD_SHORT[x.modalidad] : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.delivery_date ? fmtDate(x.delivery_date.slice(0, 10)) : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
