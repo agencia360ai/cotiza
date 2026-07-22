@@ -51,35 +51,18 @@ type CreateFields = {
 // "SAXParseException; Premature end of file". El objeto interno va en la forma
 // cruda de QBO (PascalCase), tal como customers.ts ya los LEE.
 function qboCustomerObject(f: CreateFields): Record<string, unknown> {
-  // Un proyecto es un sub-customer: ParentRef apunta al cliente padre. Job e
-  // IsProject son read-only en Intuit (los infiere de ParentRef) → no se mandan.
   const o: Record<string, unknown> = { DisplayName: f.displayName };
   if (f.parentId) {
+    // Sub-customer/proyecto: Intuit EXIGE Job=true JUNTO con ParentRef para
+    // crearlo como hijo del cliente padre. Con solo ParentRef (sin Job=true) la
+    // creación falla. BillWithParent=false: el proyecto se factura por separado.
+    o.Job = true;
     o.ParentRef = { value: f.parentId };
     o.BillWithParent = false;
   }
   if (f.email) o.PrimaryEmailAddr = { Address: f.email };
   if (f.notes) o.Notes = f.notes;
   return o;
-}
-
-// Escalera de payloads: el shape declarado por el tool va PRIMERO; los demás
-// quedan de red de seguridad ante otra versión del gateway. Deduplicadas.
-function buildVariants(_schema: unknown, f: CreateFields): Record<string, unknown>[] {
-  const customer = qboCustomerObject(f);
-  const combos: Record<string, unknown>[] = [
-    { params: { customer } }, // ← shape declarado por create_customer
-    { customer },
-    { params: customer },
-    customer,
-  ];
-  const seen = new Set<string>();
-  return combos.filter((a) => {
-    const k = JSON.stringify(a);
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
 }
 
 // ¿El error del gateway es un RECHAZO definitivo de QBO (no se creó nada)?
@@ -158,11 +141,11 @@ async function findByName(displayName: string): Promise<{ id: string; name: stri
   }
 }
 
-// Core: crea un customer (proyecto o cliente padre) probando variantes de
-// payload. El "Premature end of file" de QBO significa que el body llegó VACÍO
-// (shape de args equivocado → QBO rechazó): reintentar con otra variante es
-// seguro. Ante una respuesta ambigua (sin Id y sin rechazo claro) se VERIFICA
-// por búsqueda antes de reintentar — jamás se crean duplicados a ciegas.
+// Core: crea un customer (proyecto o cliente padre). El shape del tool está
+// CONFIRMADO ({ params: { customer } }), así que se manda uno solo y se reporta
+// el error REAL — nada de variantes que enmascaren el fallo con un "params
+// Required" espurio. Ante una respuesta ilegible se VERIFICA por búsqueda antes
+// de dar error, para no reportar un fallo cuando el registro sí entró.
 async function createQboCustomer(f: CreateFields): Promise<{ id: string; name: string }> {
   const tools = await listQboTools();
   const tool = pickCreateTool(tools);
@@ -178,40 +161,31 @@ async function createQboCustomer(f: CreateFields): Promise<{ id: string; name: s
   const existing = await findByName(f.displayName);
   if (existing) return existing;
 
-  const variants = buildVariants(tool.inputSchema, f);
-  let lastErr = "";
-  for (const args of variants) {
-    let result: QboToolResult;
-    try {
-      // retries: 0 — un create no es idempotente; ante un fallo de transporte
-      // la verificación por findByName decide, no un reintento a ciegas.
-      result = await callQboTool(tool.name, args, { retries: 0 });
-    } catch (e) {
-      lastErr = e instanceof Error ? e.message : String(e);
-      continue; // error de transporte: probar la siguiente variante
-    }
+  const args = { params: { customer: qboCustomerObject(f) } };
+  let result: QboToolResult | null = null;
+  let err = "";
+  try {
+    // retries: 0 — un create no es idempotente; ante un fallo la verificación
+    // por findByName decide, no un reintento a ciegas.
+    result = await callQboTool(tool.name, args, { retries: 0 });
+  } catch (e) {
+    err = e instanceof Error ? e.message : String(e);
+  }
+  if (result) {
     const txt = textoDe(result);
     const created = extractCreatedId(result);
     if (created && !esRechazoDefinitivo(txt)) {
       return { id: created.id, name: created.name ?? f.displayName };
     }
-    if (esRechazoDefinitivo(txt) || result.isError) {
-      lastErr = txt || "error del gateway";
-      continue; // QBO rechazó la operación → nada creado → siguiente shape
-    }
-    // Ambiguo (sin Id y sin rechazo reconocible): pudo haberse creado —
-    // verificar por búsqueda antes de intentar otra variante.
-    lastErr = txt || lastErr;
-    const check = await findByName(f.displayName);
-    if (check) return check;
+    err = txt || (result.isError ? "el gateway devolvió isError sin detalle" : err);
   }
 
-  // Última verificación (por si la creación entró pero ninguna respuesta se
-  // pudo leer) y error detallado con lo que dijo el gateway.
-  const final = await findByName(f.displayName);
-  if (final) return final;
+  // Pudo haberse creado aunque la respuesta no se pudiera leer: verificar por
+  // búsqueda antes de dar error.
+  const check = await findByName(f.displayName);
+  if (check) return check;
   throw new Error(
-    `QBO no aceptó la creación con ningún formato de argumentos (tool: ${tool.name})${lastErr ? ` — último error: ${lastErr.slice(0, 250)}` : ""}. ` +
+    `QBO no pudo crear "${f.displayName}" (tool: ${tool.name})${err ? ` — ${err.slice(0, 300)}` : ""}. ` +
       "Si el tool correcto es otro, setea QBO_CREATE_CUSTOMER_TOOL en Vercel.",
   );
 }
