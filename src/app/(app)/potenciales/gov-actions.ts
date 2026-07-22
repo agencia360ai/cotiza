@@ -12,6 +12,8 @@ import {
   pcPliegoRaw,
   pcDownloadArchivo,
   pcProponentes,
+  pcPropuestasRaw,
+  escanearMontos,
   pcBuscarProceso,
   extractDetalle,
   extractArchivos,
@@ -593,6 +595,47 @@ export async function getGovTenderCompetidores(govId: string): Promise<Result<Co
     return { ok: true, data };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudieron consultar las propuestas" };
+  }
+}
+
+// Diagnóstico: datos CRUDOS de las propuestas de un acto. Golpea los endpoints de
+// PanamaCompra y devuelve el cuerpo tal cual (recortado) + los "montos" que se
+// detectan — para ver de un vistazo si los precios de los competidores están
+// expuestos para ese proceso o todavía son secretos.
+export type PropuestasRaw = {
+  endpoints: { url: string; status: number | null; ok: boolean; montos: { path: string; value: number }[]; json: string; error?: string }[];
+};
+
+export async function getGovTenderPropuestasRaw(govId: string): Promise<Result<PropuestasRaw>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
+  const { data: g } = (await c.supabase
+    .from("gov_tenders")
+    .select("tipo, raw")
+    .eq("id", govId)
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { tipo: string | null; raw: unknown } | null };
+  if (!g) return { error: "No encontrada" };
+  const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
+  const idFlujos = rw?.idProcesosContratacionFlujos;
+  const idTipo = idTipoDe(g.tipo, g.raw);
+  if (!idFlujos || !idTipo) return { error: "Este proceso no tiene detalle consultable en PanamaCompra." };
+  try {
+    const session = await pcLogin();
+    const raws = await pcPropuestasRaw(session, idTipo, String(idFlujos));
+    const endpoints = raws.map((r) => ({
+      url: r.url,
+      status: r.status,
+      ok: r.ok,
+      montos: escanearMontos(r.body).slice(0, 15),
+      // Recortado (20 KB) para no reventar la memoria del navegador; basta para ver la forma.
+      json: r.body === null ? (r.error ?? "(sin cuerpo)") : JSON.stringify(r.body, null, 2).slice(0, 20000),
+      error: r.error,
+    }));
+    return { ok: true, data: { endpoints } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudieron traer los datos crudos" };
   }
 }
 

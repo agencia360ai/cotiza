@@ -49,8 +49,10 @@ import {
   resolveSubmissionDoc,
   saveSubmissionPlan,
   getGovTenderCompetidores,
+  getGovTenderPropuestasRaw,
   type GovTenderRow,
   type CompetidoresData,
+  type PropuestasRaw,
 } from "./gov-actions";
 import type { TenderStatus } from "@/lib/pipeline/types";
 import type { SubmissionDoc } from "@/lib/panamacompra/submit-docs";
@@ -360,6 +362,26 @@ export function CompetidoresCard({
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<CompetidoresData | null>(initial ?? null);
   const [error, setError] = useState<string | null>(null);
+  // Visor de datos crudos (diagnóstico: ¿los precios están accesibles?).
+  const [rawBusy, setRawBusy] = useState(false);
+  const [raw, setRaw] = useState<PropuestasRaw | null>(null);
+  const [rawError, setRawError] = useState<string | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  async function verRaw() {
+    setShowRaw(true);
+    setRawBusy(true);
+    setRawError(null);
+    try {
+      const r = await getGovTenderPropuestasRaw(govId);
+      if ("error" in r) setRawError(r.error);
+      else setRaw(r.data);
+    } catch (e) {
+      setRawError(e instanceof Error ? e.message : "No se pudo traer");
+    } finally {
+      setRawBusy(false);
+    }
+  }
 
   async function ver() {
     setBusy(true);
@@ -454,6 +476,52 @@ export function CompetidoresCard({
           Consulta quién más ofertó y si ya se adjudicó: si DICEC ganó, la licitación se marca Ganada con el monto ganador automáticamente.
         </p>
       )}
+
+      {/* Diagnóstico: datos CRUDOS de PanamaCompra — para entender si los precios están accesibles. */}
+      <div className="mt-2 border-t border-slate-100 pt-2">
+        {!showRaw ? (
+          <button type="button" onClick={verRaw} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600">
+            🔍 Ver datos crudos de las propuestas
+          </button>
+        ) : (
+          <>
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Datos crudos · PanamaCompra</p>
+              <button type="button" onClick={() => setShowRaw(false)} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600">Ocultar</button>
+            </div>
+            {rawBusy ? <p className="mt-1 text-[11px] text-slate-400">Consultando el portal…</p> : null}
+            {rawError ? <p className="mt-1 rounded bg-red-50 px-2 py-1 text-[10px] text-red-700">{rawError}</p> : null}
+            {raw ? (
+              <div className="mt-1 space-y-2">
+                {raw.endpoints.map((ep, i) => (
+                  <div key={i} className="rounded-lg border border-slate-100">
+                    <div className="flex items-center gap-2 border-b border-slate-100 px-2 py-1 text-[10px]">
+                      <span className={cn("rounded px-1 font-bold", ep.ok ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700")}>{ep.status ?? "err"}</span>
+                      <span className="truncate font-mono text-slate-500" title={ep.url}>{ep.url.replace(/^https?:\/\/[^/]+/, "")}</span>
+                    </div>
+                    {ep.montos.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5">
+                        <span className="text-[10px] font-semibold text-emerald-700">Montos detectados:</span>
+                        {ep.montos.map((m, j) => (
+                          <span key={j} className="rounded bg-emerald-50 px-1 text-[10px] tabular-nums text-emerald-700" title={m.path}>
+                            {m.value.toLocaleString("en-US")}
+                          </span>
+                        ))}
+                      </div>
+                    ) : ep.ok ? (
+                      <p className="px-2 pt-1.5 text-[10px] text-slate-400">Sin campos de monto en esta respuesta.</p>
+                    ) : null}
+                    <pre className="mt-1 max-h-52 overflow-auto whitespace-pre-wrap break-all px-2 pb-2 text-[10px] leading-tight text-slate-500">{ep.json}</pre>
+                  </div>
+                ))}
+                <p className="text-[10px] italic text-slate-400">
+                  Si aquí salen montos → los precios están accesibles y ajusto el panel para leerlos. Si no → el gobierno aún no los expuso para este acto.
+                </p>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -487,6 +487,102 @@ export async function pcProponentes(
   return { proponentes: base, vistaUsada };
 }
 
+// ── Diagnóstico: datos CRUDOS de las propuestas ──────────────────────────────
+// Para entender si los precios de los competidores están accesibles: golpea los
+// mismos endpoints de propuestas y devuelve el cuerpo tal cual (JSON parseado o
+// texto recortado), sin interpretarlo. Así se ve en pantalla qué campos trae
+// realmente el gobierno para ese acto.
+export type PropuestaRawEndpoint = {
+  url: string;
+  method: string;
+  status: number | null;
+  ok: boolean;
+  body: unknown | null;
+  error?: string;
+};
+
+export async function pcPropuestasRaw(session: PcSession, idTipoProceso: string, idFlujos: string): Promise<PropuestaRawEndpoint[]> {
+  const out: PropuestaRawEndpoint[] = [];
+  for (const build of ENDPOINTS_PROPUESTAS) {
+    const ep = build(idTipoProceso, idFlujos);
+    try {
+      const res = await fetch(ep.url, {
+        method: ep.method,
+        headers: baseHeaders(session),
+        body: ep.body,
+        cache: "no-store",
+        signal: AbortSignal.timeout(20_000),
+      });
+      const text = await res.text();
+      let body: unknown = null;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        const i = text.indexOf("{");
+        const j = text.lastIndexOf("}");
+        if (i >= 0 && j > i) {
+          try {
+            body = JSON.parse(text.slice(i, j + 1));
+          } catch {
+            body = text.slice(0, 3000);
+          }
+        } else body = text.slice(0, 3000);
+      }
+      out.push({ url: ep.url, method: ep.method, status: res.status, ok: res.ok, body });
+    } catch (e) {
+      out.push({ url: ep.url, method: ep.method, status: null, ok: false, body: null, error: e instanceof Error ? e.message : "error" });
+    }
+  }
+  return out;
+}
+
+// Escaneo best-effort de "montos" en un árbol JSON: claves que suenan a precio
+// con valor numérico > 0. Sirve para responder de un vistazo "¿hay precios acá?".
+export type MontoDetectado = { path: string; value: number };
+// Número tolerante a formato: "B/. 12,288.39" → 12288.39. Toma el trozo numérico
+// y normaliza el separador de miles vs decimal por la posición del último . o ,.
+function montoDeValor(v: unknown): number {
+  if (typeof v === "number") return v;
+  if (typeof v !== "string") return NaN;
+  const m = v.match(/\d[\d.,\s]*\d|\d/);
+  if (!m) return NaN;
+  let t = m[0].replace(/\s/g, "");
+  const lastDot = t.lastIndexOf(".");
+  const lastComma = t.lastIndexOf(",");
+  if (lastDot >= 0 && lastComma >= 0) {
+    t = lastDot > lastComma ? t.split(",").join("") : t.split(".").join("").replace(",", ".");
+  } else if (lastComma >= 0) {
+    const parts = t.split(",");
+    t = parts.length === 2 && parts[1].length <= 2 ? parts.join(".") : parts.join("");
+  }
+  return Number(t);
+}
+
+export function escanearMontos(node: unknown): MontoDetectado[] {
+  const out: MontoDetectado[] = [];
+  const incluir = /precio|monto|oferta|importe|total|valor/i;
+  const excluir = /fecha|cantidad|^id|codigo|numero|porcentaje|itbms|impuesto|partida/i;
+  const visit = (n: unknown, path: string): void => {
+    if (out.length >= 40) return;
+    if (Array.isArray(n)) {
+      n.forEach((x, i) => visit(x, `${path}[${i}]`));
+      return;
+    }
+    if (n && typeof n === "object") {
+      for (const [k, v] of Object.entries(n as Record<string, unknown>)) {
+        const nk = k.replace(/[_\s]/g, "");
+        if (incluir.test(nk) && !excluir.test(nk)) {
+          const num = montoDeValor(v);
+          if (Number.isFinite(num) && num > 0 && num < 1e11) out.push({ path: `${path}.${k}`, value: num });
+        }
+        visit(v, `${path}.${k}`);
+      }
+    }
+  };
+  visit(node, "$");
+  return out;
+}
+
 // Solo el endpoint de archivos de PanamaCompra (no SSRF a otros hosts). El
 // hostname debe SER panamacompra.gob.pa o un subdominio real (no un dominio
 // hermano tipo "evilpanamacompra.gob.pa").
