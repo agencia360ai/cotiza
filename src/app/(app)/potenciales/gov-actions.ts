@@ -15,6 +15,8 @@ import {
   pcPropuestasRaw,
   escanearMontos,
   pcBuscarProceso,
+  pcBuscarProcesos,
+  analizarConvocatorias,
   extractDetalle,
   extractArchivos,
   extractPrecioBreakdown,
@@ -491,12 +493,16 @@ export async function uploadGovTenderDocToDropbox(
 // gov_tenders.competidores (migración 0029) para no depender del gobierno.
 
 export type CompetidoresAuto = { estatus: "ganada" | "no_ganada" | null; monto: number | null };
+// Relanzamiento: el proceso quedó DESIERTO y se volvió a convocar con una fecha
+// nueva (varias convocatorias con el mismo número).
+export type Relanzada = { total: number; convocatoriaActiva: number | null; fechaNueva: string | null; fechaCambio: boolean };
 export type CompetidoresData = {
   proponentes: PcProponente[];
   vistaUsada: string | null;
   abierta: boolean;
   at: string;
   auto: CompetidoresAuto | null;
+  relanzada: Relanzada | null;
 };
 
 // La empresa PROPIA en el portal (modo single-org DICEC): así detectamos cuál
@@ -562,11 +568,11 @@ export async function getGovTenderCompetidores(govId: string): Promise<Result<Co
   if (!hasPanamaCompraConfig()) return { error: "Faltan PANAMACOMPRA_USER / PANAMACOMPRA_PASSWORD en Vercel." };
   const { data: g } = (await c.supabase
     .from("gov_tenders")
-    .select("tipo, raw, fecha_cierre, converted_tender_id")
+    .select("num_proceso, tipo, raw, fecha_cierre, converted_tender_id")
     .eq("id", govId)
     .eq("org_id", c.orgId)
     .maybeSingle()) as {
-    data: { tipo: string | null; raw: unknown; fecha_cierre: string | null; converted_tender_id: string | null } | null;
+    data: { num_proceso: string; tipo: string | null; raw: unknown; fecha_cierre: string | null; converted_tender_id: string | null } | null;
   };
   if (!g) return { error: "No encontrada" };
   const rw = g.raw as { idProcesosContratacionFlujos?: string | number } | null;
@@ -577,21 +583,46 @@ export async function getGovTenderCompetidores(govId: string): Promise<Result<Co
   // propuestas son secretas. fecha_cierre null o pasada NO es "abierta": una
   // ganada/adjudicada ya cerró, así que no afirmamos "aún no cierra" cuando en
   // realidad no expusieron la tabla o no supimos leerla.
-  const abierta = !!g.fecha_cierre && +new Date(g.fecha_cierre) > Date.now();
+  let abierta = !!g.fecha_cierre && +new Date(g.fecha_cierre) > Date.now();
   try {
     const session = await pcLogin();
     const { proponentes, vistaUsada } = await pcProponentes(session, idTipo, String(idFlujos));
+
+    // ¿Se relanzó? Un proceso que queda DESIERTO se vuelve a convocar con el
+    // mismo número y otra fecha (varias convocatorias). Buscamos todas por
+    // número; si una quedó desierta y hay más de una, avisamos y adoptamos la
+    // fecha de cierre de la convocatoria activa (la que sigue vigente).
+    let relanzada: Relanzada | null = null;
+    try {
+      const conv = analizarConvocatorias(await pcBuscarProcesos(session, g.num_proceso));
+      if (conv.total > 1 && conv.hayDesierta) {
+        const fechaNueva = conv.activa?.fechaCierre ?? null;
+        const fechaVieja = g.fecha_cierre ? g.fecha_cierre.slice(0, 10) : null;
+        const fechaCambio = !!fechaNueva && fechaNueva !== fechaVieja;
+        relanzada = { total: conv.total, convocatoriaActiva: conv.activa?.convocatoria ?? null, fechaNueva, fechaCambio };
+        if (fechaCambio && fechaNueva) {
+          abierta = +new Date(`${fechaNueva}T23:59:59`) > Date.now();
+          await c.supabase.from("gov_tenders").update({ fecha_cierre: fechaNueva }).eq("id", govId).eq("org_id", c.orgId);
+          if (g.converted_tender_id) {
+            await c.supabase.from("tenders").update({ delivery_date: fechaNueva }).eq("id", g.converted_tender_id).eq("org_id", c.orgId);
+          }
+        }
+      }
+    } catch {
+      /* la búsqueda por número es best-effort: si falla, seguimos sin relanzada */
+    }
+
     let auto: CompetidoresAuto | null = null;
     if (g.converted_tender_id && proponentes.length > 0) {
       auto = await aplicarResultadoAlTender(c.supabase, c.orgId, g.converted_tender_id, proponentes);
     }
-    const data: CompetidoresData = { proponentes, vistaUsada, abierta, at: new Date().toISOString(), auto };
+    const data: CompetidoresData = { proponentes, vistaUsada, abierta, at: new Date().toISOString(), auto, relanzada };
     // Guardar "por siempre" — solo cuando trajo algo (no pisar data buena con
-    // un reintento vacío). Si la migración 0029 falta, la consulta igual sirve.
-    if (proponentes.length > 0) {
+    // un reintento vacío). El relanzamiento también se persiste para no re-buscar.
+    if (proponentes.length > 0 || relanzada) {
       await c.supabase.from("gov_tenders").update({ competidores: data }).eq("id", govId).eq("org_id", c.orgId);
     }
-    if (auto) revalidatePath("/potenciales");
+    if (auto || relanzada?.fechaCambio) revalidatePath("/potenciales");
     return { ok: true, data };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudieron consultar las propuestas" };
@@ -1073,7 +1104,7 @@ async function enrichVinculada(
       const { proponentes, vistaUsada } = await pcProponentes(session, idTipo, String(idFlujos));
       if (proponentes.length > 0) {
         auto = await aplicarResultadoAlTender(supabase, orgId, tender.id, proponentes);
-        const data: CompetidoresData = { proponentes, vistaUsada, abierta: false, at: new Date().toISOString(), auto };
+        const data: CompetidoresData = { proponentes, vistaUsada, abierta: false, at: new Date().toISOString(), auto, relanzada: null };
         await supabase.from("gov_tenders").update({ competidores: data }).eq("id", govId).eq("org_id", orgId);
         if (auto?.monto != null) patch.amount_ref_usd = auto.monto; // el precio real pisa al referencial
         if (auto?.estatus) patch.status = auto.estatus;

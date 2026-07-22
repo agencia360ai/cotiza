@@ -200,6 +200,104 @@ export async function pcBuscarProceso(session: PcSession, numero: string): Promi
   return null;
 }
 
+// TODAS las convocatorias de un número (un proceso desierto se RELANZA como una
+// nueva convocatoria: la búsqueda por número devuelve varias filas con el mismo
+// numProceso). Igual que pcBuscarProceso pero sin quedarse con la primera.
+export async function pcBuscarProcesos(session: PcSession, numero: string): Promise<PcRegistro[]> {
+  const num = numero.trim();
+  if (!num) return [];
+  const target = normNumProceso(num);
+  const filtro = { numProceso: num, idEstado: 0, idTipoProceso: -1, idProvincia: 0 };
+  try {
+    const res = await fetch(`${BASE}/busqueda/proceso-lista`, {
+      method: "POST",
+      headers: baseHeaders(session),
+      body: JSON.stringify({ registrosPorPagina: 50, valorSiguiente: "", filtro }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (res.ok) {
+      const j = (await res.json()) as { result?: { registros?: PcRegistro[] } };
+      const regs = j.result?.registros ?? [];
+      return regs.filter((r) => [r.numProcesoOriginal, r.numProceso].some((n) => normNumProceso(n) === target));
+    }
+  } catch {
+    /* timeout/red */
+  }
+  return [];
+}
+
+// Normaliza una fecha del portal (ISO, "DD-MM-YYYY", "DD/MM/YYYY", con o sin
+// hora) a YYYY-MM-DD; null si no se reconoce.
+export function normalizarFechaPortal(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const dmy = s.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy) {
+    const out = `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
+    return Number.isNaN(new Date(out + "T00:00:00").getTime()) ? null : out;
+  }
+  return null;
+}
+
+// ── Análisis de convocatorias (detectar desierto + relanzamiento) ─────────────
+export type ConvocatoriaInfo = {
+  fechaCierre: string | null; // YYYY-MM-DD normalizada
+  estado: string | null; // texto crudo (Vigente / Desierto / …)
+  convocatoria: number | null;
+  idFlujos: string | null;
+};
+export type ConvocatoriasAnalisis = {
+  activa: ConvocatoriaInfo | null; // la vigente; si no, la de convocatoria/fecha más reciente
+  hayDesierta: boolean;
+  total: number;
+};
+
+// Valores de la columna Estado del portal. NO se incluyen "publicado"/"acto
+// público" (frases de fase, no el estado) para no ganarle al Desierto/Vigente
+// real cuando aparecen juntos en una descripción.
+const RE_ESTADO_VAL = /desierto|desierta|vigente|adjudicad[oa]|cancelad[oa]|cerrado|en evaluaci[oó]n/i;
+function estadoDeRegistro(r: PcRegistro): string | null {
+  // Preferir una clave etiquetada estado/estatus/situación; si no, cualquier string.
+  for (const [k, v] of Object.entries(r)) {
+    if (typeof v === "string" && /estado|estatus|situacion|fase/i.test(k) && RE_ESTADO_VAL.test(v)) return v.trim();
+  }
+  for (const v of Object.values(r)) {
+    if (typeof v === "string") {
+      const m = v.match(RE_ESTADO_VAL);
+      if (m) return m[0];
+    }
+  }
+  return null;
+}
+function convocatoriaDe(r: PcRegistro): number | null {
+  for (const [k, v] of Object.entries(r)) {
+    if (/convocatoria/i.test(k)) {
+      const n = typeof v === "number" ? v : typeof v === "string" ? parseInt(v.replace(/\D/g, ""), 10) : NaN;
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return null;
+}
+
+export function analizarConvocatorias(registros: PcRegistro[]): ConvocatoriasAnalisis {
+  const infos: ConvocatoriaInfo[] = registros.map((r) => ({
+    fechaCierre: normalizarFechaPortal(typeof r.fechaCierre === "string" ? r.fechaCierre : null),
+    estado: estadoDeRegistro(r),
+    convocatoria: convocatoriaDe(r),
+    idFlujos: r.idProcesosContratacionFlujos != null ? String(r.idProcesosContratacionFlujos) : null,
+  }));
+  const hayDesierta = infos.some((i) => !!i.estado && /desiert/i.test(i.estado));
+  // Convocatoria mayor primero; empate → fecha de cierre más reciente.
+  const orden = (a: ConvocatoriaInfo, b: ConvocatoriaInfo) =>
+    (b.convocatoria ?? 0) - (a.convocatoria ?? 0) || (b.fechaCierre ?? "").localeCompare(a.fechaCierre ?? "");
+  const vigentes = infos.filter((i) => !!i.estado && /vigente/i.test(i.estado));
+  const activa = (vigentes.length > 0 ? vigentes.slice().sort(orden) : infos.slice().sort(orden))[0] ?? null;
+  return { activa, hayDesierta, total: infos.length };
+}
+
 // Detalle del pliego (componentes de página). Devuelve el JSON crudo; el
 // precio de referencia se extrae buscando la clave recursivamente (el shape
 // exacto varía por tipo de proceso — patrón adaptativo, se valida en vivo).
