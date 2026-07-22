@@ -11,10 +11,11 @@ import { fetch as undiciFetch, Agent } from "undici";
 const PROTOCOL_VERSION = "2025-06-18";
 
 // El fetch nativo corta la CONEXIÓN a los 10s (UND_ERR_CONNECT_TIMEOUT) — se
-// queda corto si el gateway está despertando de un cold start, que tarda
-// 30-60s. Agent propio con margen de conexión + pool keep-alive: initialize →
-// notifications → tools/call (y todo el loop de financials) reusan el socket.
-const qboAgent = new Agent({ connect: { timeout: 25_000 } });
+// queda corto si el gateway está despertando de un cold start, que en el
+// e2-micro tarda 30-60s. Agent propio con margen de conexión de 45s (por debajo
+// de eso cortábamos antes de que el VM terminara de arrancar) + pool keep-alive:
+// initialize → notifications → tools/call (y el loop de financials) reusan el socket.
+const qboAgent = new Agent({ connect: { timeout: 45_000 } });
 
 export function hasQboConfig(): boolean {
   return !!process.env.QBO_MCP_URL;
@@ -130,7 +131,9 @@ async function rpc(
     headers,
     body: JSON.stringify(payload),
     dispatcher: qboAgent,
-    signal: AbortSignal.timeout(gatewayCaido() ? 8_000 : 40_000),
+    // Total > connect (45s) para no cortar una conexión fría a mitad; con el
+    // breaker abierto, en cambio, se corta a los 8s para fallar rápido.
+    signal: AbortSignal.timeout(gatewayCaido() ? 8_000 : 60_000),
   }).catch((e) => {
     throw new QboTransportError(describeFetchError(e, method));
   });
