@@ -357,7 +357,7 @@ export function CompetidoresCard({
 }: {
   govId: string;
   initial?: CompetidoresData | null;
-  onAuto?: (patch: Partial<{ status: TenderStatus; amount_ref_usd: number }>) => void;
+  onAuto?: (patch: Partial<{ status: TenderStatus; amount_ref_usd: number; delivery_date: string }>) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<CompetidoresData | null>(initial ?? null);
@@ -391,13 +391,12 @@ export function CompetidoresCard({
       if ("error" in r) setError(r.error);
       else {
         setRes(r.data);
-        const auto = r.data.auto;
-        if (auto && (auto.estatus || auto.monto !== null)) {
-          onAuto?.({
-            ...(auto.estatus ? { status: auto.estatus } : {}),
-            ...(auto.monto !== null ? { amount_ref_usd: auto.monto } : {}),
-          });
-        }
+        const { auto, relanzada } = r.data;
+        const patch: Partial<{ status: TenderStatus; amount_ref_usd: number; delivery_date: string }> = {};
+        if (auto?.estatus) patch.status = auto.estatus;
+        if (auto?.monto != null) patch.amount_ref_usd = auto.monto;
+        if (relanzada?.fechaCambio && relanzada.fechaNueva) patch.delivery_date = relanzada.fechaNueva;
+        if (Object.keys(patch).length > 0) onAuto?.(patch);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo consultar");
@@ -407,6 +406,11 @@ export function CompetidoresCard({
   }
 
   const auto = res?.auto ?? null;
+  const relanzada = res?.relanzada ?? null;
+  const fechaLarga = (iso: string) => {
+    const [y, m, d] = iso.split("-");
+    return `${d}/${m}/${y}`;
+  };
   return (
     <div className="rounded-xl border border-slate-100 bg-white p-3.5">
       <div className="flex items-center justify-between gap-2">
@@ -437,6 +441,17 @@ export function CompetidoresCard({
                 ? "Precio real de la oferta de DICEC actualizado"
                 : "Estatus ya estaba al día"}
           {auto.monto !== null ? ` · ${formatMoneyExact(auto.monto)}` : ""}
+        </p>
+      ) : null}
+      {relanzada ? (
+        <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20">
+          ↻ Relanzada — una convocatoria anterior quedó <b>desierta</b>
+          {relanzada.convocatoriaActiva ? ` y se reabrió como convocatoria ${relanzada.convocatoriaActiva}` : " y se volvió a convocar"}.
+          {relanzada.fechaNueva
+            ? relanzada.fechaCambio
+              ? ` Nueva fecha de cierre: ${fechaLarga(relanzada.fechaNueva)} (actualizada).`
+              : ` Fecha de cierre: ${fechaLarga(relanzada.fechaNueva)}.`
+            : ""}
         </p>
       ) : null}
       {res ? (
