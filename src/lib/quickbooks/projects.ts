@@ -1,6 +1,6 @@
 import "server-only";
 import { fetchQboCustomers } from "./customers";
-import { listQboTools, callQboTool, type QboToolResult } from "./mcp";
+import { listQboTools, withQboSession, type QboToolResult } from "./mcp";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
 export type QboProject = {
@@ -119,83 +119,84 @@ export async function fetchProjectFinancials(
   const year = new Date().getFullYear();
   const start = `${year}-01-01`;
   const end = new Date().toISOString().slice(0, 10);
-  const pnlBy = async (extra: Record<string, unknown>): Promise<Pnl | null> => {
-    try {
-      return parsePnl(await callQboTool(tool.name, { params: { start_date: start, end_date: end, ...extra } }));
-    } catch {
-      return null;
-    }
-  };
 
-  // Guardias de contaminación. El gateway, cuando NO puede aislar un proyecto
-  // (vacío, o nombre de parámetro que no reconoce), devuelve un rollup mayor:
-  //   - el P&L de TODA la empresa (bug: $657k en un proyecto sin gastos), o
-  //   - el P&L del CLIENTE PADRE agrupando sus sub-proyectos ($3,038 de Cirion).
-  // Precalculamos ambos baselines; cualquier resultado por-proyecto igual a uno
-  // de ellos se descarta. La guardia del padre aplica si el cliente tiene >1
-  // proyecto EN QBO (todos los años, cerrados incluidos — `siblings`): contarlos
-  // solo dentro del subset abierto+año dejaba la guardia ciega en el caso más
-  // común (un abierto + cerrados previos) y el rollup del padre se aceptaba.
-  const company = await pnlBy({});
-  // Sin baseline de empresa no podemos detectar contaminación company-wide.
-  // Mejor NO devolver nada: el caller conserva los números previos y el próximo
-  // refresh (con baseline) se recupera solo.
-  if (!company) {
-    for (const p of projects) errored.add(p.id);
-    return { fin: out, errored };
-  }
-  const parentCount = new Map<string, number>();
-  for (const p of projects) {
-    if (!p.parentId) continue;
-    const enSubset = (parentCount.get(p.parentId) ?? 0) + 1;
-    parentCount.set(p.parentId, Math.max(enSubset, p.siblings ?? 0));
-  }
-  const guardedParents = Array.from(parentCount.entries()).filter(([, n]) => n > 1).map(([pid]) => pid);
-  const parentPnl = new Map<string, Pnl | null>();
-  for (let i = 0; i < guardedParents.length; i += 3) {
-    await Promise.all(guardedParents.slice(i, i + 3).map(async (pid) => parentPnl.set(pid, await pnlBy({ customer: pid }))));
-    if (i + 3 < guardedParents.length) await new Promise((r) => setTimeout(r, 200));
-  }
-
-  // Un baseline {0,0} no discrimina nada (empresa/cliente sin actividad): un
-  // proyecto legítimamente en {0,0} no debe descartarse por "igualar" ese cero.
-  const esCero = (x: Pnl | null) => !!x && x.income === 0 && x.cost === 0;
-
-  const one = async (p: { id: string; parentId: string | null; siblings?: number }): Promise<void> => {
-    const parentTotal = p.parentId ? parentPnl.get(p.parentId) ?? null : null;
-    const variants: Record<string, unknown>[] = [
-      { params: { start_date: start, end_date: end, customer: p.id } },
-      { params: { start_date: start, end_date: end, customer_id: p.id } },
-      { start_date: start, end_date: end, customer: p.id },
-    ];
-    let algunaParseo = false;
-    for (const variant of variants) {
-      let fin: Pnl | null;
+  // TODAS las llamadas P&L sobre UNA sola sesión (un handshake, no ~8s de
+  // initialize por proyecto) y SECUENCIALES — nada de Promise.all: dos requests
+  // a la vez cuelgan el bridge stateful en hosts chicos (un e2-micro). El caller
+  // ya sólo manda los proyectos ABIERTOS, así que el lote es acotado.
+  await withQboSession(async (call) => {
+    const pnlBy = async (extra: Record<string, unknown>): Promise<Pnl | null> => {
       try {
-        fin = parsePnl(await callQboTool(tool.name, variant));
+        return parsePnl(await call(tool.name, { params: { start_date: start, end_date: end, ...extra } }));
       } catch {
-        continue; // esta variante falló: probar la siguiente
+        return null;
       }
-      if (!fin) continue;
-      algunaParseo = true;
-      // Igual al total de la empresa o del cliente padre → el filtro no aisló
-      // este proyecto. Descartar y probar otra variante.
-      if (!esCero(company) && samePnl(fin, company)) continue;
-      if (!esCero(parentTotal) && samePnl(fin, parentTotal)) continue;
-      // Resultado filtrado real — incluye {0,0} = proyecto sin actividad (correcto).
-      out.set(p.id, fin);
+    };
+
+    // Guardias de contaminación. El gateway, cuando NO puede aislar un proyecto
+    // (vacío, o nombre de parámetro que no reconoce), devuelve un rollup mayor:
+    //   - el P&L de TODA la empresa (bug: $657k en un proyecto sin gastos), o
+    //   - el P&L del CLIENTE PADRE agrupando sus sub-proyectos ($3,038 de Cirion).
+    // Precalculamos ambos baselines; cualquier resultado por-proyecto igual a uno
+    // de ellos se descarta. La guardia del padre aplica si el cliente tiene >1
+    // proyecto EN QBO (todos los años, cerrados incluidos — `siblings`): contarlos
+    // solo dentro del subset abierto+año dejaba la guardia ciega en el caso más
+    // común (un abierto + cerrados previos) y el rollup del padre se aceptaba.
+    const company = await pnlBy({});
+    // Sin baseline de empresa no podemos detectar contaminación company-wide.
+    // Mejor NO devolver nada: el caller conserva los números previos y el próximo
+    // refresh (con baseline) se recupera solo.
+    if (!company) {
+      for (const p of projects) errored.add(p.id);
       return;
     }
-    // Nada parseó (red/gateway caído para este proyecto) → transitorio, no
-    // "descartado por rollup": conservar los números previos.
-    if (!algunaParseo) errored.add(p.id);
-  };
+    const parentCount = new Map<string, number>();
+    for (const p of projects) {
+      if (!p.parentId) continue;
+      const enSubset = (parentCount.get(p.parentId) ?? 0) + 1;
+      parentCount.set(p.parentId, Math.max(enSubset, p.siblings ?? 0));
+    }
+    const guardedParents = Array.from(parentCount.entries()).filter(([, n]) => n > 1).map(([pid]) => pid);
+    const parentPnl = new Map<string, Pnl | null>();
+    for (const pid of guardedParents) parentPnl.set(pid, await pnlBy({ customer: pid }));
 
-  // Concurrencia baja para no saturar el server: de a 3, con respiro entre tandas.
-  for (let i = 0; i < projects.length; i += 3) {
-    await Promise.all(projects.slice(i, i + 3).map(one));
-    if (i + 3 < projects.length) await new Promise((r) => setTimeout(r, 250));
-  }
+    // Un baseline {0,0} no discrimina nada (empresa/cliente sin actividad): un
+    // proyecto legítimamente en {0,0} no debe descartarse por "igualar" ese cero.
+    const esCero = (x: Pnl | null) => !!x && x.income === 0 && x.cost === 0;
+
+    const one = async (p: { id: string; parentId: string | null; siblings?: number }): Promise<void> => {
+      const parentTotal = p.parentId ? parentPnl.get(p.parentId) ?? null : null;
+      const variants: Record<string, unknown>[] = [
+        { params: { start_date: start, end_date: end, customer: p.id } },
+        { params: { start_date: start, end_date: end, customer_id: p.id } },
+        { start_date: start, end_date: end, customer: p.id },
+      ];
+      let algunaParseo = false;
+      for (const variant of variants) {
+        let fin: Pnl | null;
+        try {
+          fin = parsePnl(await call(tool.name, variant));
+        } catch {
+          continue; // esta variante falló: probar la siguiente
+        }
+        if (!fin) continue;
+        algunaParseo = true;
+        // Igual al total de la empresa o del cliente padre → el filtro no aisló
+        // este proyecto. Descartar y probar otra variante.
+        if (!esCero(company) && samePnl(fin, company)) continue;
+        if (!esCero(parentTotal) && samePnl(fin, parentTotal)) continue;
+        // Resultado filtrado real — incluye {0,0} = proyecto sin actividad (correcto).
+        out.set(p.id, fin);
+        return;
+      }
+      // Nada parseó (red/gateway caído para este proyecto) → transitorio, no
+      // "descartado por rollup": conservar los números previos.
+      if (!algunaParseo) errored.add(p.id);
+    };
+
+    for (const p of projects) await one(p); // secuencial, sobre la misma sesión
+  });
+
   return { fin: out, errored };
 }
 

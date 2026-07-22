@@ -155,6 +155,20 @@ async function rpc(
   return { res, sessionId: newSession };
 }
 
+// Handshake MCP: initialize (+ notifications/initialized si el gateway da
+// sesión). Devuelve el Mcp-Session-Id para arrastrarlo en las siguientes llamadas.
+async function handshake(): Promise<string | undefined> {
+  const init = await rpc(
+    "initialize",
+    { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "cotiza", version: "1.0" } },
+    1,
+    undefined,
+  );
+  const session = init.sessionId;
+  if (session) await rpc("notifications/initialized", {}, null, session).catch(() => {});
+  return session;
+}
+
 // Handshake + una llamada. Robusto a gateways con o sin sesión: si initialize
 // devuelve Mcp-Session-Id, mandamos notifications/initialized y lo arrastramos.
 // Los fallos de transporte se reintentan con handshake fresco (la sesión pudo
@@ -166,20 +180,7 @@ async function withSession<T>(
   const intentos = 1 + (gatewayCaido() ? 0 : (opts?.retries ?? 2));
   for (let intento = 1; ; intento++) {
     try {
-      const init = await rpc(
-        "initialize",
-        {
-          protocolVersion: PROTOCOL_VERSION,
-          capabilities: {},
-          clientInfo: { name: "cotiza", version: "1.0" },
-        },
-        1,
-        undefined,
-      );
-      const session = init.sessionId;
-      if (session) {
-        await rpc("notifications/initialized", {}, null, session).catch(() => {});
-      }
+      const session = await handshake();
       const out = await fn(session);
       gatewayCaidoHasta = 0;
       return out;
@@ -198,6 +199,42 @@ async function withSession<T>(
       await new Promise((res) => setTimeout(res, 2_000 * intento));
     }
   }
+}
+
+// Muchas tools/call sobre UNA sola sesión: un solo handshake, no uno por llamada.
+// El `initialize` del gateway de QBO cuesta varios segundos (autentica contra
+// Intuit); pagarlo una vez —en vez de por cada uno de decenas de proyectos—
+// acelera el refresh y evita abrir muchas sesiones a la vez, que en hosts lentos
+// (p.ej. un e2-micro) tumban a supergateway. El caller lo usa SECUENCIAL (nada
+// de Promise.all): dos requests concurrentes sobre el bridge stateful lo cuelgan.
+// Si la sesión muere a mitad del lote, reconstruye el handshake y reintenta.
+export async function withQboSession<T>(
+  fn: (call: (name: string, args?: Record<string, unknown>) => Promise<QboToolResult>) => Promise<T>,
+): Promise<T> {
+  let session = await handshake();
+  const attempt = async (sid: string | undefined, name: string, args: Record<string, unknown>): Promise<QboToolResult> => {
+    const { res } = await rpc("tools/call", { name, arguments: args }, 3, sid);
+    return (res?.result as QboToolResult) ?? {};
+  };
+  const call = async (name: string, args: Record<string, unknown> = {}): Promise<QboToolResult> => {
+    try {
+      return await attempt(session, name, args);
+    } catch (e) {
+      if (!(e instanceof QboTransportError) || gatewayCaido()) throw e;
+      // Sesión caída a mitad del lote: reconstruir la sesión (para esta y las
+      // siguientes) y reintentar UNA vez. Si vuelve a caer, abrir el breaker.
+      try {
+        session = await handshake();
+        return await attempt(session, name, args);
+      } catch (e2) {
+        if (e2 instanceof QboTransportError) gatewayCaidoHasta = Date.now() + 60_000;
+        throw e2;
+      }
+    }
+  };
+  const out = await fn(call);
+  gatewayCaidoHasta = 0;
+  return out;
 }
 
 export type QboTool = { name: string; description?: string; inputSchema?: unknown };
