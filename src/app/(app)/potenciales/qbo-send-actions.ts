@@ -6,7 +6,7 @@ import { getActiveOrgId } from "@/lib/org-context";
 import { hasQboConfig } from "@/lib/quickbooks/mcp";
 import {
   createQboProject,
-  createQboParentCustomer,
+  resolveOrCreateParent,
   suggestFromQbo,
   nextContractNumber,
   type QboParentOption,
@@ -168,10 +168,12 @@ async function createQboAndSyncState(
   let parentCreado: string | null = null;
   if (!parentId && input.newParentName?.trim()) {
     try {
-      const parent = await createQboParentCustomer({ displayName: input.newParentName.trim(), email: null });
+      // Reutiliza el cliente si ya existe en QBO (no duplica); solo lo crea si
+      // de verdad no está.
+      const parent = await resolveOrCreateParent(input.newParentName.trim(), null);
       parentId = parent.id;
       parentName = parent.name;
-      parentCreado = parent.name;
+      parentCreado = parent.created ? parent.name : null;
     } catch (e) {
       return { error: e instanceof Error ? e.message : "QBO no pudo crear el cliente nuevo" };
     }
