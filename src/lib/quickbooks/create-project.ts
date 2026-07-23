@@ -209,6 +209,47 @@ export async function createQboParentCustomer(input: { displayName: string; emai
   return createQboCustomer({ displayName: input.displayName.trim(), parentId: null, email: input.email, notes: null });
 }
 
+// Clave de comparación laxa: sin acentos, sin puntuación, minúsculas — para
+// emparejar el nombre estandarizado ("Smithsonian Tropical Research Institute")
+// con su variante en QBO aunque lleve sufijos o siglas ("… (STRI)").
+const matchKey = (s: string) =>
+  s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+// Busca un cliente PADRE (primer nivel, no proyecto) ya existente por nombre
+// igual o muy parecido. Evita duplicar el cliente cuando el diálogo cae en
+// "cliente nuevo" (p.ej. QBO no respondió al sugerir la lista y no se preseleccionó).
+async function findParentByName(displayName: string): Promise<{ id: string; name: string } | null> {
+  try {
+    const { customers } = await fetchQboCustomers();
+    const target = matchKey(displayName);
+    if (target.length < 3) return null;
+    const parents = customers.filter((c) => !c.isProject && !c.parentId);
+    const exact = parents.find((c) => matchKey(c.displayName) === target);
+    if (exact) return { id: exact.id, name: exact.displayName };
+    // Contención fuerte (≥6 chars a cada lado) para tolerar sufijos/siglas sin
+    // emparejar nombres cortos por accidente.
+    const contained = parents.find((c) => {
+      const n = matchKey(c.displayName);
+      return n.length >= 6 && target.length >= 6 && (n.includes(target) || target.includes(n));
+    });
+    return contained ? { id: contained.id, name: contained.displayName } : null;
+  } catch {
+    return null; // sin lista, que el caller siga el flujo normal (crear)
+  }
+}
+
+// Resuelve el cliente padre del proyecto: si YA existe en QBO lo REUTILIZA (no
+// duplica); solo lo crea si de verdad no está. `created` distingue ambos casos.
+export async function resolveOrCreateParent(
+  displayName: string,
+  email: string | null,
+): Promise<{ id: string; name: string; created: boolean }> {
+  const found = await findParentByName(displayName.trim());
+  if (found) return { ...found, created: false };
+  const nuevo = await createQboParentCustomer({ displayName, email });
+  return { ...nuevo, created: true };
+}
+
 // ── Próximo número de contrato (DC26-08, DM26-15…) ───────────────────────────
 // El correlativo REAL vive en los nombres de los proyectos de QBO. Cubre los
 // dos formatos que usa DICEC: "DC26-07 …" y "DC-2607 …".
