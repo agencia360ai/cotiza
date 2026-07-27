@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
-import { fechaLarga, fmtBal, letterTotals, numeroCarta, type LetterData } from "@/lib/quotes/letter";
+import { fechaLarga, fmtBal, letterTotals, resolveTextos, type LetterData } from "@/lib/quotes/letter";
 import { CartaControls } from "./carta-controls";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +53,19 @@ export default async function CartaPage({ params }: { params: Promise<{ id: stri
     };
   const cliente = q.client?.name ?? q.client_name ?? "Cliente";
   const { subtotal, itbms, total } = letterTotals(letter);
+  const T = resolveTextos(letter, { quoteNumber: q.quote_number });
+
+  // Firma seleccionada (best-effort: sin la 0036 o si se borró, va sin firma).
+  let firmaUrl: string | null = null;
+  if (letter.firma?.id) {
+    const { data: sig } = (await supabase
+      .from("quote_signatures")
+      .select("data_url")
+      .eq("id", letter.firma.id)
+      .eq("org_id", orgId)
+      .maybeSingle()) as { data: { data_url: string } | null };
+    firmaUrl = sig?.data_url ?? null;
+  }
 
   return (
     <div className="min-h-screen bg-slate-200 px-4 py-6 print:bg-white print:p-0">
@@ -85,26 +98,34 @@ export default async function CartaPage({ params }: { params: Promise<{ id: stri
                 <span className="font-normal">{letter.ubicacion}</span>
               </>
             ) : null}
-            <br />
-            <span className="font-normal">Presente</span>
+            {T.saludo ? (
+              <>
+                <br />
+                <span className="font-normal">{T.saludo}</span>
+              </>
+            ) : null}
           </div>
 
-          <div className="mt-5">
-            <u>Referencia</u>: <b>Cotización {numeroCarta(q.quote_number)}.</b>
-          </div>
+          {T.ref_label || T.ref_texto ? (
+            <div className="mt-5">
+              {T.ref_label ? (
+                <>
+                  <u>{T.ref_label}</u>:{" "}
+                </>
+              ) : null}
+              <b>{T.ref_texto}</b>
+            </div>
+          ) : null}
 
-          <p className="mt-4">
-            Por este medio nos complace presentarles la cotización correspondiente a los{" "}
-            {letter.tipo === "realizados" ? "trabajos realizados" : "trabajos a realizar"}:
-          </p>
+          {T.intro ? <p className="mt-4">{T.intro}</p> : null}
 
           <table className="mt-4 w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b-2 border-slate-800 text-left">
-                <th className="w-[0.7in] py-1.5 pr-2 font-semibold">Cant.</th>
-                <th className="py-1.5 pr-2 font-semibold">Descripción</th>
-                <th className="w-[1.1in] py-1.5 pr-2 text-right font-semibold">Precio</th>
-                <th className="w-[1.1in] py-1.5 text-right font-semibold">Total</th>
+                <th className="w-[0.7in] py-1.5 pr-2 font-semibold">{T.th_cant}</th>
+                <th className="py-1.5 pr-2 font-semibold">{T.th_desc}</th>
+                <th className="w-[1.1in] py-1.5 pr-2 text-right font-semibold">{T.th_precio}</th>
+                <th className="w-[1.1in] py-1.5 text-right font-semibold">{T.th_total}</th>
               </tr>
             </thead>
             <tbody>
@@ -121,30 +142,30 @@ export default async function CartaPage({ params }: { params: Promise<{ id: stri
 
           <div className="ml-auto mt-3 w-[3.2in] text-[12.5px]">
             <div className="flex justify-between py-0.5">
-              <span>Subtotal</span>
+              <span>{T.lbl_subtotal}</span>
               <span className="tabular-nums">B/. {fmtBal(subtotal)}</span>
             </div>
             {letter.aplica_itbms ? (
               <div className="flex justify-between py-0.5">
-                <span>ITBMS ({letter.tasa}%)</span>
+                <span>{T.lbl_itbms}</span>
                 <span className="tabular-nums">B/. {fmtBal(itbms)}</span>
               </div>
             ) : null}
             <div className="flex justify-between border-t-2 border-slate-800 py-1 font-semibold">
-              <span>Total</span>
+              <span>{T.lbl_total}</span>
               <span className="tabular-nums">B/. {fmtBal(total)}</span>
             </div>
           </div>
 
-          <p className="mt-6">
-            Nuestra oferta es por: <i className="font-semibold">B/. {fmtBal(total)}</i>
-          </p>
+          {T.oferta ? (
+            <p className="mt-6">
+              {T.oferta} <i className="font-semibold">B/. {fmtBal(total)}</i>
+            </p>
+          ) : null}
 
-          {(letter.validez && letter.validez > 0) || letter.condiciones ? (
+          {T.validez_texto || letter.condiciones ? (
             <div className="mt-3 space-y-1">
-              {letter.validez && letter.validez > 0 ? (
-                <div>Esta cotización tiene una validez de {letter.validez} días.</div>
-              ) : null}
+              {T.validez_texto ? <div>{T.validez_texto}</div> : null}
               {letter.condiciones
                 ? letter.condiciones.split("\n").map((ln, i) => (ln.trim() ? <div key={i}>{ln}</div> : null))
                 : null}
@@ -155,12 +176,32 @@ export default async function CartaPage({ params }: { params: Promise<{ id: stri
             <div className="mt-14">
               <div className="w-[2.6in] border-t border-slate-800 pt-1">
                 {letter.elaborado}
-                <br />
-                DICEC, INC
+                {T.empresa ? (
+                  <>
+                    <br />
+                    {T.empresa}
+                  </>
+                ) : null}
               </div>
             </div>
           ) : null}
         </div>
+
+        {/* Firma: posicionada libremente en fracciones de la hoja (mismo
+            sistema que el PDF, por eso coinciden). */}
+        {letter.firma && firmaUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={firmaUrl}
+            alt="Firma"
+            className="pointer-events-none absolute"
+            style={{
+              left: `${letter.firma.x * 100}%`,
+              top: `${letter.firma.y * 100}%`,
+              width: `${letter.firma.w * 100}%`,
+            }}
+          />
+        ) : null}
       </div>
     </div>
   );
