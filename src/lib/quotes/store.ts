@@ -335,7 +335,21 @@ export async function publishQuote(db: Db, orgId: string, quoteId: string): Prom
     };
   const cliente = q.client?.name ?? q.client_name ?? "Cliente";
 
-  const pdf = await renderQuotePdf({ quoteNumber: q.quote_number, cliente, letter });
+  // Firma seleccionada (si la hay): los bytes viven en quote_signatures; la
+  // posición/tamaño viajan en letter.firma. Best-effort: si la migración 0036
+  // falta o la firma se borró, la carta sale sin firma en vez de fallar.
+  let firmaDataUrl: string | null = null;
+  if (letter.firma?.id) {
+    const { data: sig } = (await db
+      .from("quote_signatures")
+      .select("data_url")
+      .eq("id", letter.firma.id)
+      .eq("org_id", orgId)
+      .maybeSingle()) as { data: { data_url: string } | null };
+    firmaDataUrl = sig?.data_url ?? null;
+  }
+
+  const pdf = await renderQuotePdf({ quoteNumber: q.quote_number, cliente, letter, firmaDataUrl });
 
   let desc = q.description ? sanitizeFileName(q.description) : "";
   if (desc.length > 60) desc = desc.slice(0, 57).trim() + "...";
