@@ -164,6 +164,10 @@ export async function fetchProjectFinancials(
     // proyecto legítimamente en {0,0} no debe descartarse por "igualar" ese cero.
     const esCero = (x: Pnl | null) => !!x && x.income === 0 && x.cost === 0;
 
+    // Proyectos cuyo P&L igualó al de su cliente en TODAS las variantes. No se
+    // decide en el momento: ver abajo por qué hace falta el lote completo.
+    const igualaronAlPadre: { id: string; parentId: string; pnl: Pnl }[] = [];
+
     const one = async (p: { id: string; parentId: string | null; siblings?: number }): Promise<void> => {
       const parentTotal = p.parentId ? parentPnl.get(p.parentId) ?? null : null;
       const variants: Record<string, unknown>[] = [
@@ -172,6 +176,7 @@ export async function fetchProjectFinancials(
         { start_date: start, end_date: end, customer: p.id },
       ];
       let algunaParseo = false;
+      let comoElPadre: Pnl | null = null;
       for (const variant of variants) {
         let fin: Pnl | null;
         try {
@@ -181,12 +186,22 @@ export async function fetchProjectFinancials(
         }
         if (!fin) continue;
         algunaParseo = true;
-        // Igual al total de la empresa o del cliente padre → el filtro no aisló
-        // este proyecto. Descartar y probar otra variante.
+        // Igual al total de la empresa → el filtro no aisló nada. Descartar.
         if (!esCero(company) && samePnl(fin, company)) continue;
-        if (!esCero(parentTotal) && samePnl(fin, parentTotal)) continue;
+        // Igual al total del cliente: AMBIGUO. Puede ser el rollup del padre o
+        // que este proyecto sea toda la actividad del cliente en el período.
+        // Se guarda como sospechoso y se sigue probando variantes por si otra
+        // sí aísla; si ninguna lo hace, decide el desempate de más abajo.
+        if (!esCero(parentTotal) && samePnl(fin, parentTotal)) {
+          comoElPadre = fin;
+          continue;
+        }
         // Resultado filtrado real — incluye {0,0} = proyecto sin actividad (correcto).
         out.set(p.id, fin);
+        return;
+      }
+      if (comoElPadre && p.parentId) {
+        igualaronAlPadre.push({ id: p.id, parentId: p.parentId, pnl: comoElPadre });
         return;
       }
       // Nada parseó (red/gateway caído para este proyecto) → transitorio, no
@@ -195,6 +210,23 @@ export async function fetchProjectFinancials(
     };
 
     for (const p of projects) await one(p); // secuencial, sobre la misma sesión
+
+    // Desempate del caso ambiguo, ya con el lote completo: ¿CUÁNTOS proyectos
+    // del mismo cliente igualaron su total?
+    //   - Varios → el filtro no aisló: todos recibieron el mismo rollup del
+    //     padre. Contaminación real: se descartan.
+    //   - Uno solo → ese proyecto ES toda la actividad del cliente en el
+    //     período (lo normal en clientes de un solo proyecto activo), así que el
+    //     número es correcto y antes se perdía: se guarda.
+    const porPadre = new Map<string, typeof igualaronAlPadre>();
+    for (const s of igualaronAlPadre) {
+      const l = porPadre.get(s.parentId) ?? [];
+      l.push(s);
+      porPadre.set(s.parentId, l);
+    }
+    for (const [, lista] of porPadre) {
+      if (lista.length === 1) out.set(lista[0].id, lista[0].pnl);
+    }
   });
 
   return { fin: out, errored };
