@@ -19,8 +19,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectDates, type QboProjectsResult } from "./qbo-actions";
-import type { QboProject, ProjectBizStatus } from "@/lib/quickbooks/projects";
+import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, type QboProjectsResult } from "./qbo-actions";
+import type { QboProject, ProjectBizStatus, PnlDiagnostico } from "@/lib/quickbooks/projects";
 import { effectiveDates, overlapFraction, type DateRange } from "@/lib/quickbooks/prorate";
 
 // Identidad visual por rubro (misma paleta que el donut del Inicio):
@@ -760,6 +760,70 @@ function DatesEditor({
   );
 }
 
+// "sin datos de QBO" puede venir de causas muy distintas (el gateway no aisló el
+// P&L, la respuesta no parseó, el proyecto está cerrado, el gateway está caído)
+// y desde afuera se ven igual. Esto pregunta y muestra qué contestó QBO.
+function PorQueSinDatos({ qbJobId, cerrado }: { qbJobId: string; cerrado: boolean }) {
+  const [abierto, setAbierto] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [diag, setDiag] = useState<PnlDiagnostico | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function consultar() {
+    setAbierto(true);
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await diagnosticarProyecto(qbJobId, cerrado);
+      if (r.ok) setDiag(r.data);
+      else setError(r.error);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo consultar");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const money = (p: { income: number; cost: number } | null) =>
+    p ? `cobro ${bal(p.income)} · gasto ${bal(p.cost)}` : "sin respuesta";
+
+  if (!abierto) {
+    return (
+      <button type="button" onClick={() => void consultar()} className="mt-0.5 text-[10px] font-semibold text-slate-400 hover:text-slate-600">
+        ¿por qué?
+      </button>
+    );
+  }
+  return (
+    <div className="mt-1 rounded-lg bg-slate-50 p-2 text-left ring-1 ring-slate-200">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Diagnóstico</span>
+        <button type="button" onClick={() => setAbierto(false)} className="text-[10px] font-semibold text-slate-400 hover:text-slate-600">
+          cerrar
+        </button>
+      </div>
+      {busy ? <p className="mt-1 text-[10px] text-slate-400">Consultando QBO…</p> : null}
+      {error ? <p className="mt-1 rounded bg-red-50 px-1.5 py-1 text-[10px] text-red-700">{error}</p> : null}
+      {diag ? (
+        <div className="mt-1 space-y-1 text-[10px] leading-snug text-slate-600">
+          <p className="font-semibold text-slate-700">{diag.conclusion}</p>
+          <p>
+            Empresa: {money(diag.empresa)} · Cliente: {money(diag.cliente)} · {diag.proyecto.siblings} proyecto(s) del mismo cliente
+          </p>
+          {diag.variantes.map((v, i) => (
+            <p key={i} className="truncate" title={`${v.args} → ${v.error ?? ""}`}>
+              <span className={cn("font-semibold", v.veredicto.startsWith("ACEPTADA") ? "text-emerald-700" : "text-amber-700")}>
+                {v.veredicto}
+              </span>
+              {v.pnl ? ` — ${money(v.pnl)}` : v.error ? ` — ${v.error.slice(0, 60)}` : ""}
+            </p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ProjectRow({
   e,
   rangeActive,
@@ -856,7 +920,10 @@ function ProjectRow({
               </div>
             </>
           ) : (
-            <p className="text-right text-[11px] italic text-slate-300">{cerrado ? "—" : "sin datos de QBO"}</p>
+            <div className="text-right">
+              <p className="text-[11px] italic text-slate-300">{cerrado ? "—" : "sin datos de QBO"}</p>
+              <PorQueSinDatos qbJobId={p.id} cerrado={cerrado} />
+            </div>
           )}
         </div>
 

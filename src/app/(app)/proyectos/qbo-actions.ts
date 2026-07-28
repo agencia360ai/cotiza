@@ -3,7 +3,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import { hasQboConfig } from "@/lib/quickbooks/mcp";
-import { fetchQboProjectsList, fetchProjectFinancials, marginOf, type QboProject, type ProjectBizStatus } from "@/lib/quickbooks/projects";
+import {
+  fetchQboProjectsList,
+  fetchProjectFinancials,
+  diagnosticarPnl,
+  marginOf,
+  type QboProject,
+  type ProjectBizStatus,
+  type PnlDiagnostico,
+} from "@/lib/quickbooks/projects";
 
 export type QboProjectsResult =
   | { ok: true; projects: QboProject[]; financialsOk: boolean; year: number; syncedAt: number | null }
@@ -346,4 +354,27 @@ export async function setProjectDates(
   if (isMissingColumn(error)) return { ok: false, error: "Faltan las migraciones 0022/0023 — corre el SQL y reintenta" };
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+// ── ¿Por qué este proyecto no trae números? ──────────────────────────────────
+// Corre las mismas llamadas que el refresh para UN proyecto y devuelve lo que
+// contestó QBO en cada paso. Sin esto, "sin datos de QBO" puede venir de cuatro
+// causas distintas que desde afuera se ven igual.
+export async function diagnosticarProyecto(
+  qbJobId: string,
+  cerrado: boolean,
+): Promise<{ ok: true; data: PnlDiagnostico } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Sesión expirada" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { ok: false, error: "Sin organización" };
+  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada" };
+  try {
+    const r = await diagnosticarPnl(qbJobId, cerrado);
+    if ("error" in r) return { ok: false, error: r.error };
+    return { ok: true, data: r };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "No se pudo diagnosticar" };
+  }
 }
