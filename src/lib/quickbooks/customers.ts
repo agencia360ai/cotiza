@@ -171,6 +171,15 @@ function nested(o: Record<string, unknown>, a: string, b: string): string | null
   return x ? str(x[b]) : null;
 }
 
+// Un proyecto de DICEC SIEMPRE se llama con el correlativo "DM26-16" / "DC-2607".
+// Sirve de respaldo para reconocerlo cuando QBO no expone la bandera: el campo
+// IsProject solo viaja si la API se llama con un minorVersion suficiente, así que
+// un proyecto creado en la sección Projects puede llegar SIN IsProject ni Job y
+// quedaría invisible (y peor: fuera del cálculo del próximo correlativo, que
+// entonces repetiría un número). Exige dígitos DESPUÉS del año para no confundir
+// con un cliente que casualmente empiece por esas letras.
+const RE_CORRELATIVO = /\bD[CMSV]\s*-?\s*\d{2}\s*-\s*\d/i;
+
 function mapCustomer(raw: Record<string, unknown>): QboCustomer | null {
   const id = str(raw.Id) ?? str(raw.id);
   if (!id) return null;
@@ -185,7 +194,12 @@ function mapCustomer(raw: Record<string, unknown>): QboCustomer | null {
   const family = str(raw.FamilyName) ?? str(raw.familyName);
   const contactName = [given, family].filter(Boolean).join(" ") || null;
   const parentId = nested(raw, "ParentRef", "value") ?? nested(raw, "parentRef", "value") ?? str(raw.ParentRef) ?? str(raw.parentId);
-  const isProject = Boolean(raw.IsProject ?? raw.isProject ?? raw.Job ?? raw.job ?? false);
+  const fullyQualifiedName = str(raw.FullyQualifiedName) ?? str(raw.fullyQualifiedName);
+  // Bandera de QBO y, si no viene, el nombre: un sub-cliente llamado con el
+  // correlativo ("DM26-16 …") es un proyecto, no una sucursal.
+  const nombreHoja = fullyQualifiedName?.includes(":") ? fullyQualifiedName.split(":").pop()!.trim() : displayName;
+  const isProject =
+    Boolean(raw.IsProject ?? raw.isProject ?? raw.Job ?? raw.job ?? false) || (!!parentId && RE_CORRELATIVO.test(nombreHoja));
   const activeRaw = raw.Active ?? raw.active;
   return {
     id,
@@ -198,7 +212,7 @@ function mapCustomer(raw: Record<string, unknown>): QboCustomer | null {
     active: activeRaw === undefined ? true : Boolean(activeRaw),
     parentId: parentId ?? null,
     isProject,
-    fullyQualifiedName: str(raw.FullyQualifiedName) ?? str(raw.fullyQualifiedName),
+    fullyQualifiedName,
   };
 }
 
