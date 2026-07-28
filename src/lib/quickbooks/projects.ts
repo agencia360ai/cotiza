@@ -234,6 +234,99 @@ export async function fetchProjectFinancials(
 
 type PnlRow = { group?: string; Summary?: { ColData?: { value?: string }[] }; Rows?: { Row?: PnlRow[] } };
 
+// ── Diagnóstico de UN proyecto ───────────────────────────────────────────────
+// Cuando un proyecto sale "sin datos de QBO" hay varias razones posibles
+// (el gateway no aisló el P&L, la respuesta no parseó, el proyecto está
+// cerrado…) y desde afuera se ven igual. Esto corre las MISMAS llamadas que el
+// refresh para un solo proyecto y devuelve lo que contestó QBO en cada paso,
+// para no tener que adivinar.
+export type PnlDiagnostico = {
+  proyecto: { id: string; nombre: string; parentId: string | null; siblings: number; cerrado: boolean };
+  empresa: Pnl | null;
+  cliente: Pnl | null;
+  variantes: { args: string; pnl: Pnl | null; error: string | null; veredicto: string }[];
+  conclusion: string;
+};
+
+export async function diagnosticarPnl(
+  qbJobId: string,
+  cerrado: boolean,
+): Promise<PnlDiagnostico | { error: string }> {
+  const lista = await fetchQboProjectsList();
+  const p = lista.find((x) => x.id === qbJobId);
+  if (!p) return { error: `El proyecto ${qbJobId} no aparece en la lista de QBO (¿lo reconoce como Project?).` };
+
+  const tools = await listQboTools();
+  const tool = tools.find((t) => /profit.*loss|profit_loss|\bp_l\b|pnl/i.test(t.name));
+  if (!tool) return { error: "El gateway no expone un tool de Profit & Loss." };
+
+  const year = new Date().getFullYear();
+  const start = `${year}-01-01`;
+  const end = new Date().toISOString().slice(0, 10);
+
+  return withQboSession(async (call) => {
+    const pnlDe = async (extra: Record<string, unknown>) => {
+      try {
+        return parsePnl(await call(tool.name, { params: { start_date: start, end_date: end, ...extra } }));
+      } catch {
+        return null;
+      }
+    };
+    const empresa = await pnlDe({});
+    const cliente = p.parentId ? await pnlDe({ customer: p.parentId }) : null;
+    const esCero = (x: Pnl | null) => !!x && x.income === 0 && x.cost === 0;
+
+    const variants: Record<string, unknown>[] = [
+      { params: { start_date: start, end_date: end, customer: p.id } },
+      { params: { start_date: start, end_date: end, customer_id: p.id } },
+      { start_date: start, end_date: end, customer: p.id },
+    ];
+    const out: PnlDiagnostico["variantes"] = [];
+    let aceptada = false;
+    let igualóAlCliente = false;
+    for (const v of variants) {
+      let pnl: Pnl | null = null;
+      let error: string | null = null;
+      try {
+        pnl = parsePnl(await call(tool.name, v));
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+      }
+      let veredicto: string;
+      if (error) veredicto = "la llamada falló";
+      else if (!pnl) veredicto = "la respuesta no se pudo interpretar";
+      else if (!esCero(empresa) && samePnl(pnl, empresa)) veredicto = "DESCARTADA — igual al total de la empresa";
+      else if (!esCero(cliente) && samePnl(pnl, cliente)) {
+        veredicto = "igual al total del cliente (ambiguo)";
+        igualóAlCliente = true;
+      } else {
+        veredicto = "ACEPTADA";
+        aceptada = true;
+      }
+      out.push({ args: JSON.stringify(v), pnl, error, veredicto });
+      if (aceptada) break;
+    }
+
+    const conclusion = cerrado
+      ? "El proyecto está marcado CERRADO: el refresh no le consulta números a QBO. Cámbialo a Activo y actualiza."
+      : aceptada
+        ? "Alguna variante dio un P&L válido: al darle Actualizar debería mostrar números."
+        : igualóAlCliente
+          ? "Todas las variantes dieron el mismo total que el cliente. Si es el único proyecto del cliente con actividad, el número es correcto y ahora se acepta."
+          : !empresa
+            ? "No se pudo leer el P&L de la empresa (gateway caído o lento): sin ese baseline el refresh conserva los números previos."
+            : "Ninguna variante devolvió un P&L aislado para este proyecto.";
+
+    return {
+      proyecto: { id: p.id, nombre: p.fullName, parentId: p.parentId, siblings: p.siblings, cerrado },
+      empresa,
+      cliente,
+      variantes: out,
+      conclusion,
+    };
+  });
+}
+
 // Parser del ProfitAndLoss de QBO (un solo customer/project). Toma los totales
 // de las secciones de nivel superior; si hay NetIncome, cost = income - net.
 function parsePnl(result: QboToolResult): { income: number; cost: number } | null {
