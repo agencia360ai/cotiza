@@ -10,6 +10,90 @@ import { createSignature, deleteSignature, listSignatures, saveLetterEdits, type
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
+// ── Preparar una firma escaneada ────────────────────────────────────────────
+// Una firma casi siempre se escanea o fotografía sobre papel BLANCO. Puesta tal
+// cual sobre la carta, taparía con un rectángulo blanco el membrete y el texto
+// de abajo. Así que al subirla: se vuelve transparente el fondo claro y se
+// recorta el margen sobrante, para que el recuadro que se arrastra sea del
+// tamaño de la tinta y no del papel.
+//
+// Si el PNG YA viene con transparencia (firma recortada a mano), no se toca el
+// fondo — solo se recorta el margen.
+const LUM_FONDO = 236; // de aquí para arriba es papel → transparente
+const LUM_TINTA = 150; // de aquí para abajo es tinta → opaco (en medio, degradado)
+const LADO_MAX = 1200; // px: una firma no necesita más y mantiene liviano el data URL
+
+async function prepararFirma(file: File): Promise<string> {
+  const src = await new Promise<string>((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result));
+    fr.onerror = () => rej(new Error("No se pudo leer el archivo"));
+    fr.readAsDataURL(file);
+  });
+  const img = await new Promise<HTMLImageElement>((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => rej(new Error("La imagen no se pudo abrir"));
+    i.src = src;
+  });
+
+  const cv = document.createElement("canvas");
+  cv.width = img.naturalWidth;
+  cv.height = img.naturalHeight;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return src; // sin canvas: se sube tal cual
+  ctx.drawImage(img, 0, 0);
+
+  let px: ImageData;
+  try {
+    px = ctx.getImageData(0, 0, cv.width, cv.height);
+  } catch {
+    return src; // imagen "tainted": se sube tal cual
+  }
+  const d = px.data;
+
+  const yaTransparente = (() => {
+    for (let i = 3; i < d.length; i += 4) if (d[i] < 250) return true;
+    return false;
+  })();
+
+  if (!yaTransparente) {
+    for (let i = 0; i < d.length; i += 4) {
+      const lum = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+      if (lum >= LUM_FONDO) d[i + 3] = 0;
+      else if (lum > LUM_TINTA) d[i + 3] = Math.round((255 * (LUM_FONDO - lum)) / (LUM_FONDO - LUM_TINTA));
+    }
+    ctx.putImageData(px, 0, 0);
+  }
+
+  // Recorte al área con tinta (+ un pelo de margen).
+  let x0 = cv.width, y0 = cv.height, x1 = -1, y1 = -1;
+  for (let y = 0; y < cv.height; y++) {
+    for (let x = 0; x < cv.width; x++) {
+      if (d[(y * cv.width + x) * 4 + 3] > 8) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 < x0 || y1 < y0) return cv.toDataURL("image/png"); // todo transparente: no recortar
+
+  const pad = Math.round(Math.max(cv.width, cv.height) * 0.01);
+  x0 = Math.max(0, x0 - pad);
+  y0 = Math.max(0, y0 - pad);
+  const w = Math.min(cv.width - x0, x1 - x0 + 1 + pad * 2);
+  const h = Math.min(cv.height - y0, y1 - y0 + 1 + pad * 2);
+
+  const escala = Math.min(1, LADO_MAX / Math.max(w, h));
+  const out = document.createElement("canvas");
+  out.width = Math.max(1, Math.round(w * escala));
+  out.height = Math.max(1, Math.round(h * escala));
+  out.getContext("2d")?.drawImage(cv, x0, y0, w, h, 0, 0, out.width, out.height);
+  return out.toDataURL("image/png");
+}
+
 // Texto editable in situ. El valor se escribe al nodo SOLO cuando cambia desde
 // afuera (no en cada tecla), así el cursor no salta mientras se escribe; lo que
 // quedó se lee al salir del campo.
@@ -436,12 +520,8 @@ function PanelFirma({
     setSubiendo(true);
     setError(null);
     try {
-      const dataUrl = await new Promise<string>((res, rej) => {
-        const fr = new FileReader();
-        fr.onload = () => res(String(fr.result));
-        fr.onerror = () => rej(new Error("No se pudo leer el archivo"));
-        fr.readAsDataURL(file);
-      });
+      // Quita el fondo blanco del escaneo y recorta el margen antes de guardar.
+      const dataUrl = await prepararFirma(file);
       const label = file.name.replace(/\.[^.]+$/, "").slice(0, 60) || "Firma";
       const r = await createSignature(label, dataUrl);
       if ("error" in r) setError(r.error);
@@ -517,7 +597,8 @@ function PanelFirma({
         <p className="mt-2 text-[11px] text-slate-400">Cargando firmas…</p>
       ) : sigs.length === 0 ? (
         <p className="mt-2 text-[11px] text-slate-400">
-          Todavía no hay firmas guardadas. Sube un PNG (idealmente con fondo transparente) y queda disponible para todas las cotizaciones.
+          Todavía no hay firmas guardadas. Sube una foto o escaneo de la firma (PNG o JPG): se le quita el fondo blanco y queda guardada para
+          usarla en cualquier cotización.
         </p>
       ) : (
         <div className="mt-2 flex flex-wrap gap-2">
