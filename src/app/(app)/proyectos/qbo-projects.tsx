@@ -16,10 +16,11 @@ import {
   Package,
   Briefcase,
   ChevronDown,
+  FileText,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, type QboProjectsResult } from "./qbo-actions";
+import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, type QboProjectsResult } from "./qbo-actions";
 import type { QboProject, ProjectBizStatus, PnlDiagnostico } from "@/lib/quickbooks/projects";
 import { effectiveDates, overlapFraction, type DateRange } from "@/lib/quickbooks/prorate";
 
@@ -760,6 +761,71 @@ function DatesEditor({
   );
 }
 
+// Cotización de origen del proyecto. Se llena sola al enviar desde Cotizaciones;
+// editable a mano para los proyectos creados directo en QBO.
+function CotizacionChip({ qbJobId, value }: { qbJobId: string; value: string | null }) {
+  const [txt, setTxt] = useState(value ?? "");
+  const [editando, setEditando] = useState(false);
+  const [guardado, setGuardado] = useState(value);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    setTxt(value ?? "");
+    setGuardado(value);
+  }, [value]);
+
+  async function guardar() {
+    const v = txt.trim() ? txt.trim().toUpperCase() : null;
+    setEditando(false);
+    if (v === guardado) return;
+    const r = await setProjectQuoteNo(qbJobId, v);
+    if (r.ok) {
+      setGuardado(v);
+      setErr(null);
+    } else {
+      setErr(r.error);
+      setTxt(guardado ?? "");
+    }
+  }
+
+  if (editando) {
+    return (
+      <input
+        autoFocus
+        value={txt}
+        onChange={(ev) => setTxt(ev.target.value)}
+        onBlur={() => void guardar()}
+        onKeyDown={(ev) => {
+          if (ev.key === "Enter") void guardar();
+          if (ev.key === "Escape") {
+            setTxt(guardado ?? "");
+            setEditando(false);
+          }
+        }}
+        placeholder="COT DC 26-141"
+        className="w-32 rounded-md border border-slate-300 px-1.5 py-0.5 text-[10px] uppercase outline-none focus:border-slate-900"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setEditando(true)}
+      title={err ?? (guardado ? `Cotización ${guardado}` : "Sin cotización — clic para asignarla")}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset transition-colors",
+        err
+          ? "bg-red-50 text-red-700 ring-red-600/20"
+          : guardado
+            ? "bg-indigo-50 text-indigo-700 ring-indigo-600/20 hover:bg-indigo-100"
+            : "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100",
+      )}
+    >
+      <FileText className="size-3" />
+      {guardado ?? "cotización"}
+    </button>
+  );
+}
+
 // "sin datos de QBO" puede venir de causas muy distintas (el gateway no aisló el
 // P&L, la respuesta no parseó, el proyecto está cerrado, el gateway está caído)
 // y desde afuera se ven igual. Esto pregunta y muestra qué contestó QBO.
@@ -885,6 +951,7 @@ function ProjectRow({
               {e.eff ? `${fmtCorta(e.eff.start)} → ${fmtCorta(e.eff.end)}` : "fechas"}
               {e.eff?.asumidas ? "*" : ""}
             </button>
+            <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
           </p>
         </div>
 

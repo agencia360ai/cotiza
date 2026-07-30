@@ -143,6 +143,7 @@ export async function suggestQboProjectSetupForTender(tenderId: string): Promise
 
 export type QboSendInput = {
   numero: string;
+  numeroCotizacion?: string | null; // para el cruce proyecto → cotización (0037)
   nombre: string;
   // Cliente existente en QBO… (parentId+parentName)
   parentId: string | null;
@@ -211,8 +212,13 @@ async function createQboAndSyncState(
     end_date: input.endDate || null,
     notes: input.notas?.trim() || null,
     contract_total: contractTotal,
+    quote_number: input.numeroCotizacion ?? null, // cruce inverso (0037)
   };
   let up = await c.supabase.from("qbo_project_state").upsert(stateRow, { onConflict: "org_id,qb_job_id" });
+  if (isMissingColumn(up.error)) {
+    delete stateRow.quote_number; // 0037 pendiente
+    up = await c.supabase.from("qbo_project_state").upsert(stateRow, { onConflict: "org_id,qb_job_id" });
+  }
   if (isMissingColumn(up.error)) {
     delete stateRow.start_date;
     delete stateRow.end_date;
@@ -225,7 +231,7 @@ async function createQboAndSyncState(
 
 // Crea el proyecto en QBO y deja todo enlazado. Guards: columnas de la 0022
 // presentes (ANTES de crear nada en QBO), cotización sin enviar todavía.
-export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null }>> {
+export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null; numero: string }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
@@ -255,13 +261,19 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
 
   // Link en la cotización (compare-and-set sobre qbo_job_id null: dos clicks
   // concurrentes no crean dos links; el segundo ve el guard y reporta).
-  const { data: linked, error: linkErr } = (await c.supabase
-    .from("sales_quotes")
-    .update({ status: "aprobada", qbo_job_id: r.created.id, qbo_sent_at: r.nowIso })
-    .eq("id", quoteId)
-    .eq("org_id", c.orgId)
-    .is("qbo_job_id", null)
-    .select("id")) as { data: { id: string }[] | null; error: { message: string } | null };
+  const linkPatch = { status: "aprobada", qbo_job_id: r.created.id, qbo_sent_at: r.nowIso };
+  const enlazar = (patch: Record<string, unknown>) =>
+    c.supabase
+      .from("sales_quotes")
+      .update(patch)
+      .eq("id", quoteId)
+      .eq("org_id", c.orgId)
+      .is("qbo_job_id", null)
+      .select("id") as unknown as PromiseLike<{ data: { id: string }[] | null; error: { message: string; code?: string } | null }>;
+  // El NÚMERO del proyecto ("DC26-11") va a la cotización para verlo en la tabla
+  // sin resolver el id de QBO. Si la 0037 no corrió, se enlaza igual sin él.
+  let { data: linked, error: linkErr } = await enlazar({ ...linkPatch, qbo_project_no: input.numero.trim() });
+  if (isMissingColumn(linkErr)) ({ data: linked, error: linkErr } = await enlazar(linkPatch));
   if (linkErr) return { error: `El proyecto se creó en QBO (${r.created.name}) pero no se pudo enlazar: ${linkErr.message}` };
   if (!linked || linked.length === 0) {
     return { error: `Otro envío ganó la carrera — revisa el proyecto ${r.created.name} en QBO (puede haber quedado duplicado).` };
@@ -269,11 +281,11 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
 
   revalidatePath("/potenciales");
   revalidatePath("/proyectos");
-  return { ok: true, data: { qboJobId: r.created.id, nombre: r.created.name, parentCreado: r.parentCreado } };
+  return { ok: true, data: { qboJobId: r.created.id, nombre: r.created.name, parentCreado: r.parentCreado, numero: input.numero.trim() } };
 }
 
 // Licitación GANADA → proyecto en QBO (mismo flujo que las cotizaciones).
-export async function sendTenderToQbo(tenderId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null }>> {
+export async function sendTenderToQbo(tenderId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null; numero: string }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
@@ -313,7 +325,7 @@ export async function sendTenderToQbo(tenderId: string, input: QboSendInput): Pr
 
   revalidatePath("/potenciales");
   revalidatePath("/proyectos");
-  return { ok: true, data: { qboJobId: r.created.id, nombre: r.created.name, parentCreado: r.parentCreado } };
+  return { ok: true, data: { qboJobId: r.created.id, nombre: r.created.name, parentCreado: r.parentCreado, numero: input.numero.trim() } };
 }
 
 // ── Seguimiento de enviadas viejas (action points) ────────────────────────────
@@ -345,4 +357,22 @@ export async function restoreSeguimiento(quoteId: string): Promise<Result<null>>
   if (error) return { error: error.message };
   revalidatePath("/potenciales");
   return { ok: true, data: null };
+}
+
+// ── Cruce manual cotización ↔ proyecto (0037) ────────────────────────────────
+// Para lo que NO pasó por la app: proyectos creados directo en QBO o
+// cotizaciones viejas. Vacío = borrar el número.
+export async function setQuoteProjectNo(quoteId: string, numero: string | null): Promise<Result<{ numero: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const v = numero?.trim() ? numero.trim().toUpperCase() : null;
+  const { error } = await c.supabase
+    .from("sales_quotes")
+    .update({ qbo_project_no: v })
+    .eq("id", quoteId)
+    .eq("org_id", c.orgId);
+  if (isMissingColumn(error)) return { error: "Falta la migración 0037 — corre el SQL en Supabase y reintenta." };
+  if (error) return { error: error.message };
+  revalidatePath("/potenciales");
+  return { ok: true, data: { numero: v } };
 }

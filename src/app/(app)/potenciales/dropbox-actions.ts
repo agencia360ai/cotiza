@@ -220,6 +220,7 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
         converted_project_id: null,
         qbo_job_id: null,
         qbo_sent_at: null,
+        qbo_project_no: null,
         seguimiento_descartado_at: null,
         seguimiento_descartado_motivo: null,
       },

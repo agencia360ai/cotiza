@@ -22,6 +22,7 @@ export type QboProject = {
   startDate: string | null; // inicio del contrato (0022) — para prorrateo
   endDate: string | null; // fin del contrato
   contractTotal: number | null; // monto total del contrato (0023) — se prorratea
+  quoteNumber: string | null; // cotización de origen ("COT DC 26-141") — 0037
 };
 
 export type ProjectBizStatus = "activo" | "por_cobrar" | "cerrado";
@@ -79,6 +80,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         startDate: null,
         endDate: null,
         contractTotal: null,
+        quoteNumber: null, // lo aporta el state guardado, no QBO
       };
     });
 
