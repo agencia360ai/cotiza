@@ -764,14 +764,13 @@ function DatesEditor({
 // Cotización de origen del proyecto. Se llena sola al enviar desde Cotizaciones;
 // editable a mano para los proyectos creados directo en QBO.
 function CotizacionChip({ qbJobId, value }: { qbJobId: string; value: string | null }) {
-  const [txt, setTxt] = useState(value ?? "");
+  const [txt, setTxt] = useState("");
   const [editando, setEditando] = useState(false);
-  const [guardado, setGuardado] = useState(value);
+  // Lo escrito acá gana sobre el prop hasta el próximo "Actualizar" (que ya trae
+  // el valor guardado). Evita sincronizar el prop con un efecto.
+  const [override, setOverride] = useState<string | null | undefined>(undefined);
+  const guardado = override === undefined ? value : override;
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    setTxt(value ?? "");
-    setGuardado(value);
-  }, [value]);
 
   async function guardar() {
     const v = txt.trim() ? txt.trim().toUpperCase() : null;
@@ -779,7 +778,7 @@ function CotizacionChip({ qbJobId, value }: { qbJobId: string; value: string | n
     if (v === guardado) return;
     const r = await setProjectQuoteNo(qbJobId, v);
     if (r.ok) {
-      setGuardado(v);
+      setOverride(v);
       setErr(null);
     } else {
       setErr(r.error);
@@ -809,7 +808,10 @@ function CotizacionChip({ qbJobId, value }: { qbJobId: string; value: string | n
   return (
     <button
       type="button"
-      onClick={() => setEditando(true)}
+      onClick={() => {
+        setTxt(guardado ?? "");
+        setEditando(true);
+      }}
       title={err ?? (guardado ? `Cotización ${guardado}` : "Sin cotización — clic para asignarla")}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset transition-colors",
