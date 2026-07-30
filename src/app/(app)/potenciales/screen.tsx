@@ -50,12 +50,10 @@ import {
   type Rubro,
   type Modalidad,
 } from "@/lib/pipeline/types";
-import { type ProjectType } from "@/lib/projects/types";
 import {
   updateQuote,
   createQuote,
   deleteQuote,
-  convertQuoteToProject,
   updateTender,
   createManualTender,
   setTenderStatus,
@@ -78,15 +76,9 @@ import {
 } from "./gov-actions";
 import type { SubmissionDoc, SubmissionDocEstado } from "@/lib/panamacompra/submit-docs";
 import {
-  suggestQboProjectSetup,
-  sendQuoteToQbo,
-  suggestQboProjectSetupForTender,
-  sendTenderToQbo,
   setQuoteProjectNo,
   dismissSeguimiento,
   restoreSeguimiento,
-  type QboSendSuggestion,
-  type QboSendInput,
 } from "./qbo-send-actions";
 import { groupRevisions, parseRev } from "@/lib/pipeline/revisions";
 import { CotizadorDialog } from "./cotizador";
@@ -157,11 +149,6 @@ function AgingChip({ days, compact, neutral }: { days: number; compact?: boolean
   );
 }
 // Sugerir tipo de proyecto desde el rubro de la cotización.
-function suggestType(rubro: Rubro | null): ProjectType {
-  if (rubro === "DC") return "obra";
-  if (rubro === "DV") return "instalacion";
-  return "otro";
-}
 function waLink(phone: string | null): string | null {
   if (!phone) return null;
   const t = phone.trim();
@@ -255,7 +242,6 @@ function CotizacionesTab({
   const [sort, setSort] = useState<SortState<QSortKey>>({ key: "sent_date", dir: "desc" });
   const [editing, setEditing] = useState<QuoteRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const [sendingQbo, setSendingQbo] = useState<QuoteRow | null>(null);
   const [dismissing, setDismissing] = useState<QuoteRow | null>(null);
   const [showDescartadas, setShowDescartadas] = useState(false);
   const [verTodasSeg, setVerTodasSeg] = useState(false);
@@ -795,18 +781,6 @@ function CotizacionesTab({
                             >
                               <CheckCircle2 className="size-3.5" /> QBO
                             </span>
-                          ) : x.status === "aprobada" ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSendingQbo(x);
-                              }}
-                              className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                              title="Crear el proyecto en QuickBooks"
-                            >
-                              → Proyecto
-                            </button>
                           ) : null}
                         </div>
                       </td>
@@ -874,11 +848,6 @@ function CotizacionesTab({
             setQuotes((prev) => prev.filter((x) => x.id !== id));
             setEditing(null);
           }}
-          onSendQbo={(q) => {
-            applyLocal(q);
-            setEditing(null);
-            setSendingQbo(q);
-          }}
         />
       ) : null}
 
@@ -889,51 +858,6 @@ function CotizacionesTab({
           onCreated={(row) => {
             setQuotes((prev) => [row, ...prev]);
             setCreating(false);
-          }}
-        />
-      ) : null}
-
-      {sendingQbo ? (
-        <SendToQboDialog
-          onClose={() => setSendingQbo(null)}
-          adapter={{
-            titulo: `Cotización ${sendingQbo.quote_number}`,
-            numeroOrigen: sendingQbo.quote_number,
-            amount: sendingQbo.amount_usd,
-            clientName: sendingQbo.client_std_name ?? sendingQbo.client_name,
-            emailDefault: sendingQbo.contact_email,
-            newParentDefault: sendingQbo.client_std_name ?? sendingQbo.client_name,
-            suggest: () => suggestQboProjectSetup(sendingQbo.id),
-            send: (input) => sendQuoteToQbo(sendingQbo.id, input),
-            onSent: (r) =>
-              setQuotes((prev) =>
-                prev.map((x) =>
-                  x.id === sendingQbo.id
-                    ? { ...x, status: "aprobada", qbo_job_id: r.qboJobId, qbo_sent_at: new Date().toISOString(), qbo_project_no: r.numero ?? x.qbo_project_no }
-                    : x,
-                ),
-              ),
-            tracking: sendingQbo.converted_project_id
-              ? undefined
-              : {
-                  alreadyLinked: false,
-                  run: async (nombre) => {
-                    const clientName = sendingQbo.client_std_name ?? sendingQbo.client_name;
-                    if (!sendingQbo.client_id && !clientName) {
-                      return { error: "Sin cliente identificado — crea el tracking desde Proyectos." };
-                    }
-                    const cr = await convertQuoteToProject(sendingQbo.id, {
-                      clientId: sendingQbo.client_id,
-                      newClientName: sendingQbo.client_id ? null : clientName,
-                      name: nombre,
-                      projectType: suggestType(sendingQbo.rubro),
-                      locationLabel: sendingQbo.location_name,
-                    });
-                    if ("error" in cr) return { error: cr.error };
-                    setQuotes((prev) => prev.map((x) => (x.id === sendingQbo.id ? { ...x, converted_project_id: cr.data.projectId } : x)));
-                    return { projectId: cr.data.projectId };
-                  },
-                },
           }}
         />
       ) : null}
@@ -990,7 +914,6 @@ function QuoteDrawer({
   onClose,
   onSaved,
   onDeleted,
-  onSendQbo,
   onEditLetter,
 }: {
   quote: QuoteRow;
@@ -998,7 +921,6 @@ function QuoteDrawer({
   onClose: () => void;
   onSaved: (q: QuoteRow) => void;
   onDeleted: (id: string) => void;
-  onSendQbo: (q: QuoteRow) => void;
   onEditLetter?: (b: QuoteLetterBundle) => void;
 }) {
   const [f, setF] = useState<QuoteRow>(quote);
@@ -1109,17 +1031,6 @@ function QuoteDrawer({
     setSaving(true);
     try {
       if (await doSave()) onSaved(f);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Un solo flujo: guarda el formulario y abre el diálogo de envío a QBO.
-  async function guardarYEnviar() {
-    if (saving || pubBusy) return;
-    setSaving(true);
-    try {
-      if (await doSave()) onSendQbo(f);
     } finally {
       setSaving(false);
     }
@@ -1412,19 +1323,6 @@ function QuoteDrawer({
         {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-          {/* Rechazada no va a proyectos: solo se guarda. */}
-          {!f.qbo_job_id && f.status !== "rechazada" ? (
-            <button
-              type="button"
-              onClick={guardarYEnviar}
-              disabled={saving || pubBusy}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-              title="Guarda los cambios y crea el proyecto en QuickBooks (asigna el próximo número DC/DM)"
-            >
-              {saving ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
-              Guardar y enviar a proyectos
-            </button>
-          ) : null}
           <button
             type="button"
             onClick={save}
@@ -1648,22 +1546,13 @@ function NewQuoteDrawer({
   );
 }
 
-// ── Enviar a proyectos (QBO): el cierre del loop cotización → proyecto ────────
-// Jala de QBO el próximo correlativo DC/DM (editable), pre-selecciona el
-// cliente padre, y crea el proyecto con los campos del formulario de QBO
-// (nombre, email, fechas, notas). Opcional: crear también el proyecto de
-// tracking en Reportme (fotos/hitos).
-type QboResult<T> = { error: string } | { ok: true; data: T };
-type QboSentData = { qboJobId: string; nombre: string; parentCreado: string | null; numero?: string };
-// Adapter: el diálogo sirve para cotizaciones Y licitaciones ganadas.
-// Número corto editable in situ (proyecto en la cotización, cotización en el
-// proyecto). Vacío = sin asignar. Guarda al salir del campo o con Enter.
+// Número corto editable in situ (proyecto en la cotización). Vacío = sin
+// asignar. Guarda al salir del campo o con Enter.
 function ProjectNoCell({ value, onSave }: { value: string | null; onSave: (v: string | null) => Promise<string | null> }) {
   const [editando, setEditando] = useState(false);
-  const [txt, setTxt] = useState(value ?? "");
+  const [txt, setTxt] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => setTxt(value ?? ""), [value]);
 
   async function guardar() {
     const limpio = txt.trim() ? txt.trim().toUpperCase() : null;
@@ -1696,9 +1585,12 @@ function ProjectNoCell({ value, onSave }: { value: string | null; onSave: (v: st
   return (
     <button
       type="button"
-      onClick={() => setEditando(true)}
+      onClick={() => {
+        setTxt(value ?? "");
+        setEditando(true);
+      }}
       disabled={busy}
-      title={err ?? (value ? "Clic para editar" : "Clic para asignar el número")}
+      title={err ?? (value ? "Clic para editar" : "Clic para asignar el número del proyecto")}
       className={cn(
         "rounded-md px-1.5 py-1 font-mono text-xs hover:bg-slate-100",
         err ? "text-red-600" : value ? "font-semibold text-slate-700" : "text-slate-300",
@@ -1706,263 +1598,6 @@ function ProjectNoCell({ value, onSave }: { value: string | null; onSave: (v: st
     >
       {busy ? "…" : (value ?? "—")}
     </button>
-  );
-}
-
-type QboSendAdapter = {
-  titulo: string; // header (ej. "Cotización COT DC 26-08" o "Licitación 2026-…")
-  numeroOrigen: string | null; // se guarda EN el proyecto para el cruce inverso
-  amount: number | null;
-  clientName: string | null;
-  emailDefault: string | null;
-  newParentDefault: string | null;
-  suggest: () => Promise<QboResult<QboSendSuggestion>>;
-  send: (input: QboSendInput) => Promise<QboResult<QboSentData>>;
-  onSent: (r: QboSentData) => void;
-  // Tracking opcional en Reportme (solo cotizaciones por ahora).
-  tracking?: { alreadyLinked: boolean; run: (nombre: string) => Promise<{ projectId: string } | { error: string }> };
-};
-
-function SendToQboDialog({ adapter, onClose }: { adapter: QboSendAdapter; onClose: () => void }) {
-  const [sug, setSug] = useState<QboSendSuggestion | null>(null);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [numero, setNumero] = useState("");
-  const [nombre, setNombre] = useState("");
-  const [parentId, setParentId] = useState("");
-  const [parentMode, setParentMode] = useState<"existente" | "nuevo">("existente");
-  const [newParent, setNewParent] = useState(adapter.newParentDefault ?? "");
-  const [email, setEmail] = useState(adapter.emailDefault ?? "");
-  const [startDate, setStartDate] = useState(today());
-  const [endDate, setEndDate] = useState("");
-  const [notas, setNotas] = useState("");
-  const [alsoTracking, setAlsoTracking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
-
-  async function load() {
-    setLoadErr(null);
-    setSug(null);
-    try {
-      const r = await adapter.suggest();
-      if ("error" in r) {
-        setLoadErr(r.error);
-        return;
-      }
-      setSug(r.data);
-      setNumero(r.data.numero);
-      setNombre(r.data.nombre);
-      setParentId(r.data.matchedParentId ?? r.data.parents[0]?.id ?? "");
-      // Sin match por nombre (o sin lista): probablemente el cliente no existe
-      // en QBO todavía → arrancar en "cliente nuevo".
-      if (!r.data.matchedParentId || r.data.parents.length === 0) setParentMode("nuevo");
-    } catch (e) {
-      setLoadErr(e instanceof Error ? e.message : "No se pudo consultar QBO — reintenta");
-    }
-  }
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Editar el número reescribe el prefijo del nombre (si seguía sincronizado).
-  function cambiarNumero(nuevo: string) {
-    setNombre((n) => (numero && n.startsWith(numero) ? nuevo + n.slice(numero.length) : n));
-    setNumero(nuevo);
-  }
-
-  async function crear() {
-    if (busy || done) return;
-    const parent = parentMode === "existente" ? sug?.parents.find((p) => p.id === parentId) : null;
-    if (parentMode === "existente" && !parent) {
-      setErr("Elige el cliente de QBO al que pertenece el proyecto.");
-      return;
-    }
-    if (parentMode === "nuevo" && !newParent.trim()) {
-      setErr("Escribe el nombre del cliente nuevo para crearlo en QBO.");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await adapter.send({
-        numero: numero.trim(),
-        numeroCotizacion: adapter.numeroOrigen,
-        nombre: nombre.trim(),
-        parentId: parent?.id ?? null,
-        parentName: parent?.name ?? newParent.trim(),
-        newParentName: parentMode === "nuevo" ? newParent.trim() : null,
-        email: email.trim() || null,
-        startDate: startDate || null,
-        endDate: endDate || null,
-        notas: notas.trim() || null,
-      });
-      if ("error" in r) {
-        setErr(r.error);
-        return;
-      }
-      adapter.onSent(r.data);
-      // Tracking opcional en Reportme (mejor esfuerzo).
-      let trackingWarn: string | null = null;
-      if (alsoTracking && adapter.tracking && !adapter.tracking.alreadyLinked) {
-        const cr = await adapter.tracking.run(nombre.trim().slice(0, 80));
-        if ("error" in cr) trackingWarn = cr.error;
-      }
-      setDone(
-        `${r.data.nombre}${r.data.parentCreado ? ` (cliente "${r.data.parentCreado}" creado en QBO)` : ""}${trackingWarn ? ` · Tracking: ${trackingWarn}` : ""}`,
-      );
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Se cortó el envío — verifica en QBO antes de reintentar");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal title="Enviar a proyectos (QuickBooks)" onClose={onClose}>
-      <p className="mb-3 text-sm text-slate-600">
-        <strong>{adapter.titulo}</strong> · {formatMoneyExact(adapter.amount)} · {adapter.clientName ?? "sin cliente"}
-      </p>
-
-      {done ? (
-        <div className="space-y-3">
-          <div className="rounded-xl bg-emerald-50 p-4 ring-1 ring-inset ring-emerald-600/20">
-            <p className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
-              <CheckCircle2 className="size-5" /> Proyecto creado en QBO
-            </p>
-            <p className="mt-1 text-sm text-emerald-700">{done}</p>
-            <p className="mt-1 text-xs text-emerald-600">Ya aparece en la sección Proyectos; los números llegan con el próximo &ldquo;Actualizar&rdquo;.</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-          >
-            Listo
-          </button>
-        </div>
-      ) : sug === null && loadErr === null ? (
-        <div className="space-y-2 py-4">
-          <div className="h-9 animate-pulse rounded-lg bg-slate-100" />
-          <div className="h-9 animate-pulse rounded-lg bg-slate-100" />
-          <p className="text-xs text-slate-400">Consultando el próximo número de contrato en QuickBooks…</p>
-        </div>
-      ) : loadErr ? (
-        <div className="space-y-3">
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{loadErr}</p>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Reintentar
-          </button>
-        </div>
-      ) : sug ? (
-        <div className="space-y-3">
-          {sug.yaEnviada ? (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
-              Esta cotización ya tiene un proyecto en QBO — enviar otra vez crearía un duplicado.
-            </p>
-          ) : null}
-          {!sug.desdeQbo ? (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-inset ring-amber-600/20">
-              QBO no respondió: el número sale de la última sincronización — verifícalo antes de crear.
-            </p>
-          ) : null}
-          <div className="grid grid-cols-[7.5rem_1fr] gap-3">
-            <Field label="Número">
-              <input className={inputCls} value={numero} onChange={(e) => cambiarNumero(e.target.value.toUpperCase())} />
-            </Field>
-            <Field label="Nombre del proyecto (como se verá en QBO)">
-              <input className={inputCls} value={nombre} onChange={(e) => setNombre(e.target.value)} />
-            </Field>
-          </div>
-          <div>
-            <div className="mb-1.5 flex items-center gap-1 text-xs">
-              <span className="mr-1 font-semibold uppercase tracking-wider text-slate-500">Cliente en QBO</span>
-              <button
-                type="button"
-                onClick={() => setParentMode("existente")}
-                className={cn(
-                  "rounded-md px-2.5 py-1 font-semibold",
-                  parentMode === "existente" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-                )}
-              >
-                Existente
-              </button>
-              <button
-                type="button"
-                onClick={() => setParentMode("nuevo")}
-                className={cn(
-                  "rounded-md px-2.5 py-1 font-semibold",
-                  parentMode === "nuevo" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-                )}
-              >
-                Cliente nuevo
-              </button>
-            </div>
-            {parentMode === "existente" ? (
-              <select className={inputCls} value={parentId} onChange={(e) => setParentId(e.target.value)}>
-                {sug.parents.length === 0 ? <option value="">(no se pudo leer la lista — usa "Cliente nuevo")</option> : null}
-                {sug.parents.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div>
-                <input
-                  className={inputCls}
-                  placeholder="Nombre del cliente nuevo en QBO"
-                  value={newParent}
-                  onChange={(e) => setNewParent(e.target.value)}
-                />
-                <p className="mt-1 text-[11px] text-slate-400">
-                  Se crea primero el cliente en QuickBooks y el proyecto queda colgado de él.
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Fecha de inicio">
-              <input type="date" className={inputCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-            </Field>
-            <Field label="Fecha de entrega">
-              <input type="date" className={inputCls} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-            </Field>
-          </div>
-          <Field label="Email (opcional)">
-            <input type="email" className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} />
-          </Field>
-          <Field label="Notas (van al proyecto en QBO)">
-            <textarea rows={2} className={inputCls} value={notas} onChange={(e) => setNotas(e.target.value)} />
-          </Field>
-          {adapter.tracking && !adapter.tracking.alreadyLinked ? (
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
-              <input type="checkbox" checked={alsoTracking} onChange={(e) => setAlsoTracking(e.target.checked)} className="size-4 rounded border-slate-300" />
-              Crear también el proyecto de tracking en Reportme (fotos e hitos)
-            </label>
-          ) : null}
-          {err ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p> : null}
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="button"
-              onClick={crear}
-              disabled={busy || !!sug.yaEnviada}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
-              {busy ? "Creando en QBO…" : "Crear proyecto en QBO"}
-            </button>
-            <button type="button" onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50">
-              Cancelar
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </Modal>
   );
 }
 
@@ -2052,7 +1687,6 @@ function LicitacionesTab({
   const [sort, setSort] = useState<SortState<TSortKey>>({ key: "amount_ref_usd", dir: "desc" });
   const [editing, setEditing] = useState<TenderRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const [sendingTenderQbo, setSendingTenderQbo] = useState<TenderRow | null>(null);
   const [verArchivadas, setVerArchivadas] = useState(false);
 
   const archivadasCount = useMemo(() => tenders.filter((t) => t.archived_at).length, [tenders]);
@@ -2383,15 +2017,6 @@ function LicitacionesTab({
                           >
                             <CheckCircle2 className="size-3" /> QBO
                           </span>
-                        ) : x.status === "orden_proceder" || x.status === "ganada" || x.status === "por_cobrar" || x.status === "cobrado" ? (
-                          <button
-                            type="button"
-                            onClick={() => setSendingTenderQbo(x)}
-                            className="inline-flex items-center gap-0.5 rounded-md border border-teal-200 bg-teal-50 px-1.5 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-100"
-                            title={x.status === "orden_proceder" ? "Orden de proceder: crear el proyecto en QuickBooks" : "Crear el proyecto en QuickBooks"}
-                          >
-                            <ArrowUpRight className="size-3" /> Proyecto
-                          </button>
                         ) : null}
                       </div>
                     </td>
@@ -2438,27 +2063,6 @@ function LicitacionesTab({
         />
       ) : null}
 
-      {sendingTenderQbo ? (
-        <SendToQboDialog
-          onClose={() => setSendingTenderQbo(null)}
-          adapter={{
-            titulo: `Licitación ${sendingTenderQbo.acto_number ?? sendingTenderQbo.entity ?? ""}`,
-            numeroOrigen: sendingTenderQbo.acto_number ?? null,
-            amount: sendingTenderQbo.amount_ref_usd,
-            clientName: sendingTenderQbo.client_std_name ?? sendingTenderQbo.entity,
-            emailDefault: null,
-            newParentDefault: sendingTenderQbo.client_std_name ?? sendingTenderQbo.entity,
-            suggest: () => suggestQboProjectSetupForTender(sendingTenderQbo.id),
-            send: (input) => sendTenderToQbo(sendingTenderQbo.id, input),
-            onSent: (r) =>
-              setTenders((prev) =>
-                prev.map((x) =>
-                  x.id === sendingTenderQbo.id ? { ...x, qbo_job_id: r.qboJobId, qbo_sent_at: new Date().toISOString() } : x,
-                ),
-              ),
-          }}
-        />
-      ) : null}
     </>
   );
 }
