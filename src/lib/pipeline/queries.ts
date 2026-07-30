@@ -53,7 +53,7 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
   const supabase = await createClient();
   type Raw = Omit<
     QuoteRow,
-    "client_std_name" | "location_name" | "dropbox_shared_url" | "dropbox_path" | "qbo_job_id" | "qbo_sent_at" | "seguimiento_descartado_at" | "seguimiento_descartado_motivo"
+    "client_std_name" | "location_name" | "dropbox_shared_url" | "dropbox_path" | "qbo_job_id" | "qbo_sent_at" | "qbo_project_no" | "seguimiento_descartado_at" | "seguimiento_descartado_motivo"
   > & {
     client: { name: string } | null;
     location?: { name: string } | null;
@@ -61,6 +61,7 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
     dropbox_path?: string | null;
     qbo_job_id?: string | null;
     qbo_sent_at?: string | null;
+    qbo_project_no?: string | null;
     seguimiento_descartado_at?: string | null;
     seguimiento_descartado_motivo?: string | null;
   };
@@ -78,8 +79,10 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
           .range(from, to) as unknown as PromiseLike<{ data: Raw[] | null; error: PgErr }>,
     );
   const QBO_COLS = "qbo_job_id, qbo_sent_at, seguimiento_descartado_at, seguimiento_descartado_motivo";
-  let res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url, dropbox_path, ${QBO_COLS}`)) as Res;
-  if (isMissingColumn(res.error)) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url, dropbox_path`)) as Res; // sin 0022
+  const BASE = `${QUOTE_COLS}, ${LOC_JOIN}, dropbox_shared_url, dropbox_path`;
+  let res = (await run(`${BASE}, ${QBO_COLS}, qbo_project_no`)) as Res;
+  if (isMissingColumn(res.error)) res = (await run(`${BASE}, ${QBO_COLS}`)) as Res; // sin 0037
+  if (isMissingColumn(res.error)) res = (await run(BASE)) as Res; // sin 0022
   if (isMissingColumn(res.error)) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}, dropbox_path`)) as Res; // sin shared_url (0009 pendiente)
   if (isMissingColumn(res.error)) res = (await run(`${QUOTE_COLS}, ${LOC_JOIN}`)) as Res; // sin dropbox_path (0003 pendiente)
   if (isMissingColumn(res.error)) res = (await run(QUOTE_COLS)) as Res; // sin location (migración 0005 pendiente)
@@ -99,6 +102,7 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
     contact_email: q.contact_email ?? null,
     qbo_job_id: q.qbo_job_id ?? null,
     qbo_sent_at: q.qbo_sent_at ?? null,
+    qbo_project_no: q.qbo_project_no ?? null,
     seguimiento_descartado_at: q.seguimiento_descartado_at ?? null,
     seguimiento_descartado_motivo: q.seguimiento_descartado_motivo ?? null,
     amount_usd: q.amount_usd === null ? null : Number(q.amount_usd),

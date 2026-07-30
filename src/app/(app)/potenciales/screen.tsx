@@ -82,6 +82,7 @@ import {
   sendQuoteToQbo,
   suggestQboProjectSetupForTender,
   sendTenderToQbo,
+  setQuoteProjectNo,
   dismissSeguimiento,
   restoreSeguimiento,
   type QboSendSuggestion,
@@ -96,7 +97,7 @@ import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui
 const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
 
-type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date";
+type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date" | "qbo_project_no";
 type TSortKey = "entity" | "acto_number" | "amount_ref_usd" | "status" | "modalidad" | "delivery_date";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "no_ganada", "ganada", "orden_proceder"];
@@ -650,13 +651,14 @@ function CotizacionesTab({
                 <SortTh label="Monto" k="amount_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estado" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Fecha de envío" k="sent_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
+                <SortTh label="Proyecto" k="qbo_project_no" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={10} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin cotizaciones con estos filtros.
                     {soloSinCliente && sinClienteGlobal > 0 ? (
                       <span className="mt-1 block text-xs text-amber-600">
@@ -751,6 +753,17 @@ function CotizacionesTab({
                             <AgingChip days={daysSince(x.sent_date)!} compact neutral={x.status !== "enviada"} />
                           </div>
                         ) : null}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <ProjectNoCell
+                          value={x.qbo_project_no}
+                          onSave={async (v) => {
+                            const r = await setQuoteProjectNo(x.id, v);
+                            if ("error" in r) return r.error;
+                            setQuotes((prev) => prev.map((q) => (q.id === x.id ? { ...q, qbo_project_no: v } : q)));
+                            return null;
+                          }}
+                        />
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -885,6 +898,7 @@ function CotizacionesTab({
           onClose={() => setSendingQbo(null)}
           adapter={{
             titulo: `Cotización ${sendingQbo.quote_number}`,
+            numeroOrigen: sendingQbo.quote_number,
             amount: sendingQbo.amount_usd,
             clientName: sendingQbo.client_std_name ?? sendingQbo.client_name,
             emailDefault: sendingQbo.contact_email,
@@ -895,7 +909,7 @@ function CotizacionesTab({
               setQuotes((prev) =>
                 prev.map((x) =>
                   x.id === sendingQbo.id
-                    ? { ...x, status: "aprobada", qbo_job_id: r.qboJobId, qbo_sent_at: new Date().toISOString() }
+                    ? { ...x, status: "aprobada", qbo_job_id: r.qboJobId, qbo_sent_at: new Date().toISOString(), qbo_project_no: r.numero ?? x.qbo_project_no }
                     : x,
                 ),
               ),
@@ -1547,6 +1561,7 @@ function NewQuoteDrawer({
       converted_project_id: null,
       qbo_job_id: null,
       qbo_sent_at: null,
+      qbo_project_no: null,
       seguimiento_descartado_at: null,
       seguimiento_descartado_motivo: null,
       });
@@ -1639,10 +1654,64 @@ function NewQuoteDrawer({
 // (nombre, email, fechas, notas). Opcional: crear también el proyecto de
 // tracking en Reportme (fotos/hitos).
 type QboResult<T> = { error: string } | { ok: true; data: T };
-type QboSentData = { qboJobId: string; nombre: string; parentCreado: string | null };
+type QboSentData = { qboJobId: string; nombre: string; parentCreado: string | null; numero?: string };
 // Adapter: el diálogo sirve para cotizaciones Y licitaciones ganadas.
+// Número corto editable in situ (proyecto en la cotización, cotización en el
+// proyecto). Vacío = sin asignar. Guarda al salir del campo o con Enter.
+function ProjectNoCell({ value, onSave }: { value: string | null; onSave: (v: string | null) => Promise<string | null> }) {
+  const [editando, setEditando] = useState(false);
+  const [txt, setTxt] = useState(value ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => setTxt(value ?? ""), [value]);
+
+  async function guardar() {
+    const limpio = txt.trim() ? txt.trim().toUpperCase() : null;
+    setEditando(false);
+    if (limpio === (value ?? null)) return;
+    setBusy(true);
+    setErr(await onSave(limpio));
+    setBusy(false);
+  }
+
+  if (editando) {
+    return (
+      <input
+        autoFocus
+        value={txt}
+        onChange={(e) => setTxt(e.target.value)}
+        onBlur={() => void guardar()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void guardar();
+          if (e.key === "Escape") {
+            setTxt(value ?? "");
+            setEditando(false);
+          }
+        }}
+        placeholder="DC26-11"
+        className="w-24 rounded-md border border-slate-300 px-1.5 py-1 text-xs uppercase outline-none focus:border-slate-900"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setEditando(true)}
+      disabled={busy}
+      title={err ?? (value ? "Clic para editar" : "Clic para asignar el número")}
+      className={cn(
+        "rounded-md px-1.5 py-1 font-mono text-xs hover:bg-slate-100",
+        err ? "text-red-600" : value ? "font-semibold text-slate-700" : "text-slate-300",
+      )}
+    >
+      {busy ? "…" : (value ?? "—")}
+    </button>
+  );
+}
+
 type QboSendAdapter = {
   titulo: string; // header (ej. "Cotización COT DC 26-08" o "Licitación 2026-…")
+  numeroOrigen: string | null; // se guarda EN el proyecto para el cruce inverso
   amount: number | null;
   clientName: string | null;
   emailDefault: string | null;
@@ -1718,6 +1787,7 @@ function SendToQboDialog({ adapter, onClose }: { adapter: QboSendAdapter; onClos
     try {
       const r = await adapter.send({
         numero: numero.trim(),
+        numeroCotizacion: adapter.numeroOrigen,
         nombre: nombre.trim(),
         parentId: parent?.id ?? null,
         parentName: parent?.name ?? newParent.trim(),
@@ -2373,6 +2443,7 @@ function LicitacionesTab({
           onClose={() => setSendingTenderQbo(null)}
           adapter={{
             titulo: `Licitación ${sendingTenderQbo.acto_number ?? sendingTenderQbo.entity ?? ""}`,
+            numeroOrigen: sendingTenderQbo.acto_number ?? null,
             amount: sendingTenderQbo.amount_ref_usd,
             clientName: sendingTenderQbo.client_std_name ?? sendingTenderQbo.entity,
             emailDefault: null,

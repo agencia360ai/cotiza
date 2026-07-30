@@ -53,6 +53,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
     start_date?: string | null;
     end_date?: string | null;
     contract_total?: number | null;
+    quote_number?: string | null;
   };
   type Res = { data: Row[] | null; error: ({ message: string; code?: string }) | null };
   const run = async (cols: string): Promise<Res> => {
@@ -68,7 +69,8 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
     return { data: all, error: null };
   };
   const BASE_COLS = "qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at";
-  let res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total`);
+  let res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number`);
+  if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total`); // 0037 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date`); // 0023 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status`); // 0022 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress`); // 0016 pendiente
@@ -101,6 +103,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
         startDate: r.start_date ?? null,
         endDate: r.end_date ?? null,
         contractTotal: r.contract_total === null || r.contract_total === undefined ? null : Number(r.contract_total),
+        quoteNumber: r.quote_number ?? null,
       };
     })
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -128,6 +131,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     start_date?: string | null;
     end_date?: string | null;
     contract_total?: number | null;
+    quote_number?: string | null;
   };
   type StRes = { data: StRow[] | null; error: ({ message: string; code?: string }) | null };
   const readState = async (cols: string): Promise<StRes> => {
@@ -145,7 +149,8 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     }
     return { data: all, error: null };
   };
-  let st = await readState("qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total");
+  let st = await readState("qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total, quote_number");
+  if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress, status");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost");
@@ -162,6 +167,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       p.income = s.income === null ? null : Number(s.income);
       p.cost = s.cost === null ? null : Number(s.cost);
       p.margin = marginOf(p.income, p.cost);
+      p.quoteNumber = s.quote_number ?? null; // el cruce vive solo en la base
       p.startDate = s.start_date ?? null;
       p.endDate = s.end_date ?? null;
       p.contractTotal = s.contract_total === null || s.contract_total === undefined ? null : Number(s.contract_total);
@@ -377,4 +383,26 @@ export async function diagnosticarProyecto(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "No se pudo diagnosticar" };
   }
+}
+
+// Número de cotización que originó el proyecto. Se llena solo al enviar desde
+// Cotizaciones; editable a mano para lo creado directo en QBO. Vacío = borrar.
+export async function setProjectQuoteNo(
+  qbJobId: string,
+  numero: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Sesión expirada" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { ok: false, error: "Sin organización" };
+  const v = numero?.trim() ? numero.trim().toUpperCase() : null;
+  const { error } = (await supabase
+    .from("qbo_project_state")
+    .upsert({ org_id: orgId, qb_job_id: qbJobId, quote_number: v }, { onConflict: "org_id,qb_job_id" })) as {
+    error: { message: string; code?: string } | null;
+  };
+  if (isMissingColumn(error)) return { ok: false, error: "Falta la migración 0037 — corre el SQL en Supabase y reintenta." };
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }

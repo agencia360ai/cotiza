@@ -105,6 +105,7 @@ export type QuoteRow = {
   converted_project_id: string | null;
   qbo_job_id: string | null; // proyecto creado en QuickBooks desde esta cotización
   qbo_sent_at: string | null;
+  qbo_project_no: string | null; // número del proyecto ("DS26-27") — 0037
   seguimiento_descartado_at: string | null; // sacada de los action points de seguimiento
   seguimiento_descartado_motivo: string | null;
 };
