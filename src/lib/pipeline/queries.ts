@@ -274,3 +274,40 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
     return emptyPipelineData(year);
   }
 }
+
+// ── Proyectos de QBO para elegir en las cotizaciones ─────────────────────────
+// Lee lo YA sincronizado en qbo_project_state (la misma fuente del tablero de
+// Proyectos): cero llamadas a QuickBooks. Sirve para que el Nº de proyecto se
+// elija de una lista real en vez de escribirse a mano con riesgo de typo.
+export type ProjectOption = { numero: string; etiqueta: string };
+
+const RE_NUM_PROYECTO = /\b(D[CMSV]\s*-?\s*\d{2}\s*-\s*\d+)/i;
+
+export async function listProjectOptions(orgId: string): Promise<ProjectOption[]> {
+  if (!orgId) return [];
+  const supabase = await createClient();
+  const { data } = (await supabase
+    .from("qbo_project_state")
+    .select("name, full_name, client_name, year")
+    .eq("org_id", orgId)
+    .order("qb_job_id")
+    .limit(2000)) as {
+    data: { name: string | null; full_name: string | null; client_name: string | null; year: number | null }[] | null;
+  };
+
+  const porNumero = new Map<string, ProjectOption>();
+  for (const r of data ?? []) {
+    const nombre = (r.name ?? r.full_name ?? "").trim();
+    if (!nombre) continue;
+    const m = nombre.match(RE_NUM_PROYECTO);
+    if (!m) continue; // sin correlativo no sirve como opción
+    const numero = m[1].replace(/\s+/g, "").toUpperCase();
+    if (porNumero.has(numero)) continue;
+    // El nombre sin el número + el cliente: lo que se ve como descripción.
+    const resto = nombre.slice(m.index! + m[1].length).replace(/^[\s.:–-]+/, "").trim();
+    const etiqueta = [resto, r.client_name?.trim()].filter(Boolean).join(" · ") || nombre;
+    porNumero.set(numero, { numero, etiqueta });
+  }
+  // Más recientes primero: el proyecto que se acaba de crear suele ser el que se busca.
+  return Array.from(porNumero.values()).sort((a, b) => b.numero.localeCompare(a.numero));
+}

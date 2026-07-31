@@ -50,6 +50,7 @@ import {
   type Rubro,
   type Modalidad,
 } from "@/lib/pipeline/types";
+import type { ProjectOption } from "@/lib/pipeline/queries";
 import {
   updateQuote,
   createQuote,
@@ -167,20 +168,34 @@ type QuoteGroup = { main: QuoteRow; older: QuoteRow[]; dupCount: number };
 
 type Tab = "cotizaciones" | "licitaciones";
 
+const PROJECT_LIST_ID = "qbo-proyectos";
+
 export function PotencialesScreen({
   quotes: quotesProp,
   tenders: tendersProp,
   clients,
+  projectOptions = [],
 }: {
   quotes: QuoteRow[];
   tenders: TenderRow[];
   clients: ClientOpt[];
+  projectOptions?: ProjectOption[];
 }) {
   const [tab, setTab] = useState<Tab>("cotizaciones");
   const [quotes, setQuotes] = useState<QuoteRow[]>(quotesProp);
   const [tenders, setTenders] = useState<TenderRow[]>(tendersProp);
 
   return (
+    <>
+      {/* Proyectos ya sincronizados de QBO: alimentan los inputs de Nº de
+          proyecto (tabla y panel) para elegir en vez de escribir a mano. */}
+      <datalist id={PROJECT_LIST_ID}>
+        {projectOptions.map((o) => (
+          <option key={o.numero} value={o.numero}>
+            {o.etiqueta}
+          </option>
+        ))}
+      </datalist>
     <div className="min-h-full bg-slate-50/70">
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
       <header className="mb-6">
@@ -206,6 +221,7 @@ export function PotencialesScreen({
       )}
     </div>
     </div>
+    </>
   );
 }
 
@@ -1263,9 +1279,10 @@ function QuoteDrawer({
           </Field>
         </div>
 
-        <Field label="Nº de proyecto" hint="El proyecto se crea a mano en QuickBooks; anota aquí su número para cruzarlo.">
+        <Field label="Nº de proyecto" hint="Elige de los proyectos de QuickBooks (o escríbelo si aún no aparece).">
           <input
             className={inputCls}
+            list={PROJECT_LIST_ID}
             placeholder="DC26-11"
             value={f.qbo_project_no ?? ""}
             onChange={(e) => set("qbo_project_no", e.target.value ? e.target.value.toUpperCase() : null)}
@@ -1587,8 +1604,9 @@ function ProjectNoCell({ value, onSave }: { value: string | null; onSave: (v: st
             setEditando(false);
           }
         }}
+        list={PROJECT_LIST_ID}
         placeholder="DC26-11"
-        className="w-24 rounded-md border border-slate-300 px-1.5 py-1 text-xs uppercase outline-none focus:border-slate-900"
+        className="w-28 rounded-md border border-slate-300 px-1.5 py-1 text-xs uppercase outline-none focus:border-slate-900"
       />
     );
   }
