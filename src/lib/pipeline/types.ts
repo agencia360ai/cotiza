@@ -133,6 +133,7 @@ export type TenderRow = {
   converted_project_id: string | null;
   qbo_job_id: string | null; // proyecto QBO creado desde una licitación ganada
   qbo_sent_at: string | null;
+  qbo_project_no: string | null; // número del proyecto ("DC26-11") — 0038
   archived_at: string | null; // archivada = fuera de la lista por defecto (0035)
 };
 
