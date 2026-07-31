@@ -320,6 +320,20 @@ export async function setTenderArchived(id: string, archived: boolean): Promise<
   return { ok: true };
 }
 
+// Nº del proyecto de QBO al que corresponde la licitación (se escribe a mano:
+// el proyecto se crea directo en QuickBooks). Vacío = borrar.
+export async function setTenderProjectNo(id: string, numero: string | null): Promise<Result> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const v = numero?.trim() ? numero.trim().toUpperCase() : null;
+  const { error } = await c.supabase.from("tenders").update({ qbo_project_no: v }).eq("id", id).eq("org_id", c.orgId);
+  if (error) {
+    return { error: /qbo_project_no/.test(error.message) ? "Falta la migración 0038 — corre el SQL y reintenta." : error.message };
+  }
+  revalidatePath(REVALIDATE);
+  return { ok: true };
+}
+
 // Recarga las licitaciones propias (tras participar desde el board del gobierno).
 export async function listMyTenders(): Promise<Result<TenderRow[]>> {
   const c = await ctx();

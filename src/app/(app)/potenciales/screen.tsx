@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -59,6 +59,7 @@ import {
   createManualTender,
   setTenderStatus,
   setTenderArchived,
+  setTenderProjectNo,
   listMyTenders,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
@@ -168,7 +169,10 @@ type QuoteGroup = { main: QuoteRow; older: QuoteRow[]; dupCount: number };
 
 type Tab = "cotizaciones" | "licitaciones";
 
-const PROJECT_LIST_ID = "qbo-proyectos";
+// La lista de proyectos la necesitan componentes anidados en las dos pestañas;
+// por contexto en vez de enhebrarla por props nivel a nivel.
+const ProjectOptionsCtx = React.createContext<ProjectOption[]>([]);
+const useProjectOptions = () => React.useContext(ProjectOptionsCtx);
 
 export function PotencialesScreen({
   quotes: quotesProp,
@@ -186,16 +190,7 @@ export function PotencialesScreen({
   const [tenders, setTenders] = useState<TenderRow[]>(tendersProp);
 
   return (
-    <>
-      {/* Proyectos ya sincronizados de QBO: alimentan los inputs de Nº de
-          proyecto (tabla y panel) para elegir en vez de escribir a mano. */}
-      <datalist id={PROJECT_LIST_ID}>
-        {projectOptions.map((o) => (
-          <option key={o.numero} value={o.numero}>
-            {o.etiqueta}
-          </option>
-        ))}
-      </datalist>
+    <ProjectOptionsCtx.Provider value={projectOptions}>
     <div className="min-h-full bg-slate-50/70">
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
       <header className="mb-6">
@@ -221,7 +216,7 @@ export function PotencialesScreen({
       )}
     </div>
     </div>
-    </>
+    </ProjectOptionsCtx.Provider>
   );
 }
 
@@ -939,6 +934,7 @@ function QuoteDrawer({
   onDeleted: (id: string) => void;
   onEditLetter?: (b: QuoteLetterBundle) => void;
 }) {
+  const proyectosQbo = useProjectOptions();
   const [f, setF] = useState<QuoteRow>(quote);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1280,12 +1276,10 @@ function QuoteDrawer({
         </div>
 
         <Field label="Nº de proyecto" hint="Elige de los proyectos de QuickBooks (o escríbelo si aún no aparece).">
-          <input
-            className={inputCls}
-            list={PROJECT_LIST_ID}
-            placeholder="DC26-11"
-            value={f.qbo_project_no ?? ""}
-            onChange={(e) => set("qbo_project_no", e.target.value ? e.target.value.toUpperCase() : null)}
+          <ProjectPicker
+            value={f.qbo_project_no}
+            options={proyectosQbo}
+            onChange={(v) => set("qbo_project_no", v)}
           />
         </Field>
 
@@ -1573,9 +1567,149 @@ function NewQuoteDrawer({
   );
 }
 
+
+// ── Buscador de proyectos de QBO ─────────────────────────────────────────────
+// El <datalist> nativo solo matchea por el PREFIJO del valor, así que no dejaba
+// ubicar un proyecto por cliente o por descripción. Esto filtra por cualquier
+// palabra del número, el nombre o el cliente, y deja escribir libre un número
+// que todavía no esté sincronizado.
+const normTxt = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+function ProjectPicker({
+  value,
+  options,
+  onChange,
+  onCommit,
+  autoFocus,
+  compact,
+}: {
+  value: string | null;
+  options: ProjectOption[];
+  onChange: (v: string | null) => void;
+  onCommit?: () => void;
+  autoFocus?: boolean;
+  compact?: boolean;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [activo, setActivo] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // El menú va en position:fixed para que la tabla (que scrollea horizontal) no
+  // lo recorte; se ancla al input al abrir.
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  const texto = value ?? "";
+  const filtradas = useMemo(() => {
+    const terminos = normTxt(texto).split(/\s+/).filter(Boolean);
+    const base =
+      terminos.length === 0
+        ? options
+        : options.filter((o) => {
+            const heno = normTxt(`${o.numero} ${o.etiqueta}`);
+            return terminos.every((t) => heno.includes(t));
+          });
+    return base.slice(0, 60);
+  }, [options, texto]);
+
+  function abrir() {
+    const r = inputRef.current?.getBoundingClientRect();
+    if (r) setPos({ left: r.left, top: r.bottom + 4, width: Math.max(r.width, 280) });
+    setActivo(0);
+    setAbierto(true);
+  }
+  function cerrar() {
+    setAbierto(false);
+    setPos(null);
+  }
+  function elegir(o: ProjectOption) {
+    onChange(o.numero);
+    cerrar();
+    onCommit?.();
+  }
+
+  // Un menú fijo se despega si la página scrollea: mejor cerrarlo.
+  useEffect(() => {
+    if (!abierto) return;
+    const h = () => cerrar();
+    window.addEventListener("scroll", h, true);
+    window.addEventListener("resize", h);
+    return () => {
+      window.removeEventListener("scroll", h, true);
+      window.removeEventListener("resize", h);
+    };
+  }, [abierto]);
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        autoFocus={autoFocus}
+        value={texto}
+        placeholder="Busca por número, obra o cliente…"
+        onFocus={abrir}
+        onChange={(e) => {
+          onChange(e.target.value ? e.target.value.toUpperCase() : null);
+          if (!abierto) abrir();
+          setActivo(0);
+        }}
+        onBlur={() => {
+          cerrar();
+          onCommit?.();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            cerrar();
+            return;
+          }
+          if (!abierto || filtradas.length === 0) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActivo((i) => Math.min(i + 1, filtradas.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActivo((i) => Math.max(i - 1, 0));
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            elegir(filtradas[activo]);
+          }
+        }}
+        className={cn(
+          compact
+            ? "w-40 rounded-md border border-slate-300 px-1.5 py-1 text-xs uppercase outline-none focus:border-slate-900"
+            : inputCls,
+        )}
+      />
+      {abierto && pos && filtradas.length > 0 ? (
+        <div
+          style={{ left: pos.left, top: pos.top, width: pos.width }}
+          className="fixed z-50 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+        >
+          {filtradas.map((o, i) => (
+            <button
+              key={o.numero}
+              type="button"
+              // mousedown antes que blur: sin esto el menú se cierra antes del clic.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => elegir(o)}
+              onMouseEnter={() => setActivo(i)}
+              className={cn(
+                "block w-full px-2.5 py-1.5 text-left text-xs",
+                i === activo ? "bg-slate-100" : "hover:bg-slate-50",
+              )}
+            >
+              <span className="font-mono font-semibold text-slate-800">{o.numero}</span>
+              {o.etiqueta ? <span className="ml-1.5 text-slate-500">{o.etiqueta}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 // Número corto editable in situ (proyecto en la cotización). Vacío = sin
 // asignar. Guarda al salir del campo o con Enter.
 function ProjectNoCell({ value, onSave }: { value: string | null; onSave: (v: string | null) => Promise<string | null> }) {
+  const opciones = useProjectOptions();
   const [editando, setEditando] = useState(false);
   const [txt, setTxt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1591,24 +1725,7 @@ function ProjectNoCell({ value, onSave }: { value: string | null; onSave: (v: st
   }
 
   if (editando) {
-    return (
-      <input
-        autoFocus
-        value={txt}
-        onChange={(e) => setTxt(e.target.value)}
-        onBlur={() => void guardar()}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") void guardar();
-          if (e.key === "Escape") {
-            setTxt(value ?? "");
-            setEditando(false);
-          }
-        }}
-        list={PROJECT_LIST_ID}
-        placeholder="DC26-11"
-        className="w-28 rounded-md border border-slate-300 px-1.5 py-1 text-xs uppercase outline-none focus:border-slate-900"
-      />
-    );
+    return <ProjectPicker autoFocus compact value={txt || null} options={opciones} onChange={(v) => setTxt(v ?? "")} onCommit={() => void guardar()} />;
   }
   return (
     <button
@@ -1981,6 +2098,7 @@ function LicitacionesTab({
                 <SortTh label="Participación" k="delivery_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
                 <SortTh label="Ref. ($)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estatus" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <th className="px-3 py-2.5 font-semibold">Proyecto</th>
                 <th className="hidden px-3 py-2.5 font-semibold sm:table-cell">Rubro</th>
                 <th className="px-3 py-2.5"></th>
               </tr>
@@ -1988,7 +2106,7 @@ function LicitacionesTab({
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={9} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     Sin licitaciones con estos filtros.
                   </td>
                 </tr>
@@ -2047,6 +2165,17 @@ function LicitacionesTab({
                           </span>
                         ) : null}
                       </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <ProjectNoCell
+                        value={x.qbo_project_no}
+                        onSave={async (v) => {
+                          const r = await setTenderProjectNo(x.id, v);
+                          if ("error" in r) return r.error;
+                          setTenders((prev) => prev.map((t) => (t.id === x.id ? { ...t, qbo_project_no: v } : t)));
+                          return null;
+                        }}
+                      />
                     </td>
                     <td className="hidden px-3 py-2.5 sm:table-cell">{x.rubro ? <RubroChip rubro={x.rubro} /> : "—"}</td>
                     <td className="px-3 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
@@ -2524,6 +2653,7 @@ function NewTenderDrawer({
         converted_project_id: null,
         qbo_job_id: null,
         qbo_sent_at: null,
+        qbo_project_no: null,
         archived_at: null,
       };
       onCreated(row);

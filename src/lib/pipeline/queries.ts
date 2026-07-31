@@ -46,6 +46,7 @@ const QUOTE_COLS_BASE =
 const TENDER_COLS =
   "id, acto_number, year, modalidad, entity, location_text, objeto, status, execution_status, amount_ref_usd, delivery_date, notes, folder_url, rubro, progress, converted_project_id, client_id, client:clients(name)";
 const TENDER_QBO_COLS = "qbo_job_id, qbo_sent_at";
+const TENDER_PROJ_COL = "qbo_project_no"; // 0038
 
 /** Todas las cotizaciones de la org (ambos años) para la tabla editable. */
 export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
@@ -113,11 +114,12 @@ export async function listQuotes(orgId: string): Promise<QuoteRow[]> {
 export async function listTenders(orgId: string): Promise<TenderRow[]> {
   if (!orgId) return [];
   const supabase = await createClient();
-  type Raw = Omit<TenderRow, "client_std_name" | "location_name" | "qbo_job_id" | "qbo_sent_at" | "archived_at"> & {
+  type Raw = Omit<TenderRow, "client_std_name" | "location_name" | "qbo_job_id" | "qbo_sent_at" | "qbo_project_no" | "archived_at"> & {
     client: { name: string } | null;
     location?: { name: string } | null;
     qbo_job_id?: string | null;
     qbo_sent_at?: string | null;
+    qbo_project_no?: string | null;
     archived_at?: string | null;
   };
   type Res = { data: Raw[] | null; error: PgErr };
@@ -133,7 +135,8 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
           .order("id", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{ data: Raw[] | null; error: PgErr }>,
     );
-  let res = (await run(`${TENDER_COLS}, ${LOC_JOIN}, ${TENDER_QBO_COLS}, archived_at`)) as Res;
+  let res = (await run(`${TENDER_COLS}, ${LOC_JOIN}, ${TENDER_QBO_COLS}, archived_at, ${TENDER_PROJ_COL}`)) as Res;
+  if (isMissingColumn(res.error)) res = (await run(`${TENDER_COLS}, ${LOC_JOIN}, ${TENDER_QBO_COLS}, archived_at`)) as Res; // sin 0038
   if (isMissingColumn(res.error)) res = (await run(`${TENDER_COLS}, ${LOC_JOIN}, ${TENDER_QBO_COLS}`)) as Res; // sin 0035
   if (isMissingColumn(res.error)) res = (await run(`${TENDER_COLS}, ${LOC_JOIN}`)) as Res; // sin 0024
   // Solo degradar si la columna falta (0005 pendiente); un error real (RLS,
@@ -147,6 +150,7 @@ export async function listTenders(orgId: string): Promise<TenderRow[]> {
     location_id: t.location_id ?? null,
     location_name: location?.name ?? null,
     qbo_job_id: t.qbo_job_id ?? null,
+    qbo_project_no: t.qbo_project_no ?? null,
     qbo_sent_at: t.qbo_sent_at ?? null,
     archived_at: t.archived_at ?? null,
     amount_ref_usd: t.amount_ref_usd === null ? null : Number(t.amount_ref_usd),
