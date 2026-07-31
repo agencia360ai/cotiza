@@ -1014,6 +1014,7 @@ function QuoteDrawer({
         rubro: f.rubro,
         follow_up_date: f.follow_up_date,
         rejection_reason: f.rejection_reason,
+        qbo_project_no: f.qbo_project_no,
       });
       if ("error" in r) {
         setError(r.error);
@@ -1261,6 +1262,15 @@ function QuoteDrawer({
             ) : null}
           </Field>
         </div>
+
+        <Field label="Nº de proyecto" hint="El proyecto se crea a mano en QuickBooks; anota aquí su número para cruzarlo.">
+          <input
+            className={inputCls}
+            placeholder="DC26-11"
+            value={f.qbo_project_no ?? ""}
+            onChange={(e) => set("qbo_project_no", e.target.value ? e.target.value.toUpperCase() : null)}
+          />
+        </Field>
 
         {f.status === "enviada" ? (
           <Field label="Seguimiento (fecha)" hint="Cuándo dar el próximo toque al cliente.">
