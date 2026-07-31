@@ -49,6 +49,7 @@ export async function updateQuote(
     rubro: Rubro | null;
     follow_up_date: string | null;
     rejection_reason: string | null;
+    qbo_project_no: string | null;
   }>,
 ): Promise<Result> {
   const c = await ctx();
@@ -56,6 +57,15 @@ export async function updateQuote(
   const p = { ...patch };
   if ("location_id" in p && !(await locationSupported(c.supabase))) delete p.location_id;
   const { error } = await c.supabase.from("sales_quotes").update(p).eq("id", id).eq("org_id", c.orgId);
+  // 0037 pendiente: se guarda el RESTO (no perder lo demás que se editó) pero se
+  // AVISA — el Nº de proyecto lo escribe el usuario a mano y creer que quedó
+  // guardado cuando no es peor que fallar.
+  if (error && "qbo_project_no" in p && /qbo_project_no/.test(error.message ?? "")) {
+    delete p.qbo_project_no;
+    const reintento = await c.supabase.from("sales_quotes").update(p).eq("id", id).eq("org_id", c.orgId);
+    if (reintento.error) return { error: reintento.error.message };
+    return { error: "Se guardó todo menos el Nº de proyecto: falta la migración 0037 — corre el SQL en Supabase." };
+  }
   if (error) return { error: error.message };
   // Aprende del ajuste manual: guarda el alias (con sucursal si se asignó) para
   // que la próxima importación con ese mismo nombre se auto-linkee.
