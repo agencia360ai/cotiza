@@ -2784,6 +2784,7 @@ function TenderDrawer({
   // pasar por Guardar: esto avisa al padre para que la tabla refleje el cambio.
   onAutoUpdated?: (id: string, patch: TenderAutoPatch) => void;
 }) {
+  const proyectosQbo = useProjectOptions();
   const [f, setF] = useState<TenderRow>(tender);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2806,6 +2807,7 @@ function TenderDrawer({
       rubro: f.rubro,
       client_id: f.client_id,
       location_id: f.location_id,
+      qbo_project_no: f.qbo_project_no,
     });
     setSaving(false);
     if ("error" in r) {
@@ -2916,6 +2918,9 @@ function TenderDrawer({
             <input type="date" className={inputCls} value={f.delivery_date ?? ""} onChange={(e) => set("delivery_date", e.target.value || null)} />
           </Field>
         </div>
+        <Field label="Nº de proyecto" hint="Elige de los proyectos de QuickBooks (o escríbelo si aún no aparece).">
+          <ProjectPicker value={f.qbo_project_no} options={proyectosQbo} onChange={(v) => set("qbo_project_no", v)} />
+        </Field>
         <Field label="Estatus de ejecución" hint="OC en espera, Terminado, En ejecución…">
           <input className={inputCls} value={f.execution_status ?? ""} onChange={(e) => set("execution_status", e.target.value || null)} />
         </Field>
