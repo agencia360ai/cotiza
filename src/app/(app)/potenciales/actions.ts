@@ -236,6 +236,7 @@ export async function updateTender(
     rubro: Rubro | null;
     client_id: string | null;
     location_id: string | null;
+    qbo_project_no: string | null;
   }>,
 ): Promise<Result> {
   const c = await ctx();
@@ -243,6 +244,14 @@ export async function updateTender(
   const p = { ...patch };
   if ("location_id" in p && !(await locationSupported(c.supabase))) delete p.location_id;
   const { error } = await c.supabase.from("tenders").update(p).eq("id", id).eq("org_id", c.orgId);
+  // 0038 pendiente: se guarda el resto, pero se AVISA — el Nº lo escribe el
+  // usuario y creer que quedó guardado cuando no, es peor que fallar.
+  if (error && "qbo_project_no" in p && /qbo_project_no/.test(error.message)) {
+    delete p.qbo_project_no;
+    const reintento = await c.supabase.from("tenders").update(p).eq("id", id).eq("org_id", c.orgId);
+    if (reintento.error) return { error: reintento.error.message };
+    return { error: "Se guardó todo menos el Nº de proyecto: falta la migración 0038." };
+  }
   if (error) return { error: error.message };
   revalidatePath(REVALIDATE);
   return { ok: true };
