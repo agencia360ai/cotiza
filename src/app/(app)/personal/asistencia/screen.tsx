@@ -92,6 +92,8 @@ async function resolveCoords(link: string): Promise<{ lat: number; lng: number }
 function periodLabel(period: PeriodId, desdeKey: string, hastaKey: string, singleDay: boolean): string {
   if (period === "hoy") return "Hoy";
   if (period === "ayer") return `Ayer · ${fmtFecha(desdeKey + "T12:00:00Z")}`;
+  if (period === "semana") return `Esta semana · ${fmtFecha(desdeKey + "T12:00:00Z")} – ${fmtFecha(hastaKey + "T12:00:00Z")}`;
+  if (period === "semana_pasada") return `Semana pasada · ${fmtFecha(desdeKey + "T12:00:00Z")} – ${fmtFecha(hastaKey + "T12:00:00Z")}`;
   if (period === "7d") return "Últimos 7 días";
   if (period === "30d") return "Últimos 30 días";
   return singleDay ? fmtFecha(desdeKey + "T12:00:00Z") : `${fmtFecha(desdeKey + "T12:00:00Z")} – ${fmtFecha(hastaKey + "T12:00:00Z")}`;
@@ -223,7 +225,7 @@ export function AsistenciaScreen({
       {tab === "tablero" ? (
         <Tablero activos={activos} porTech={porTech} period={period} desdeKey={desdeKey} hastaKey={hastaKey} singleDay={singleDay} filaSitio={filaSitio} lateThreshold={lateThreshold} isPowerUser={isPowerUser} label={label} />
       ) : tab === "planilla" ? (
-        <PlanillaTab techs={activos} planilla={planilla} desdeKey={desdeKey} hastaKey={hastaKey} workdays={settings?.workday_days ?? [1, 2, 3, 4, 5]} events={events} onVerMarcas={() => setTab("tablero")} />
+        <PlanillaTab techs={activos} planilla={planilla} desdeKey={desdeKey} hastaKey={hastaKey} workdays={settings?.workday_days ?? [1, 2, 3, 4, 5, 6]} events={events} singleDay={singleDay} onVerMarcas={() => setTab("tablero")} />
       ) : tab === "config" ? (
         <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} rosterWaIds={rosterWaIds} />
       ) : (
@@ -243,7 +245,14 @@ function PeriodControl({ period, desdeKey, hastaKey, truncado }: { period: Perio
   const router = useRouter();
   const [d, setD] = useState(desdeKey);
   const [h, setH] = useState(hastaKey);
-  const opciones: [PeriodId, string][] = [["hoy", "Hoy"], ["ayer", "Ayer"], ["7d", "Últimos 7 días"], ["30d", "Últimos 30 días"], ["custom", "Personalizado"]];
+  const opciones: [PeriodId, string][] = [
+    ["hoy", "Hoy"],
+    ["ayer", "Ayer"],
+    ["semana", "Esta semana"],
+    ["semana_pasada", "Semana pasada"],
+    ["30d", "Últimos 30 días"],
+    ["custom", "Personalizado"],
+  ];
   const ir = (p: PeriodId) => {
     if (p === "custom") router.push(`/personal/asistencia?period=custom&desde=${d}&hasta=${h}`);
     else router.push(`/personal/asistencia?period=${p}`);
@@ -1085,6 +1094,7 @@ function PlanillaTab({
   hastaKey,
   workdays,
   events,
+  singleDay,
   onVerMarcas,
 }: {
   techs: AttTech[];
@@ -1093,6 +1103,7 @@ function PlanillaTab({
   hastaKey: string;
   workdays: number[];
   events: AttEventRow[];
+  singleDay: boolean;
   onVerMarcas: () => void;
 }) {
   const router = useRouter();
@@ -1102,6 +1113,18 @@ function PlanillaTab({
   const [borrador, setBorrador] = useState("");
 
   const dias = useMemo(() => diasEntre(desdeKey, hastaKey), [desdeKey, hastaKey]);
+  // Lugares distintos de cada día: en la vista de varios días van en el
+  // encabezado, no repetidos en cada celda.
+  const lugaresPorDia = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const r of planilla) {
+      if (!r.present || !r.site_label) continue;
+      const l = m.get(r.day) ?? [];
+      if (!l.includes(r.site_label)) l.push(r.site_label);
+      m.set(r.day, l);
+    }
+    return m;
+  }, [planilla]);
   const porClave = useMemo(() => new Map(planilla.map((r) => [`${r.technician_id}|${r.day}`, r])), [planilla]);
   // Marcas de ubicación: respaldo. Solo interesa SI hubo marca ese día.
   const conMarca = useMemo(() => {
@@ -1175,12 +1198,21 @@ function PlanillaTab({
                   <th
                     key={d}
                     className={cn(
-                      "px-1 py-2 text-center text-[10px] font-semibold",
+                      "px-1 py-2 align-top text-center text-[10px] font-semibold",
                       laboral ? "text-slate-500" : "bg-slate-50 text-slate-300",
                     )}
                   >
                     <div>{DOW_CORTO[dow]}</div>
                     <div className="tabular-nums">{d.slice(8)}</div>
+                    {!singleDay && lugaresPorDia.get(d)?.length ? (
+                      <div className="mt-1 space-y-px font-normal">
+                        {lugaresPorDia.get(d)!.map((l) => (
+                          <div key={l} className="truncate text-[9px] leading-tight text-slate-400" title={l}>
+                            {l}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </th>
                 );
               })}
@@ -1224,7 +1256,7 @@ function PlanillaTab({
                       </button>
                       {presente ? (
                         <div className="mt-0.5 space-y-px">
-                          {(["project_no", "site_label"] as const).map((campo) => {
+                          {(singleDay ? (["project_no", "site_label"] as const) : (["project_no"] as const)).map((campo) => {
                             const valor = campo === "project_no" ? fila?.project_no : fila?.site_label;
                             if (enEdicion && editando?.campo === campo) {
                               return (

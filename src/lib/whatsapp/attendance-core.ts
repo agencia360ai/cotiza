@@ -157,7 +157,7 @@ export function panamaDayKey(iso: string): string {
 }
 
 // ── Períodos del tablero (Hoy / Ayer / 7d / 30d / Personalizado) ──────────────
-export type PeriodId = "hoy" | "ayer" | "7d" | "30d" | "custom";
+export type PeriodId = "hoy" | "ayer" | "semana" | "semana_pasada" | "7d" | "30d" | "custom";
 
 // Día de hoy en Panamá a partir del reloj.
 export function panamaTodayKey(now: Date): string {
@@ -201,6 +201,14 @@ export function computePeriod(period: PeriodId, now: Date, opts: { workdays: num
     const y = lastWorkday(today, opts.workdays);
     desdeKey = y;
     hastaKey = y;
+  } else if (period === "semana" || period === "semana_pasada") {
+    // Semana de LUNES a DOMINGO. getUTCDay(): 0=domingo → el lunes está 6 días
+    // atrás, no 1; por eso el (dow + 6) % 7.
+    const dow = new Date(today + "T12:00:00Z").getUTCDay();
+    const lunes = addDaysKey(today, -((dow + 6) % 7));
+    const base = period === "semana" ? lunes : addDaysKey(lunes, -7);
+    desdeKey = base;
+    hastaKey = addDaysKey(base, 6);
   } else if (period === "7d") {
     desdeKey = addDaysKey(today, -6);
     hastaKey = today;

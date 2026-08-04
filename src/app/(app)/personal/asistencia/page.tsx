@@ -12,7 +12,7 @@ function missing(error: { message?: string; code?: string } | null): boolean {
   return /does not exist|schema cache|could not find/i.test(error.message ?? "");
 }
 
-const PERIODOS: PeriodId[] = ["hoy", "ayer", "7d", "30d", "custom"];
+const PERIODOS: PeriodId[] = ["hoy", "ayer", "semana", "semana_pasada", "7d", "30d", "custom"];
 
 export default async function AsistenciaPage({
   searchParams,
@@ -50,7 +50,7 @@ export default async function AsistenciaPage({
   const isPowerUser = powerEmails.length > 0 ? powerEmails.includes(email) : auth.role === "owner" || auth.role === "admin";
 
   // Período elegido → rango de fechas.
-  const period: PeriodId = PERIODOS.includes(sp.period as PeriodId) ? (sp.period as PeriodId) : "hoy";
+  const period: PeriodId = PERIODOS.includes(sp.period as PeriodId) ? (sp.period as PeriodId) : "semana";
   const range = computePeriod(period, new Date(), { workdays: workdayDays, from: sp.desde, to: sp.hasta });
 
   // Técnicos (con wa_id; fallback si la columna no existe).
