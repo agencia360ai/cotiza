@@ -20,6 +20,7 @@ export async function sendEmail(input: {
   subject: string;
   html: string;
   attachments?: Adjunto[];
+  replyTo?: string | null;
 }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const key = process.env.RESEND_API_KEY;
   if (!key) return { ok: false, error: "RESEND_API_KEY no está configurada" };
@@ -35,6 +36,8 @@ export async function sendEmail(input: {
         to,
         subject: input.subject,
         html: input.html,
+        // Responder debe escribirle a una persona, no al remitente técnico.
+        ...(input.replyTo ? { reply_to: input.replyTo } : {}),
         attachments: input.attachments?.map((a) => ({
           filename: a.filename,
           content: Buffer.from(a.content).toString("base64"),

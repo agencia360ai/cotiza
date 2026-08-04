@@ -18,7 +18,7 @@ async function ctx() {
   if (!u.user) return { ok: false as const, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
-  return { ok: true as const, supabase, orgId, userId: u.user.id };
+  return { ok: true as const, supabase, orgId, userId: u.user.id, userEmail: u.user.email ?? null };
 }
 
 const REVALIDATE = "/potenciales";
@@ -84,7 +84,7 @@ export async function updateQuote(
   // un fallo de correo NO debe deshacer ni ensuciar el guardado del usuario.
   if (recienAprobada) {
     try {
-      await notificarCotizacionAprobada(c.supabase, c.orgId, id);
+      await notificarCotizacionAprobada(c.supabase, c.orgId, id, c.userEmail ?? null);
     } catch (e) {
       console.error("[cotiza] aviso de aprobación falló:", e);
     }
