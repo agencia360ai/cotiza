@@ -93,3 +93,27 @@ export async function updateOrgFocus(focus: "maintenance" | "projects" | "mixed"
   revalidatePath("/settings");
   return { ok: true };
 }
+
+// Correos que reciben el aviso cuando una cotización queda aprobada (0041).
+// Ese correo dispara el registro manual del proyecto en QuickBooks.
+export async function saveQuoteNotifyEmails(emails: string[]): Promise<{ ok: true } | { ok: false; error: string }> {
+  const ctx = await getActiveOrgContext();
+  if (!ctx) return { ok: false, error: "Sin organización" };
+  const supabase = await createClient();
+  const orgId = ctx.orgId;
+
+  const clean = Array.from(
+    new Set(emails.map((e) => e.trim().toLowerCase()).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))),
+  );
+  const { error } = await supabase.from("organizations").update({ quote_notify_emails: clean }).eq("id", orgId);
+  if (error) {
+    return {
+      ok: false,
+      error: /quote_notify_emails/.test(error.message)
+        ? "Falta la migración 0041 — corre el SQL en Supabase y reintenta."
+        : error.message,
+    };
+  }
+  revalidatePath("/settings");
+  return { ok: true };
+}
