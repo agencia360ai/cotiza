@@ -58,10 +58,23 @@ export default async function AsistenciaPage({
   {
     const full = (await supabase
       .from("technicians")
-      .select("id, name, phone, wa_id, active")
+      .select("id, name, phone, wa_id, active, in_attendance")
       .eq("org_id", orgId)
       .order("active", { ascending: false })
       .order("name")) as { data: AttTech[] | null; error: { message?: string; code?: string } | null };
+    // 0042 pendiente: sin la columna, todos llevan planilla (el default).
+    if (missing(full.error)) {
+      const sin42 = (await supabase
+        .from("technicians")
+        .select("id, name, phone, wa_id, active")
+        .eq("org_id", orgId)
+        .order("name")) as { data: AttTech[] | null; error: { message?: string; code?: string } | null };
+      if (!missing(sin42.error)) {
+        techs = sin42.data ?? [];
+        full.error = null;
+        full.data = techs;
+      }
+    }
     if (missing(full.error)) {
       const basic = (await supabase.from("technicians").select("id, name, phone, active").eq("org_id", orgId).order("name")) as {
         data: Omit<AttTech, "wa_id">[] | null;

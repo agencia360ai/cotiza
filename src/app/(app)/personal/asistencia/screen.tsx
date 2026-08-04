@@ -11,7 +11,7 @@ import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion
 import {
   saveAttendanceSettings, setLocationGeofence, resolveMapsLink,
   createAttendanceSite, updateAttendanceSite, deleteAttendanceSite,
-  savePowerUsers, updateAttendanceEvent, deleteAttendanceEvent, createManualAttendanceEvent, setPlanillaDia, saveRosterWaIds,
+  savePowerUsers, updateAttendanceEvent, deleteAttendanceEvent, createManualAttendanceEvent, setPlanillaDia, saveRosterWaIds, setEnPlanilla,
   type AttendanceSettingsInput,
 } from "./actions";
 
@@ -23,7 +23,7 @@ export type AttSettings = {
   late_after_min: number;
   require_geofence: boolean;
 };
-export type AttTech = { id: string; name: string; phone: string | null; wa_id: string | null; active: boolean };
+export type AttTech = { id: string; name: string; phone: string | null; wa_id: string | null; active: boolean; in_attendance?: boolean };
 export type AttLoc = { id: string; name: string; clientName: string; lat: number | null; lng: number | null; radius: number };
 export type AttSite = { id: string; name: string; lat: number | null; lng: number | null; radius: number };
 export type AttEventRow = {
@@ -124,6 +124,8 @@ export function AsistenciaScreen({
 }) {
   const [tab, setTab] = useState<"tablero" | "planilla" | "config" | "auditoria">("planilla");
   const activos = techs.filter((t) => t.active);
+  // El cuadro lleva solo a quien hace planilla diaria (0042).
+  const enPlanilla = activos.filter((t) => t.in_attendance !== false);
   const nombre = useMemo(() => new Map(techs.map((t) => [t.id, t.name])), [techs]);
   const locName = useMemo(() => new Map(locs.map((l) => [l.id, l.name])), [locs]);
   const sinWa = activos.filter((t) => !t.wa_id);
@@ -173,10 +175,14 @@ export function AsistenciaScreen({
         </div>
         <button
           type="button"
-          onClick={() => exportCsv(events, nombre, locName, period)}
-          disabled={events.length === 0}
+          onClick={() =>
+            tab === "tablero"
+              ? exportCsv(events, nombre, locName, period)
+              : exportPlanilla(enPlanilla, planilla, desdeKey, hastaKey, settings?.workday_days ?? [1, 2, 3, 4, 5, 6], events, period)
+          }
+          disabled={tab === "tablero" ? events.length === 0 : enPlanilla.length === 0}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-          title="Descarga la vista actual en CSV"
+          title={tab === "tablero" ? "Descarga las marcas de ubicación en CSV" : "Descarga el cuadro de asistencia en CSV"}
         >
           <Download className="size-4" /> Exportar
         </button>
@@ -225,9 +231,9 @@ export function AsistenciaScreen({
       {tab === "tablero" ? (
         <Tablero activos={activos} porTech={porTech} period={period} desdeKey={desdeKey} hastaKey={hastaKey} singleDay={singleDay} filaSitio={filaSitio} lateThreshold={lateThreshold} isPowerUser={isPowerUser} label={label} />
       ) : tab === "planilla" ? (
-        <PlanillaTab techs={activos} planilla={planilla} desdeKey={desdeKey} hastaKey={hastaKey} workdays={settings?.workday_days ?? [1, 2, 3, 4, 5, 6]} events={events} singleDay={singleDay} onVerMarcas={() => setTab("tablero")} />
+        <PlanillaTab techs={enPlanilla} planilla={planilla} desdeKey={desdeKey} hastaKey={hastaKey} workdays={settings?.workday_days ?? [1, 2, 3, 4, 5, 6]} events={events} singleDay={singleDay} onVerMarcas={() => setTab("tablero")} />
       ) : tab === "config" ? (
-        <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} rosterWaIds={rosterWaIds} />
+        <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} rosterWaIds={rosterWaIds} techs={activos} />
       ) : (
         <Auditoria audit={audit} nombre={nombre} />
       )}
@@ -733,7 +739,7 @@ function describeAudit(a: AttAudit): { verbo: string; tono: "emerald" | "amber" 
 // ── Configuración ─────────────────────────────────────────────────────────────
 const inputCls = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none";
 
-function Config({ settings, locs, sites, isPowerUser, powerEmails, rosterWaIds }: { settings: AttSettings | null; locs: AttLoc[]; sites: AttSite[]; isPowerUser: boolean; powerEmails: string[]; rosterWaIds: string[] }) {
+function Config({ settings, locs, sites, isPowerUser, powerEmails, rosterWaIds, techs }: { settings: AttSettings | null; locs: AttLoc[]; sites: AttSite[]; isPowerUser: boolean; powerEmails: string[]; rosterWaIds: string[]; techs: AttTech[] }) {
   const router = useRouter();
   const [f, setF] = useState<AttendanceSettingsInput>({
     wa_phone_number_id: settings?.wa_phone_number_id ?? null,
@@ -840,6 +846,7 @@ function Config({ settings, locs, sites, isPowerUser, powerEmails, rosterWaIds }
 
       {isPowerUser ? <PowerUsersCard emails={powerEmails} /> : null}
       {isPowerUser ? <RosterWaCard numeros={rosterWaIds} /> : null}
+      {isPowerUser ? <PersonalEnPlanillaCard techs={techs} /> : null}
     </div>
   );
 }
@@ -1059,7 +1066,54 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-// ── Export CSV (cliente) — exporta la vista/período actual ─────────────────────
+// Export del CUADRO. Formato LARGO (una fila por persona y día) en vez de copiar
+// la cuadrícula: así se filtra y se suma en Excel — que es para lo que se usa,
+// calcular el tiempo extra. La columna Tipo separa Normal de Extra directo.
+function exportPlanilla(
+  techs: AttTech[],
+  planilla: AttDia[],
+  desdeKey: string,
+  hastaKey: string,
+  workdays: number[],
+  events: AttEventRow[],
+  period: string,
+) {
+  const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+  const DOW = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+  const porClave = new Map(planilla.map((r) => [`${r.technician_id}|${r.day}`, r]));
+  const conMarca = new Set(events.map((e) => `${e.technician_id}|${panamaDayKey(e.occurred_at)}`));
+
+  const rows = [["Fecha", "Dia", "Persona", "Asistio", "Tipo", "Proyecto", "Lugar", "Marco_ubicacion"].join(",")];
+  for (const d of diasEntre(desdeKey, hastaKey)) {
+    const dow = new Date(d + "T12:00:00Z").getUTCDay();
+    const laboral = workdays.includes(dow);
+    for (const t of techs) {
+      const fila = porClave.get(`${t.id}|${d}`);
+      const presente = fila ? fila.present : laboral;
+      rows.push(
+        [
+          d,
+          esc(DOW[dow]),
+          esc(t.name),
+          presente ? "Si" : "No",
+          !presente ? "" : laboral ? "Normal" : "Extra",
+          esc(fila?.project_no ?? ""),
+          esc(fila?.site_label ?? ""),
+          conMarca.has(`${t.id}|${d}`) ? "Si" : "No",
+        ].join(","),
+      );
+    }
+  }
+  // BOM: sin él Excel abre los acentos como basura.
+  const blob = new Blob(["\ufeff" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `asistencia-${period}-${desdeKey}_a_${hastaKey}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── Export de las marcas de ubicación (respaldo) ──────────────────────────────
 function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: Map<string, string>, period: string) {
   const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const rows = [["Fecha", "Hora", "Tecnico", "Marca", "Sitio", "Distancia_m", "Estado"].join(",")];
@@ -1380,6 +1434,61 @@ function RosterWaCard({ numeros }: { numeros: string[] }) {
           <Save className="size-3.5" /> Guardar
         </button>
         {msg ? <span className="text-xs text-slate-500">{msg}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+// Quién sale en el cuadro de asistencia. `active` dice si sigue en la empresa;
+// esto dice si lleva planilla diaria — administración está activa pero no va a
+// proyectos, y mezclarlos ensucia el cuadro.
+function PersonalEnPlanillaCard({ techs }: { techs: AttTech[] }) {
+  const router = useRouter();
+  const [pendiente, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function alternar(t: AttTech) {
+    setError(null);
+    startTransition(async () => {
+      const r = await setEnPlanilla(t.id, t.in_attendance === false);
+      if ("error" in r) setError(r.error);
+      else router.refresh();
+    });
+  }
+
+  const dentro = techs.filter((t) => t.in_attendance !== false).length;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <h3 className="text-sm font-semibold text-slate-900">Personal en el cuadro de asistencia</h3>
+      <p className="mt-1 text-xs text-slate-500">
+        Quién aparece en la planilla diaria. Desmárcalo para sacarlo del cuadro sin darlo de baja —
+        útil para administración u oficina, que no van a proyectos. {dentro} de {techs.length} en el cuadro.
+      </p>
+      {error ? <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{error}</p> : null}
+      <div className="mt-3 grid gap-1 sm:grid-cols-2">
+        {techs.map((t) => {
+          const dentroDelCuadro = t.in_attendance !== false;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => alternar(t)}
+              disabled={pendiente}
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-slate-50 disabled:opacity-50"
+            >
+              <span
+                className={cn(
+                  "flex size-5 shrink-0 items-center justify-center rounded ring-1 ring-inset",
+                  dentroDelCuadro ? "bg-emerald-500 text-white ring-emerald-600/20" : "bg-white text-transparent ring-slate-300",
+                )}
+              >
+                <Check className="size-3" strokeWidth={3} />
+              </span>
+              <span className={cn("truncate", dentroDelCuadro ? "text-slate-700" : "text-slate-400")}>{t.name}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
