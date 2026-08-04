@@ -13,7 +13,7 @@ async function ctx() {
   if (!u.user) return { ok: false as const, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
-  return { ok: true as const, supabase, orgId };
+  return { ok: true as const, supabase, orgId, userId: u.user.id };
 }
 
 export type AttendanceSettingsInput = {
@@ -337,4 +337,70 @@ export async function createManualAttendanceEvent(input: { technician_id: string
   });
   revalidatePath("/personal/asistencia");
   return { ok: true };
+}
+
+// ── Planilla diaria (0039) ───────────────────────────────────────────────────
+// Todos asisten por defecto: solo se guarda fila cuando hay algo que decir. Si
+// el estado vuelve a "presente sin proyecto ni nota", se BORRA la fila en vez
+// de dejar basura que diga lo mismo que el default.
+export async function setPlanillaDia(
+  technicianId: string,
+  day: string,
+  patch: { present?: boolean; project_no?: string | null; site_label?: string | null; note?: string | null },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const c = await ctx();
+  if (!c.ok) return { ok: false, error: c.error };
+
+  const { data: actual } = (await c.supabase
+    .from("attendance_day")
+    .select("present, project_no, site_label, note")
+    .eq("org_id", c.orgId)
+    .eq("technician_id", technicianId)
+    .eq("day", day)
+    .maybeSingle()) as { data: { present: boolean; project_no: string | null; site_label: string | null; note: string | null } | null };
+
+  const fila = {
+    present: patch.present ?? actual?.present ?? true,
+    project_no: (patch.project_no !== undefined ? patch.project_no : actual?.project_no ?? null) || null,
+    site_label: (patch.site_label !== undefined ? patch.site_label : actual?.site_label ?? null) || null,
+    note: (patch.note !== undefined ? patch.note : actual?.note ?? null) || null,
+  };
+
+  const esElDefault = fila.present && !fila.project_no && !fila.site_label && !fila.note;
+  if (esElDefault) {
+    const { error } = await c.supabase
+      .from("attendance_day")
+      .delete()
+      .eq("org_id", c.orgId)
+      .eq("technician_id", technicianId)
+      .eq("day", day);
+    if (error) return { ok: false, error: faltaMigracion0039(error) ?? error.message };
+    revalidatePath("/personal/asistencia");
+    return { ok: true };
+  }
+
+  const { error } = (await c.supabase.from("attendance_day").upsert(
+    {
+      org_id: c.orgId,
+      technician_id: technicianId,
+      day,
+      ...fila,
+      project_no: fila.project_no ? fila.project_no.toUpperCase() : null,
+      source: "manual",
+      updated_by: c.userId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "org_id,technician_id,day" },
+  )) as { error: { message: string; code?: string } | null };
+  if (error) return { ok: false, error: faltaMigracion0039(error) ?? error.message };
+  revalidatePath("/personal/asistencia");
+  return { ok: true };
+}
+
+function faltaMigracion0039(e: { message?: string; code?: string } | null): string | null {
+  if (!e) return null;
+  if (e.code === "42P01" || /attendance_day/.test(e.message ?? "")) {
+    return "Falta la migración 0039 (attendance_day) — corre el SQL en Supabase y reintenta.";
+  }
+  return null;
 }

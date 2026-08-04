@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgContext } from "@/lib/org-context";
 import { computePeriod, type PeriodId } from "@/lib/whatsapp/attendance-core";
-import { AsistenciaScreen, type AttSettings, type AttTech, type AttLoc, type AttSite, type AttEventRow, type AttAudit } from "./screen";
+import { AsistenciaScreen, type AttSettings, type AttTech, type AttLoc, type AttSite, type AttEventRow, type AttAudit, type AttDia } from "./screen";
 
 export const dynamic = "force-dynamic";
 
@@ -153,8 +153,23 @@ export default async function AsistenciaPage({
     if (!missing(res.error)) audit = res.data ?? [];
   }
 
+  // Planilla del día (0039). Solo hay fila cuando hay algo que decir: una falta,
+  // un proyecto, o una marca traída del mensaje de WhatsApp. Sin fila = presente.
+  const diaPlanilla = range.hastaKey;
+  let planilla: AttDia[] = [];
+  {
+    const res = (await supabase
+      .from("attendance_day")
+      .select("technician_id, present, project_no, site_label, source, note")
+      .eq("org_id", orgId)
+      .eq("day", diaPlanilla)) as { data: AttDia[] | null; error: { message?: string; code?: string } | null };
+    if (!missing(res.error)) planilla = res.data ?? [];
+  }
+
   return (
     <AsistenciaScreen
+      planilla={planilla}
+      diaPlanilla={diaPlanilla}
       settings={settingsData}
       techs={techs}
       locs={locs}

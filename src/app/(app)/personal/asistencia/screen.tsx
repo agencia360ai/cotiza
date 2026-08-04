@@ -4,14 +4,14 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, MapPin, Clock, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2, Pencil, ShieldCheck, ScrollText, X, ChevronDown, ChevronRight,
+  ArrowLeft, MapPin, Clock, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2, Pencil, ShieldCheck, ScrollText, X, ChevronDown, ChevronRight, ClipboardCheck, Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion, type AttEvent, type PeriodId } from "@/lib/whatsapp/attendance-core";
 import {
   saveAttendanceSettings, setLocationGeofence, resolveMapsLink,
   createAttendanceSite, updateAttendanceSite, deleteAttendanceSite,
-  savePowerUsers, updateAttendanceEvent, deleteAttendanceEvent, createManualAttendanceEvent,
+  savePowerUsers, updateAttendanceEvent, deleteAttendanceEvent, createManualAttendanceEvent, setPlanillaDia,
   type AttendanceSettingsInput,
 } from "./actions";
 
@@ -38,6 +38,16 @@ export type AttEventRow = {
   matched_name?: string | null;
   wa_location_name: string | null;
 };
+// Planilla del día (0039). Sin fila para una persona = presente, sin proyecto.
+export type AttDia = {
+  technician_id: string;
+  present: boolean;
+  project_no: string | null;
+  site_label: string | null;
+  source: "manual" | "whatsapp";
+  note: string | null;
+};
+
 export type AttAudit = {
   id: string;
   event_id: string | null;
@@ -90,7 +100,10 @@ const DIAS_SEMANA: [number, string][] = [[1, "Lun"], [2, "Mar"], [3, "Mié"], [4
 
 export function AsistenciaScreen({
   settings, techs, locs, sites, events, audit, isPowerUser, powerEmails, migracionPendiente, period, desdeKey, hastaKey, singleDay, truncado,
+  planilla, diaPlanilla,
 }: {
+  planilla: AttDia[];
+  diaPlanilla: string;
   settings: AttSettings | null;
   techs: AttTech[];
   locs: AttLoc[];
@@ -106,7 +119,7 @@ export function AsistenciaScreen({
   singleDay: boolean;
   truncado: boolean;
 }) {
-  const [tab, setTab] = useState<"tablero" | "config" | "auditoria">("tablero");
+  const [tab, setTab] = useState<"tablero" | "planilla" | "config" | "auditoria">("tablero");
   const activos = techs.filter((t) => t.active);
   const nombre = useMemo(() => new Map(techs.map((t) => [t.id, t.name])), [techs]);
   const locName = useMemo(() => new Map(locs.map((l) => [l.id, l.name])), [locs]);
@@ -137,6 +150,7 @@ export function AsistenciaScreen({
 
   const tabs: [string, string, React.ComponentType<{ className?: string }>][] = [
     ["tablero", "Asistencia", Clock],
+    ["planilla", "Planilla", ClipboardCheck],
     ["config", "Configuración", Settings2],
   ];
   if (isPowerUser) tabs.push(["auditoria", "Auditoría", ScrollText]);
@@ -197,6 +211,8 @@ export function AsistenciaScreen({
 
       {tab === "tablero" ? (
         <Tablero activos={activos} porTech={porTech} period={period} desdeKey={desdeKey} hastaKey={hastaKey} singleDay={singleDay} filaSitio={filaSitio} lateThreshold={lateThreshold} isPowerUser={isPowerUser} label={label} />
+      ) : tab === "planilla" ? (
+        <PlanillaTab techs={activos} planilla={planilla} dia={diaPlanilla} events={events} />
       ) : tab === "config" ? (
         <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} />
       ) : (
@@ -1041,4 +1057,129 @@ function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: 
   a.download = `asistencia-${period}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// ── Planilla del día ─────────────────────────────────────────────────────────
+// TODOS ASISTEN POR DEFECTO: la fila solo existe cuando hay algo que decir (una
+// falta, un proyecto). Desmarcar el check registra la ausencia; volver a marcar
+// sin proyecto ni nota borra la fila y vuelve al default.
+function PlanillaTab({ techs, planilla, dia, events }: { techs: AttTech[]; planilla: AttDia[]; dia: string; events: AttEventRow[] }) {
+  const router = useRouter();
+  const [pendiente, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [borrador, setBorrador] = useState<Record<string, string>>({});
+
+  const porTecnico = useMemo(() => new Map(planilla.map((r) => [r.technician_id, r])), [planilla]);
+  // Evidencia: primera marca del día de cada quien (hora + sitio).
+  const evidencia = useMemo(() => {
+    const m = new Map<string, AttEventRow>();
+    for (const e of events) {
+      if (panamaDayKey(e.occurred_at) !== dia) continue;
+      if (!m.has(e.technician_id)) m.set(e.technician_id, e);
+    }
+    return m;
+  }, [events, dia]);
+
+  const presentes = techs.filter((t) => porTecnico.get(t.id)?.present !== false).length;
+
+  function guardar(techId: string, patch: { present?: boolean; project_no?: string | null }) {
+    setError(null);
+    startTransition(async () => {
+      const r = await setPlanillaDia(techId, dia, patch);
+      if (!r.ok) setError(r.error);
+      else router.refresh();
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">Planilla del {dia}</h2>
+          <p className="text-xs text-slate-500">
+            Todos asisten por defecto — desmarca solo a quien faltó. {presentes} de {techs.length} presentes.
+          </p>
+        </div>
+        {pendiente ? <span className="text-xs text-slate-400">Guardando…</span> : null}
+      </div>
+
+      {error ? <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-100 text-left text-[11px] uppercase tracking-wider text-slate-500">
+              <th className="w-16 px-2 py-2 font-semibold">Asistió</th>
+              <th className="px-2 py-2 font-semibold">Persona</th>
+              <th className="px-2 py-2 font-semibold">Proyecto / labor</th>
+              <th className="px-2 py-2 font-semibold">Marca de WhatsApp</th>
+            </tr>
+          </thead>
+          <tbody>
+            {techs.map((t) => {
+              const fila = porTecnico.get(t.id);
+              const presente = fila?.present !== false;
+              const ev = evidencia.get(t.id);
+              const proyecto = borrador[t.id] ?? fila?.project_no ?? "";
+              return (
+                <tr key={t.id} className={cn("border-b border-slate-50 last:border-0", !presente && "bg-rose-50/40")}>
+                  <td className="px-2 py-2">
+                    <button
+                      type="button"
+                      onClick={() => guardar(t.id, { present: !presente })}
+                      title={presente ? "Marcar como ausente" : "Marcar como presente"}
+                      className={cn(
+                        "flex size-6 items-center justify-center rounded-md ring-1 ring-inset transition-colors",
+                        presente
+                          ? "bg-emerald-500 text-white ring-emerald-600/20 hover:bg-emerald-600"
+                          : "bg-white text-transparent ring-slate-300 hover:bg-slate-50",
+                      )}
+                    >
+                      <Check className="size-4" strokeWidth={3} />
+                    </button>
+                  </td>
+                  <td className="px-2 py-2">
+                    <span className={cn("font-medium", presente ? "text-slate-800" : "text-slate-400 line-through")}>{t.name}</span>
+                    {fila?.source === "whatsapp" ? (
+                      <span className="ml-1.5 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">del mensaje</span>
+                    ) : null}
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      value={proyecto}
+                      disabled={!presente}
+                      placeholder="DM26-08 · Transporte…"
+                      onChange={(e) => setBorrador((b) => ({ ...b, [t.id]: e.target.value.toUpperCase() }))}
+                      onBlur={() => {
+                        const v = (borrador[t.id] ?? "").trim();
+                        if (borrador[t.id] === undefined || v === (fila?.project_no ?? "")) return;
+                        guardar(t.id, { project_no: v || null });
+                        setBorrador((b) => {
+                          const n = { ...b };
+                          delete n[t.id];
+                          return n;
+                        });
+                      }}
+                      className="w-48 rounded-md border border-slate-200 px-2 py-1 text-xs uppercase outline-none focus:border-slate-900 disabled:bg-slate-50 disabled:text-slate-300"
+                    />
+                    {fila?.site_label ? <span className="ml-2 text-[11px] text-slate-400">{fila.site_label}</span> : null}
+                  </td>
+                  <td className="px-2 py-2 text-xs text-slate-500">
+                    {ev ? (
+                      <>
+                        {fmtHora(new Date(ev.occurred_at))}
+                        {ev.matched_name ? <span className="text-slate-400"> · {ev.matched_name}</span> : null}
+                      </>
+                    ) : (
+                      <span className="text-slate-300">sin marca</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
