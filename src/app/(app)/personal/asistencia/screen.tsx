@@ -1098,7 +1098,7 @@ function PlanillaTab({
   const router = useRouter();
   const [pendiente, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [editando, setEditando] = useState<{ techId: string; dia: string } | null>(null);
+  const [editando, setEditando] = useState<{ techId: string; dia: string; campo: "project_no" | "site_label" } | null>(null);
   const [borrador, setBorrador] = useState("");
 
   const dias = useMemo(() => diasEntre(desdeKey, hastaKey), [desdeKey, hastaKey]);
@@ -1110,7 +1110,7 @@ function PlanillaTab({
     return set;
   }, [events]);
 
-  function guardar(techId: string, dia: string, patch: { present?: boolean; project_no?: string | null }) {
+  function guardar(techId: string, dia: string, patch: { present?: boolean; project_no?: string | null; site_label?: string | null }) {
     setError(null);
     startTransition(async () => {
       const r = await setPlanillaDia(techId, dia, patch);
@@ -1183,7 +1183,7 @@ function PlanillaTab({
                   const laboral = workdays.includes(dow);
                   const enEdicion = editando?.techId === t.id && editando?.dia === d;
                   return (
-                    <td key={d} className={cn("px-1 py-1 text-center align-top", !laboral && "bg-slate-50/60")}>
+                    <td key={d} className={cn("w-24 min-w-24 px-1 py-1 text-center align-top", !laboral && "bg-slate-50/60")}>
                       <button
                         type="button"
                         onClick={() => guardar(t.id, d, { present: !presente })}
@@ -1200,37 +1200,55 @@ function PlanillaTab({
                           <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-sky-500 ring-1 ring-white" />
                         ) : null}
                       </button>
-                      {enEdicion ? (
-                        <input
-                          autoFocus
-                          value={borrador}
-                          onChange={(e) => setBorrador(e.target.value.toUpperCase())}
-                          onBlur={() => {
-                            const v = borrador.trim();
-                            if (v !== (fila?.project_no ?? "")) guardar(t.id, d, { project_no: v || null });
-                            setEditando(null);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") e.currentTarget.blur();
-                            if (e.key === "Escape") setEditando(null);
-                          }}
-                          className="mt-0.5 w-20 rounded border border-slate-300 px-1 py-0.5 text-[10px] uppercase outline-none"
-                        />
-                      ) : presente ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setBorrador(fila?.project_no ?? "");
-                            setEditando({ techId: t.id, dia: d });
-                          }}
-                          title={fila?.site_label ?? "Asignar proyecto"}
-                          className={cn(
-                            "mt-0.5 block w-full truncate text-[9px] leading-tight hover:underline",
-                            fila?.project_no ? "font-semibold text-slate-600" : "text-slate-300",
-                          )}
-                        >
-                          {fila?.project_no ?? "—"}
-                        </button>
+                      {presente ? (
+                        <div className="mt-0.5 space-y-px">
+                          {(["project_no", "site_label"] as const).map((campo) => {
+                            const valor = campo === "project_no" ? fila?.project_no : fila?.site_label;
+                            if (enEdicion && editando?.campo === campo) {
+                              return (
+                                <input
+                                  key={campo}
+                                  autoFocus
+                                  value={borrador}
+                                  onChange={(e) => setBorrador(campo === "project_no" ? e.target.value.toUpperCase() : e.target.value)}
+                                  onBlur={() => {
+                                    const v = borrador.trim();
+                                    if (v !== (valor ?? "")) guardar(t.id, d, { [campo]: v || null });
+                                    setEditando(null);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") e.currentTarget.blur();
+                                    if (e.key === "Escape") setEditando(null);
+                                  }}
+                                  className="w-full rounded border border-slate-300 px-1 py-0.5 text-[10px] outline-none"
+                                />
+                              );
+                            }
+                            return (
+                              <button
+                                key={campo}
+                                type="button"
+                                onClick={() => {
+                                  setBorrador(valor ?? "");
+                                  setEditando({ techId: t.id, dia: d, campo });
+                                }}
+                                title={valor ?? (campo === "project_no" ? "Asignar proyecto" : "Asignar lugar")}
+                                className={cn(
+                                  "block w-full truncate text-[9px] leading-tight hover:underline",
+                                  campo === "project_no"
+                                    ? valor
+                                      ? "font-semibold text-slate-700"
+                                      : "text-slate-300"
+                                    : valor
+                                      ? "text-slate-500"
+                                      : "text-slate-200",
+                                )}
+                              >
+                                {valor ?? "—"}
+                              </button>
+                            );
+                          })}
+                        </div>
                       ) : null}
                     </td>
                   );
@@ -1243,6 +1261,7 @@ function PlanillaTab({
 
       <p className="mt-3 text-[11px] text-slate-400">
         <span className="mr-1 inline-block size-1.5 rounded-full bg-sky-500 align-middle" />
+        En cada celda: arriba el <b>proyecto</b>, abajo el <b>lugar</b> — ambos se llenan del mensaje y se editan con un clic.
         El punto azul indica que esa persona mandó su ubicación por WhatsApp ese día.
       </p>
     </div>
