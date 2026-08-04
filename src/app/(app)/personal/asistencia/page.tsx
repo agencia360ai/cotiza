@@ -156,21 +156,21 @@ export default async function AsistenciaPage({
 
   // Planilla del día (0039). Solo hay fila cuando hay algo que decir: una falta,
   // un proyecto, o una marca traída del mensaje de WhatsApp. Sin fila = presente.
-  const diaPlanilla = range.hastaKey;
+  // Planilla de TODO el rango: el cuadro es personal × días.
   let planilla: AttDia[] = [];
   {
     const res = (await supabase
       .from("attendance_day")
-      .select("technician_id, present, project_no, site_label, source, note")
+      .select("technician_id, day, present, project_no, site_label, source, note")
       .eq("org_id", orgId)
-      .eq("day", diaPlanilla)) as { data: AttDia[] | null; error: { message?: string; code?: string } | null };
+      .gte("day", range.desdeKey)
+      .lte("day", range.hastaKey)) as { data: AttDia[] | null; error: { message?: string; code?: string } | null };
     if (!missing(res.error)) planilla = res.data ?? [];
   }
 
   return (
     <AsistenciaScreen
       planilla={planilla}
-      diaPlanilla={diaPlanilla}
       settings={settingsData}
       techs={techs}
       locs={locs}

@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, MapPin, Clock, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2, Pencil, ShieldCheck, ScrollText, X, ChevronDown, ChevronRight, ClipboardCheck, Check,
+  ArrowLeft, MapPin, Settings2, Download, AlertTriangle, LogIn, LogOut, CircleDashed, ExternalLink, Save, Plus, Trash2, Pencil, ShieldCheck, ScrollText, X, ChevronDown, ChevronRight, ClipboardCheck, Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion, type AttEvent, type PeriodId } from "@/lib/whatsapp/attendance-core";
@@ -41,6 +41,7 @@ export type AttEventRow = {
 // Planilla del día (0039). Sin fila para una persona = presente, sin proyecto.
 export type AttDia = {
   technician_id: string;
+  day: string; // YYYY-MM-DD
   present: boolean;
   project_no: string | null;
   site_label: string | null;
@@ -100,10 +101,9 @@ const DIAS_SEMANA: [number, string][] = [[1, "Lun"], [2, "Mar"], [3, "Mié"], [4
 
 export function AsistenciaScreen({
   settings, techs, locs, sites, events, audit, isPowerUser, powerEmails, migracionPendiente, period, desdeKey, hastaKey, singleDay, truncado,
-  planilla, diaPlanilla, rosterWaIds,
+  planilla, rosterWaIds,
 }: {
   planilla: AttDia[];
-  diaPlanilla: string;
   rosterWaIds: string[];
   settings: AttSettings | null;
   techs: AttTech[];
@@ -120,7 +120,7 @@ export function AsistenciaScreen({
   singleDay: boolean;
   truncado: boolean;
 }) {
-  const [tab, setTab] = useState<"tablero" | "planilla" | "config" | "auditoria">("tablero");
+  const [tab, setTab] = useState<"tablero" | "planilla" | "config" | "auditoria">("planilla");
   const activos = techs.filter((t) => t.active);
   const nombre = useMemo(() => new Map(techs.map((t) => [t.id, t.name])), [techs]);
   const locName = useMemo(() => new Map(locs.map((l) => [l.id, l.name])), [locs]);
@@ -150,8 +150,7 @@ export function AsistenciaScreen({
   };
 
   const tabs: [string, string, React.ComponentType<{ className?: string }>][] = [
-    ["tablero", "Asistencia", Clock],
-    ["planilla", "Planilla", ClipboardCheck],
+    ["planilla", "Asistencia", ClipboardCheck],
     ["config", "Configuración", Settings2],
   ];
   if (isPowerUser) tabs.push(["auditoria", "Auditoría", ScrollText]);
@@ -182,7 +181,7 @@ export function AsistenciaScreen({
       </header>
 
       {/* Período: manda sobre el tablero y sobre lo que exportas. */}
-      {tab === "tablero" ? <PeriodControl period={period} desdeKey={desdeKey} hastaKey={hastaKey} truncado={truncado} /> : null}
+      {tab === "planilla" || tab === "tablero" ? <PeriodControl period={period} desdeKey={desdeKey} hastaKey={hastaKey} truncado={truncado} /> : null}
 
       {migracionPendiente ? (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -211,9 +210,20 @@ export function AsistenciaScreen({
       </div>
 
       {tab === "tablero" ? (
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={() => setTab("planilla")}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            <ArrowLeft className="size-3.5" /> Volver a la asistencia
+          </button>
+        </div>
+      ) : null}
+      {tab === "tablero" ? (
         <Tablero activos={activos} porTech={porTech} period={period} desdeKey={desdeKey} hastaKey={hastaKey} singleDay={singleDay} filaSitio={filaSitio} lateThreshold={lateThreshold} isPowerUser={isPowerUser} label={label} />
       ) : tab === "planilla" ? (
-        <PlanillaTab techs={activos} planilla={planilla} dia={diaPlanilla} events={events} />
+        <PlanillaTab techs={activos} planilla={planilla} desdeKey={desdeKey} hastaKey={hastaKey} workdays={settings?.workday_days ?? [1, 2, 3, 4, 5]} events={events} onVerMarcas={() => setTab("tablero")} />
       ) : tab === "config" ? (
         <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} rosterWaIds={rosterWaIds} />
       ) : (
@@ -1061,30 +1071,46 @@ function exportCsv(events: AttEventRow[], nombre: Map<string, string>, locName: 
   URL.revokeObjectURL(a.href);
 }
 
-// ── Planilla del día ─────────────────────────────────────────────────────────
-// TODOS ASISTEN POR DEFECTO: la fila solo existe cuando hay algo que decir (una
-// falta, un proyecto). Desmarcar el check registra la ausencia; volver a marcar
-// sin proyecto ni nota borra la fila y vuelve al default.
-function PlanillaTab({ techs, planilla, dia, events }: { techs: AttTech[]; planilla: AttDia[]; dia: string; events: AttEventRow[] }) {
+// ── Cuadro de asistencia: personal × días ────────────────────────────────────
+// Esta es la vista principal. Se llena sola con el mensaje de programación que
+// se le reenvía al bot (marca presente + proyecto), y las marcas de ubicación
+// por WhatsApp quedan de RESPALDO: si alguien mandó su ubicación ese día, la
+// celda lo muestra con un punto, aunque nadie haya tocado nada.
+//
+// Todos asisten por defecto: solo se guarda fila cuando hay algo que decir.
+function PlanillaTab({
+  techs,
+  planilla,
+  desdeKey,
+  hastaKey,
+  workdays,
+  events,
+  onVerMarcas,
+}: {
+  techs: AttTech[];
+  planilla: AttDia[];
+  desdeKey: string;
+  hastaKey: string;
+  workdays: number[];
+  events: AttEventRow[];
+  onVerMarcas: () => void;
+}) {
   const router = useRouter();
   const [pendiente, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [borrador, setBorrador] = useState<Record<string, string>>({});
+  const [editando, setEditando] = useState<{ techId: string; dia: string } | null>(null);
+  const [borrador, setBorrador] = useState("");
 
-  const porTecnico = useMemo(() => new Map(planilla.map((r) => [r.technician_id, r])), [planilla]);
-  // Evidencia: primera marca del día de cada quien (hora + sitio).
-  const evidencia = useMemo(() => {
-    const m = new Map<string, AttEventRow>();
-    for (const e of events) {
-      if (panamaDayKey(e.occurred_at) !== dia) continue;
-      if (!m.has(e.technician_id)) m.set(e.technician_id, e);
-    }
-    return m;
-  }, [events, dia]);
+  const dias = useMemo(() => diasEntre(desdeKey, hastaKey), [desdeKey, hastaKey]);
+  const porClave = useMemo(() => new Map(planilla.map((r) => [`${r.technician_id}|${r.day}`, r])), [planilla]);
+  // Marcas de ubicación: respaldo. Solo interesa SI hubo marca ese día.
+  const conMarca = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of events) set.add(`${e.technician_id}|${panamaDayKey(e.occurred_at)}`);
+    return set;
+  }, [events]);
 
-  const presentes = techs.filter((t) => porTecnico.get(t.id)?.present !== false).length;
-
-  function guardar(techId: string, patch: { present?: boolean; project_no?: string | null }) {
+  function guardar(techId: string, dia: string, patch: { present?: boolean; project_no?: string | null }) {
     setError(null);
     startTransition(async () => {
       const r = await setPlanillaDia(techId, dia, patch);
@@ -1093,97 +1119,149 @@ function PlanillaTab({ techs, planilla, dia, events }: { techs: AttTech[]; plani
     });
   }
 
+  const totalPresentes = dias.reduce(
+    (acc, d) => acc + techs.filter((t) => porClave.get(`${t.id}|${d}`)?.present !== false).length,
+    0,
+  );
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold text-slate-900">Planilla del {dia}</h2>
+          <h2 className="text-sm font-semibold text-slate-900">Asistencia por día</h2>
           <p className="text-xs text-slate-500">
-            Todos asisten por defecto — desmarca solo a quien faltó. {presentes} de {techs.length} presentes.
+            Se llena sola con la programación que reenvías al WhatsApp. Todos asisten por defecto — haz clic para marcar una
+            falta, o en el proyecto para cambiarlo. {totalPresentes} asistencias en el período.
           </p>
         </div>
-        {pendiente ? <span className="text-xs text-slate-400">Guardando…</span> : null}
+        <div className="flex items-center gap-2">
+          {pendiente ? <span className="text-xs text-slate-400">Guardando…</span> : null}
+          <button type="button" onClick={onVerMarcas} className="text-xs font-semibold text-slate-400 hover:text-slate-600">
+            Ver marcas de ubicación
+          </button>
+        </div>
       </div>
 
       {error ? <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="border-collapse text-sm">
           <thead>
-            <tr className="border-b border-slate-100 text-left text-[11px] uppercase tracking-wider text-slate-500">
-              <th className="w-16 px-2 py-2 font-semibold">Asistió</th>
-              <th className="px-2 py-2 font-semibold">Persona</th>
-              <th className="px-2 py-2 font-semibold">Proyecto / labor</th>
-              <th className="px-2 py-2 font-semibold">Marca de WhatsApp</th>
+            <tr>
+              <th className="sticky left-0 z-10 bg-white px-2 py-2 text-left text-[11px] uppercase tracking-wider text-slate-500">
+                Persona
+              </th>
+              {dias.map((d) => {
+                const dow = new Date(d + "T12:00:00Z").getUTCDay();
+                const laboral = workdays.includes(dow);
+                return (
+                  <th
+                    key={d}
+                    className={cn(
+                      "px-1 py-2 text-center text-[10px] font-semibold",
+                      laboral ? "text-slate-500" : "bg-slate-50 text-slate-300",
+                    )}
+                  >
+                    <div>{DOW_CORTO[dow]}</div>
+                    <div className="tabular-nums">{d.slice(8)}</div>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {techs.map((t) => {
-              const fila = porTecnico.get(t.id);
-              const presente = fila?.present !== false;
-              const ev = evidencia.get(t.id);
-              const proyecto = borrador[t.id] ?? fila?.project_no ?? "";
-              return (
-                <tr key={t.id} className={cn("border-b border-slate-50 last:border-0", !presente && "bg-rose-50/40")}>
-                  <td className="px-2 py-2">
-                    <button
-                      type="button"
-                      onClick={() => guardar(t.id, { present: !presente })}
-                      title={presente ? "Marcar como ausente" : "Marcar como presente"}
-                      className={cn(
-                        "flex size-6 items-center justify-center rounded-md ring-1 ring-inset transition-colors",
-                        presente
-                          ? "bg-emerald-500 text-white ring-emerald-600/20 hover:bg-emerald-600"
-                          : "bg-white text-transparent ring-slate-300 hover:bg-slate-50",
-                      )}
-                    >
-                      <Check className="size-4" strokeWidth={3} />
-                    </button>
-                  </td>
-                  <td className="px-2 py-2">
-                    <span className={cn("font-medium", presente ? "text-slate-800" : "text-slate-400 line-through")}>{t.name}</span>
-                    {fila?.source === "whatsapp" ? (
-                      <span className="ml-1.5 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">del mensaje</span>
-                    ) : null}
-                  </td>
-                  <td className="px-2 py-2">
-                    <input
-                      value={proyecto}
-                      disabled={!presente}
-                      placeholder="DM26-08 · Transporte…"
-                      onChange={(e) => setBorrador((b) => ({ ...b, [t.id]: e.target.value.toUpperCase() }))}
-                      onBlur={() => {
-                        const v = (borrador[t.id] ?? "").trim();
-                        if (borrador[t.id] === undefined || v === (fila?.project_no ?? "")) return;
-                        guardar(t.id, { project_no: v || null });
-                        setBorrador((b) => {
-                          const n = { ...b };
-                          delete n[t.id];
-                          return n;
-                        });
-                      }}
-                      className="w-48 rounded-md border border-slate-200 px-2 py-1 text-xs uppercase outline-none focus:border-slate-900 disabled:bg-slate-50 disabled:text-slate-300"
-                    />
-                    {fila?.site_label ? <span className="ml-2 text-[11px] text-slate-400">{fila.site_label}</span> : null}
-                  </td>
-                  <td className="px-2 py-2 text-xs text-slate-500">
-                    {ev ? (
-                      <>
-                        {fmtHora(new Date(ev.occurred_at))}
-                        {ev.matched_name ? <span className="text-slate-400"> · {ev.matched_name}</span> : null}
-                      </>
-                    ) : (
-                      <span className="text-slate-300">sin marca</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            {techs.map((t) => (
+              <tr key={t.id} className="border-t border-slate-50">
+                <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-2 py-1.5 text-xs font-medium text-slate-700">
+                  {t.name}
+                </td>
+                {dias.map((d) => {
+                  const fila = porClave.get(`${t.id}|${d}`);
+                  const presente = fila?.present !== false;
+                  const marca = conMarca.has(`${t.id}|${d}`);
+                  const dow = new Date(d + "T12:00:00Z").getUTCDay();
+                  const laboral = workdays.includes(dow);
+                  const enEdicion = editando?.techId === t.id && editando?.dia === d;
+                  return (
+                    <td key={d} className={cn("px-1 py-1 text-center align-top", !laboral && "bg-slate-50/60")}>
+                      <button
+                        type="button"
+                        onClick={() => guardar(t.id, d, { present: !presente })}
+                        title={`${t.name} · ${d}${fila?.project_no ? ` · ${fila.project_no}` : ""}${marca ? " · marcó ubicación" : ""}`}
+                        className={cn(
+                          "relative mx-auto flex size-6 items-center justify-center rounded-md ring-1 ring-inset transition-colors",
+                          presente
+                            ? "bg-emerald-500 text-white ring-emerald-600/20 hover:bg-emerald-600"
+                            : "bg-white text-transparent ring-slate-300 hover:bg-slate-50",
+                        )}
+                      >
+                        <Check className="size-3.5" strokeWidth={3} />
+                        {marca ? (
+                          <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-sky-500 ring-1 ring-white" />
+                        ) : null}
+                      </button>
+                      {enEdicion ? (
+                        <input
+                          autoFocus
+                          value={borrador}
+                          onChange={(e) => setBorrador(e.target.value.toUpperCase())}
+                          onBlur={() => {
+                            const v = borrador.trim();
+                            if (v !== (fila?.project_no ?? "")) guardar(t.id, d, { project_no: v || null });
+                            setEditando(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") e.currentTarget.blur();
+                            if (e.key === "Escape") setEditando(null);
+                          }}
+                          className="mt-0.5 w-20 rounded border border-slate-300 px-1 py-0.5 text-[10px] uppercase outline-none"
+                        />
+                      ) : presente ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBorrador(fila?.project_no ?? "");
+                            setEditando({ techId: t.id, dia: d });
+                          }}
+                          title={fila?.site_label ?? "Asignar proyecto"}
+                          className={cn(
+                            "mt-0.5 block w-full truncate text-[9px] leading-tight hover:underline",
+                            fila?.project_no ? "font-semibold text-slate-600" : "text-slate-300",
+                          )}
+                        >
+                          {fila?.project_no ?? "—"}
+                        </button>
+                      ) : null}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
+
+      <p className="mt-3 text-[11px] text-slate-400">
+        <span className="mr-1 inline-block size-1.5 rounded-full bg-sky-500 align-middle" />
+        El punto azul indica que esa persona mandó su ubicación por WhatsApp ese día.
+      </p>
     </div>
   );
+}
+
+const DOW_CORTO = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+
+// Días (YYYY-MM-DD) entre dos fechas, inclusive. Tope defensivo: un rango
+// enorme no debe pintar cientos de columnas.
+function diasEntre(desde: string, hasta: string): string[] {
+  const out: string[] = [];
+  const d = new Date(desde + "T12:00:00Z");
+  const fin = new Date(hasta + "T12:00:00Z");
+  while (d <= fin && out.length < 62) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
 }
 
 // Números de WhatsApp que pueden reenviarle al bot la programación del día.
