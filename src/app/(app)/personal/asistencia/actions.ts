@@ -371,14 +371,26 @@ export async function setPlanillaDia(
     .eq("day", day)
     .maybeSingle()) as { data: { present: boolean; project_no: string | null; site_label: string | null; note: string | null } | null };
 
+  // El DEFAULT depende del día: en laborable se asiste, en fin de semana no.
+  // Por eso marcar presente un domingo SÍ se guarda (es trabajo extra), mientras
+  // que marcar presente un martes vuelve al default y borra la fila.
+  const { data: cfg } = (await c.supabase
+    .from("attendance_settings")
+    .select("workday_days")
+    .eq("org_id", c.orgId)
+    .maybeSingle()) as { data: { workday_days: number[] | null } | null };
+  const laborables = cfg?.workday_days ?? [1, 2, 3, 4, 5];
+  const dow = new Date(day + "T12:00:00Z").getUTCDay();
+  const presentePorDefecto = laborables.includes(dow);
+
   const fila = {
-    present: patch.present ?? actual?.present ?? true,
+    present: patch.present ?? actual?.present ?? presentePorDefecto,
     project_no: (patch.project_no !== undefined ? patch.project_no : actual?.project_no ?? null) || null,
     site_label: (patch.site_label !== undefined ? patch.site_label : actual?.site_label ?? null) || null,
     note: (patch.note !== undefined ? patch.note : actual?.note ?? null) || null,
   };
 
-  const esElDefault = fila.present && !fila.project_no && !fila.site_label && !fila.note;
+  const esElDefault = fila.present === presentePorDefecto && !fila.project_no && !fila.site_label && !fila.note;
   if (esElDefault) {
     const { error } = await c.supabase
       .from("attendance_day")
