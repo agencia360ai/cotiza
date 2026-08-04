@@ -428,3 +428,18 @@ function faltaMigracion0039(e: { message?: string; code?: string } | null): stri
   }
   return null;
 }
+
+// Quién lleva planilla diaria (0042). Distinto de `active`: administración está
+// activa pero no va a proyectos, así que no debe ensuciar el cuadro.
+export async function setEnPlanilla(technicianId: string, enPlanilla: boolean): Promise<Result> {
+  const c = await powerCtx();
+  if (!c.ok) return { error: c.error };
+  const { error } = await c.supabase
+    .from("technicians")
+    .update({ in_attendance: enPlanilla })
+    .eq("id", technicianId)
+    .eq("org_id", c.orgId);
+  if (error) return { error: faltaMigracion(error.message) ? "Falta la migración 0042 — corre el SQL y reintenta." : error.message };
+  revalidatePath("/personal/asistencia");
+  return { ok: true };
+}
