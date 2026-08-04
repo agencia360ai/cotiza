@@ -12,6 +12,7 @@ import {
   type IncomingMessage,
   type GeoSite,
 } from "./attendance-core";
+import { parsePrograma, mismoNumero } from "./programa";
 
 // Orquestación del webhook de asistencia: identifica org + técnico, decide
 // entrada/salida, matchea geocerca y registra el evento. Escribe con service
@@ -27,6 +28,7 @@ const DEBOUNCE_MS = 5 * 60_000;
 type Settings = {
   org_id: string;
   require_geofence: boolean;
+  roster_wa_ids?: string[] | null; // 0040: quién puede mandar la programación
 };
 type Tech = { id: string; name: string };
 type EventoHoy = { direction: "in" | "out"; occurred_at: string };
@@ -40,10 +42,17 @@ function panamaDayStart(now: Date): Date {
 async function resolverOrg(admin: Admin, phoneNumberId: string): Promise<Settings | null> {
   const { data } = (await admin
     .from("attendance_settings")
+    .select("org_id, require_geofence, roster_wa_ids")
+    .eq("wa_phone_number_id", phoneNumberId)
+    .maybeSingle()) as { data: Settings | null; error: { code?: string } | null };
+  if (data) return data;
+  // 0040 pendiente: la asistencia normal debe seguir funcionando.
+  const { data: base } = (await admin
+    .from("attendance_settings")
     .select("org_id, require_geofence")
     .eq("wa_phone_number_id", phoneNumberId)
     .maybeSingle()) as { data: Settings | null };
-  return data;
+  return base;
 }
 
 async function resolverTecnico(admin: Admin, orgId: string, waId: string): Promise<Tech | null> {
@@ -211,6 +220,70 @@ async function ayuda(admin: Admin, s: Settings, tech: Tech, to: string): Promise
   );
 }
 
+// ── Programación del día reenviada al bot ────────────────────────────────────
+// Marca presentes a los mencionados y les pone el proyecto de su sección. No
+// marca ausente a nadie: el mensaje dice quién va a dónde, no quién faltó —
+// eso se ajusta a mano en la planilla.
+async function aplicarPrograma(admin: Admin, s: Settings, msg: IncomingMessage): Promise<void> {
+  const autorizados = s.roster_wa_ids ?? [];
+  if (!autorizados.some((n) => mismoNumero(n, msg.from))) {
+    await sendText(
+      msg.from,
+      "Recibí la programación, pero este número no está autorizado para marcar la asistencia del equipo. Pídele a un administrador que lo agregue en Asistencia → Configuración.",
+    );
+    return;
+  }
+
+  const prog = parsePrograma(msg.text ?? "");
+  if (prog.sinMenciones) {
+    await sendText(msg.from, "No encontré menciones (@) en ese mensaje, así que no marqué a nadie.");
+    return;
+  }
+
+  const { data: techs } = (await admin
+    .from("technicians")
+    .select("id, name, wa_id")
+    .eq("org_id", s.org_id)
+    .eq("active", true)) as { data: { id: string; name: string; wa_id: string | null }[] | null };
+
+  const day = panamaDayStart(new Date()).toISOString().slice(0, 10);
+  const aplicados: string[] = [];
+  const sinMatch: string[] = [];
+
+  for (const a of prog.asignaciones) {
+    const t = (techs ?? []).find((x) => x.wa_id && mismoNumero(x.wa_id, a.waId));
+    if (!t) {
+      sinMatch.push(a.waId);
+      continue;
+    }
+    const { error } = await admin.from("attendance_day").upsert(
+      {
+        org_id: s.org_id,
+        technician_id: t.id,
+        day,
+        present: true,
+        project_no: a.projectNo,
+        site_label: a.siteLabel || null,
+        source: "whatsapp",
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "org_id,technician_id,day" },
+    );
+    if (error) {
+      await sendText(msg.from, "No pude guardar la planilla: falta correr la migración 0039 en Supabase.");
+      return;
+    }
+    aplicados.push(`${t.name.split(" ")[0]}${a.projectNo ? ` → ${a.projectNo}` : ""}`);
+  }
+
+  const resumen =
+    aplicados.length > 0
+      ? `✅ Asistencia marcada para ${aplicados.length} persona(s):\n${aplicados.map((x) => `• ${x}`).join("\n")}`
+      : "No pude cruzar ninguna mención con el personal registrado.";
+  const aviso = sinMatch.length > 0 ? `\n\n⚠️ Sin match en Personal: ${sinMatch.join(", ")}` : "";
+  await sendText(msg.from, `${resumen}${aviso}`);
+}
+
 async function handle(admin: Admin, msg: IncomingMessage, phoneNumberId: string): Promise<void> {
   const s = await resolverOrg(admin, phoneNumberId);
   if (!s) {
@@ -224,9 +297,15 @@ async function handle(admin: Admin, msg: IncomingMessage, phoneNumberId: string)
   }
   if (msg.type === "location" && msg.location) {
     await marcar(admin, s, tech, msg);
-  } else {
-    await ayuda(admin, s, tech, msg.from);
+    return;
   }
+  // Texto con menciones = PROGRAMACIÓN del día. Marca la asistencia de OTROS,
+  // así que solo desde un número autorizado (0040).
+  if (msg.type === "text" && msg.text && /@\s*\+?\d/.test(msg.text)) {
+    await aplicarPrograma(admin, s, msg);
+    return;
+  }
+  await ayuda(admin, s, tech, msg.from);
 }
 
 // Punto de entrada del route handler. Procesa todos los mensajes del payload;

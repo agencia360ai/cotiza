@@ -11,7 +11,7 @@ import { pairShifts, sumShiftMs, panamaDayKey, parseLatLng, fmtHora, fmtDuracion
 import {
   saveAttendanceSettings, setLocationGeofence, resolveMapsLink,
   createAttendanceSite, updateAttendanceSite, deleteAttendanceSite,
-  savePowerUsers, updateAttendanceEvent, deleteAttendanceEvent, createManualAttendanceEvent, setPlanillaDia,
+  savePowerUsers, updateAttendanceEvent, deleteAttendanceEvent, createManualAttendanceEvent, setPlanillaDia, saveRosterWaIds,
   type AttendanceSettingsInput,
 } from "./actions";
 
@@ -100,10 +100,11 @@ const DIAS_SEMANA: [number, string][] = [[1, "Lun"], [2, "Mar"], [3, "Mié"], [4
 
 export function AsistenciaScreen({
   settings, techs, locs, sites, events, audit, isPowerUser, powerEmails, migracionPendiente, period, desdeKey, hastaKey, singleDay, truncado,
-  planilla, diaPlanilla,
+  planilla, diaPlanilla, rosterWaIds,
 }: {
   planilla: AttDia[];
   diaPlanilla: string;
+  rosterWaIds: string[];
   settings: AttSettings | null;
   techs: AttTech[];
   locs: AttLoc[];
@@ -214,7 +215,7 @@ export function AsistenciaScreen({
       ) : tab === "planilla" ? (
         <PlanillaTab techs={activos} planilla={planilla} dia={diaPlanilla} events={events} />
       ) : tab === "config" ? (
-        <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} />
+        <Config settings={settings} locs={locs} sites={sites} isPowerUser={isPowerUser} powerEmails={powerEmails} rosterWaIds={rosterWaIds} />
       ) : (
         <Auditoria audit={audit} nombre={nombre} />
       )}
@@ -713,7 +714,7 @@ function describeAudit(a: AttAudit): { verbo: string; tono: "emerald" | "amber" 
 // ── Configuración ─────────────────────────────────────────────────────────────
 const inputCls = "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none";
 
-function Config({ settings, locs, sites, isPowerUser, powerEmails }: { settings: AttSettings | null; locs: AttLoc[]; sites: AttSite[]; isPowerUser: boolean; powerEmails: string[] }) {
+function Config({ settings, locs, sites, isPowerUser, powerEmails, rosterWaIds }: { settings: AttSettings | null; locs: AttLoc[]; sites: AttSite[]; isPowerUser: boolean; powerEmails: string[]; rosterWaIds: string[] }) {
   const router = useRouter();
   const [f, setF] = useState<AttendanceSettingsInput>({
     wa_phone_number_id: settings?.wa_phone_number_id ?? null,
@@ -819,6 +820,7 @@ function Config({ settings, locs, sites, isPowerUser, powerEmails }: { settings:
       ) : null}
 
       {isPowerUser ? <PowerUsersCard emails={powerEmails} /> : null}
+      {isPowerUser ? <RosterWaCard numeros={rosterWaIds} /> : null}
     </div>
   );
 }
@@ -1179,6 +1181,52 @@ function PlanillaTab({ techs, planilla, dia, events }: { techs: AttTech[]; plani
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// Números de WhatsApp que pueden reenviarle al bot la programación del día.
+// Va restringido porque ese mensaje marca la asistencia de OTRAS personas.
+function RosterWaCard({ numeros }: { numeros: string[] }) {
+  const router = useRouter();
+  const [txt, setTxt] = useState(numeros.join("\n"));
+  const [saving, startSave] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  function guardar() {
+    setMsg(null);
+    startSave(async () => {
+      const r = await saveRosterWaIds(txt.split(/[\n,;]+/));
+      setMsg("error" in r ? r.error : "Guardado");
+      if (!("error" in r)) router.refresh();
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <h3 className="text-sm font-semibold text-slate-900">Quién puede mandar la programación del día</h3>
+      <p className="mt-1 text-xs text-slate-500">
+        Reenviándole al bot el mensaje de programación, estos números marcan presentes a los mencionados y les asignan su
+        proyecto. Un número por línea, con código de país (ej. 50761234567). <b>Si la lista está vacía, nadie puede.</b>
+      </p>
+      <textarea
+        rows={3}
+        value={txt}
+        onChange={(e) => setTxt(e.target.value)}
+        placeholder="50761234567"
+        className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs outline-none focus:border-slate-900"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={guardar}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          <Save className="size-3.5" /> Guardar
+        </button>
+        {msg ? <span className="text-xs text-slate-500">{msg}</span> : null}
       </div>
     </div>
   );

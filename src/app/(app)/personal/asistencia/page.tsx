@@ -46,6 +46,7 @@ export default async function AsistenciaPage({
   // Power users: quién puede editar marcas. Sin lista → cae en owner/admin.
   const email = (auth.user.email ?? "").toLowerCase();
   const powerEmails = ((raw?.power_user_emails as string[] | null) ?? []).map((e) => e.toLowerCase());
+  const rosterWaIds = (raw?.roster_wa_ids as string[] | null) ?? [];
   const isPowerUser = powerEmails.length > 0 ? powerEmails.includes(email) : auth.role === "owner" || auth.role === "admin";
 
   // Período elegido → rango de fechas.
@@ -178,6 +179,7 @@ export default async function AsistenciaPage({
       audit={audit}
       isPowerUser={isPowerUser}
       powerEmails={powerEmails}
+      rosterWaIds={rosterWaIds}
       migracionPendiente={migracionPendiente}
       period={period}
       desdeKey={range.desdeKey}
