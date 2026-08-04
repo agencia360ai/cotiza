@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Building2, Upload, Trash2, Loader2, Save, ImageIcon, Mail } from "lucide-react";
 import { imageUrl } from "@/lib/maintenance/types";
 import { compressImage } from "@/lib/image-compress";
-import { updateOrgName, updateOrgFocus, uploadOrgLogo, removeOrgLogo, saveQuoteNotifyEmails } from "./actions";
+import { updateOrgName, updateOrgFocus, uploadOrgLogo, removeOrgLogo, saveQuoteNotifyEmails, enviarCorreoDePrueba } from "./actions";
 
 type Focus = "maintenance" | "projects" | "mixed";
 
@@ -291,6 +291,15 @@ function QuoteNotifyCard({ emails }: { emails: string[] }) {
     });
   }
 
+  // Verifica remitente, dominio y destinatarios sin aprobar una cotización real.
+  function probar() {
+    setMsg(null);
+    startSave(async () => {
+      const r = await enviarCorreoDePrueba();
+      setMsg(r.ok ? `Enviado a ${r.to.join(", ")} — revisa la bandeja (y spam).` : r.error);
+    });
+  }
+
   return (
     <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
       <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -316,8 +325,19 @@ function QuoteNotifyCard({ emails }: { emails: string[] }) {
         >
           Guardar
         </button>
+        <button
+          type="button"
+          onClick={probar}
+          disabled={saving}
+          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          Enviar prueba
+        </button>
         {msg ? <span className="text-xs text-slate-500">{msg}</span> : null}
       </div>
+      <p className="mt-2 text-[11px] text-slate-400">
+        Las respuestas a estos correos llegan a quien aprobó la cotización.
+      </p>
     </section>
   );
 }

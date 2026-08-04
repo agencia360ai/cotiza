@@ -46,7 +46,7 @@ const fila = (k: string, v: string) =>
   `<tr><td style="padding:4px 12px 4px 0;color:#64748b;white-space:nowrap">${esc(k)}</td>` +
   `<td style="padding:4px 0;color:#0f172a;font-weight:600">${esc(v)}</td></tr>`;
 
-export async function notificarCotizacionAprobada(db: Db, orgId: string, quoteId: string): Promise<void> {
+export async function notificarCotizacionAprobada(db: Db, orgId: string, quoteId: string, replyTo?: string | null): Promise<void> {
   if (!hasEmailConfig()) return;
 
   const to = await destinatarios(db, orgId);
@@ -137,6 +137,7 @@ export async function notificarCotizacionAprobada(db: Db, orgId: string, quoteId
     to,
     subject: `Cotización aprobada · ${q.quote_number} — ${cliente} · ${money(total)}`,
     html,
+    replyTo: replyTo ?? null,
     attachments: adjunto ? [adjunto] : undefined,
   });
 }
