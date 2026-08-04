@@ -1119,10 +1119,21 @@ function PlanillaTab({
     });
   }
 
-  const totalPresentes = dias.reduce(
-    (acc, d) => acc + techs.filter((t) => porClave.get(`${t.id}|${d}`)?.present !== false).length,
-    0,
-  );
+  const { totalPresentes, totalExtra } = useMemo(() => {
+    let presentes = 0;
+    let extra = 0;
+    for (const d of dias) {
+      const laboral = workdays.includes(new Date(d + "T12:00:00Z").getUTCDay());
+      for (const t of techs) {
+        const fila = porClave.get(`${t.id}|${d}`);
+        const presente = fila ? fila.present : laboral;
+        if (!presente) continue;
+        presentes++;
+        if (!laboral) extra++;
+      }
+    }
+    return { totalPresentes: presentes, totalExtra: extra };
+  }, [dias, techs, porClave, workdays]);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -1131,7 +1142,13 @@ function PlanillaTab({
           <h2 className="text-sm font-semibold text-slate-900">Asistencia por día</h2>
           <p className="text-xs text-slate-500">
             Se llena sola con la programación que reenvías al WhatsApp. Todos asisten por defecto — haz clic para marcar una
-            falta, o en el proyecto para cambiarlo. {totalPresentes} asistencias en el período.
+            falta, o en el proyecto para cambiarlo. {totalPresentes} asistencias en el período
+            {totalExtra > 0 ? (
+              <>
+                , <b className="text-amber-600">{totalExtra} en día no laborable</b> (tiempo extra)
+              </>
+            ) : null}
+            .
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1177,22 +1194,27 @@ function PlanillaTab({
                 </td>
                 {dias.map((d) => {
                   const fila = porClave.get(`${t.id}|${d}`);
-                  const presente = fila?.present !== false;
-                  const marca = conMarca.has(`${t.id}|${d}`);
                   const dow = new Date(d + "T12:00:00Z").getUTCDay();
                   const laboral = workdays.includes(dow);
+                  // Sin fila guardada, el default depende del día: en laborable
+                  // se asiste, en fin de semana no.
+                  const presente = fila ? fila.present : laboral;
+                  const extra = presente && !laboral; // trabajo fuera de jornada
+                  const marca = conMarca.has(`${t.id}|${d}`);
                   const enEdicion = editando?.techId === t.id && editando?.dia === d;
                   return (
                     <td key={d} className={cn("w-24 min-w-24 px-1 py-1 text-center align-top", !laboral && "bg-slate-50/60")}>
                       <button
                         type="button"
                         onClick={() => guardar(t.id, d, { present: !presente })}
-                        title={`${t.name} · ${d}${fila?.project_no ? ` · ${fila.project_no}` : ""}${marca ? " · marcó ubicación" : ""}`}
+                        title={`${t.name} · ${d}${extra ? " · TRABAJO EXTRA (día no laborable)" : ""}${fila?.project_no ? ` · ${fila.project_no}` : ""}${marca ? " · marcó ubicación" : ""}`}
                         className={cn(
                           "relative mx-auto flex size-6 items-center justify-center rounded-md ring-1 ring-inset transition-colors",
-                          presente
-                            ? "bg-emerald-500 text-white ring-emerald-600/20 hover:bg-emerald-600"
-                            : "bg-white text-transparent ring-slate-300 hover:bg-slate-50",
+                          !presente
+                            ? "bg-white text-transparent ring-slate-300 hover:bg-slate-50"
+                            : extra
+                              ? "bg-amber-500 text-white ring-amber-600/30 hover:bg-amber-600"
+                              : "bg-emerald-500 text-white ring-emerald-600/20 hover:bg-emerald-600",
                         )}
                       >
                         <Check className="size-3.5" strokeWidth={3} />
@@ -1262,6 +1284,8 @@ function PlanillaTab({
       <p className="mt-3 text-[11px] text-slate-400">
         <span className="mr-1 inline-block size-1.5 rounded-full bg-sky-500 align-middle" />
         En cada celda: arriba el <b>proyecto</b>, abajo el <b>lugar</b> — ambos se llenan del mensaje y se editan con un clic.
+        Sábados y domingos arrancan <b>sin asistir</b>; si alguien trabajó, márcalo y el check sale{" "}
+        <span className="font-semibold text-amber-600">ámbar</span> para contarlo como tiempo extra.
         El punto azul indica que esa persona mandó su ubicación por WhatsApp ese día.
       </p>
     </div>
