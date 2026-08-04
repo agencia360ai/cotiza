@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { notificarCotizacionAprobada } from "@/lib/quotes/notify";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import type { ProjectType } from "@/lib/projects/types";
@@ -56,6 +57,18 @@ export async function updateQuote(
   if (!c.ok) return { error: c.error };
   const p = { ...patch };
   if ("location_id" in p && !(await locationSupported(c.supabase))) delete p.location_id;
+  // Estado ANTES de guardar: el aviso sale solo en la TRANSICIÓN a aprobada, no
+  // cada vez que se guarda una cotización que ya estaba aprobada.
+  let recienAprobada = false;
+  if (p.status === "aprobada") {
+    const { data: previo } = (await c.supabase
+      .from("sales_quotes")
+      .select("status")
+      .eq("id", id)
+      .eq("org_id", c.orgId)
+      .maybeSingle()) as { data: { status: string } | null };
+    recienAprobada = !!previo && previo.status !== "aprobada";
+  }
   const { error } = await c.supabase.from("sales_quotes").update(p).eq("id", id).eq("org_id", c.orgId);
   // 0037 pendiente: se guarda el RESTO (no perder lo demás que se editó) pero se
   // AVISA — el Nº de proyecto lo escribe el usuario a mano y creer que quedó
@@ -67,6 +80,15 @@ export async function updateQuote(
     return { error: "Se guardó todo menos el Nº de proyecto: falta la migración 0037 — corre el SQL en Supabase." };
   }
   if (error) return { error: error.message };
+  // Aviso a administración para registrar el proyecto en QBO a mano. Best-effort:
+  // un fallo de correo NO debe deshacer ni ensuciar el guardado del usuario.
+  if (recienAprobada) {
+    try {
+      await notificarCotizacionAprobada(c.supabase, c.orgId, id);
+    } catch (e) {
+      console.error("[cotiza] aviso de aprobación falló:", e);
+    }
+  }
   // Aprende del ajuste manual: guarda el alias (con sucursal si se asignó) para
   // que la próxima importación con ese mismo nombre se auto-linkee.
   // ignoreDuplicates:false → una CORRECCIÓN (mismo alias, otro cliente) sí

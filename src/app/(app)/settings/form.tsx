@@ -2,10 +2,10 @@
 
 import { useState, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, Upload, Trash2, Loader2, Save, ImageIcon } from "lucide-react";
+import { Building2, Upload, Trash2, Loader2, Save, ImageIcon, Mail } from "lucide-react";
 import { imageUrl } from "@/lib/maintenance/types";
 import { compressImage } from "@/lib/image-compress";
-import { updateOrgName, updateOrgFocus, uploadOrgLogo, removeOrgLogo } from "./actions";
+import { updateOrgName, updateOrgFocus, uploadOrgLogo, removeOrgLogo, saveQuoteNotifyEmails } from "./actions";
 
 type Focus = "maintenance" | "projects" | "mixed";
 
@@ -16,6 +16,7 @@ type Org = {
   logo_path: string | null;
   created_at: string;
   focus: Focus;
+  quote_notify_emails?: string[];
 };
 
 function initials(name: string): string {
@@ -200,6 +201,8 @@ export function OrgSettingsForm({
 
         <FocusSelector currentFocus={org.focus} />
       </div>
+
+      <QuoteNotifyCard emails={org.quote_notify_emails ?? []} />
     </section>
   );
 }
@@ -268,5 +271,53 @@ function FocusSelector({ currentFocus }: { currentFocus: Focus }) {
       {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
       {savedAt && !error ? <p className="mt-2 text-xs text-emerald-600">✓ Foco actualizado</p> : null}
     </div>
+  );
+}
+
+// Correos que reciben el aviso cuando una cotización queda APROBADA. Ese aviso
+// lleva el PDF y los datos para registrar el proyecto en QuickBooks a mano.
+function QuoteNotifyCard({ emails }: { emails: string[] }) {
+  const router = useRouter();
+  const [txt, setTxt] = useState(emails.join("\n"));
+  const [saving, startSave] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  function guardar() {
+    setMsg(null);
+    startSave(async () => {
+      const r = await saveQuoteNotifyEmails(txt.split(/[\n,;\s]+/));
+      setMsg(r.ok ? "Guardado" : r.error);
+      if (r.ok) router.refresh();
+    });
+  }
+
+  return (
+    <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+        <Mail className="size-4 text-slate-400" /> Aviso de cotización aprobada
+      </h2>
+      <p className="mt-1 text-xs text-slate-500">
+        Cuando una cotización pasa a <b>Aprobada</b>, estas personas reciben un correo con el PDF adjunto y los datos listos
+        para crear el proyecto en QuickBooks. Un correo por línea. Sin correos, no se manda nada.
+      </p>
+      <textarea
+        rows={3}
+        value={txt}
+        onChange={(e) => setTxt(e.target.value)}
+        placeholder={"psolis@dicecpanama.com\nyjaen@dicecpanama.com"}
+        className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-900"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={guardar}
+          disabled={saving}
+          className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          Guardar
+        </button>
+        {msg ? <span className="text-xs text-slate-500">{msg}</span> : null}
+      </div>
+    </section>
   );
 }

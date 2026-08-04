@@ -19,7 +19,7 @@ export default async function SettingsPage() {
 
   const [{ data: org }, { count: clientsCount }, { count: equipmentCount }, { count: techsCount }, { count: reportsCount }] =
     await Promise.all([
-      supabase.from("organizations").select("id, name, slug, logo_path, created_at, focus").eq("id", orgId).single(),
+      supabase.from("organizations").select("*").eq("id", orgId).single(),
       supabase.from("clients").select("*", { count: "exact", head: true }).eq("org_id", orgId),
       supabase
         .from("client_equipment")
@@ -48,6 +48,7 @@ export default async function SettingsPage() {
           logo_path: org.logo_path,
           created_at: org.created_at,
           focus: (org as { focus?: "maintenance" | "projects" | "mixed" }).focus ?? "mixed",
+          quote_notify_emails: ((org as { quote_notify_emails?: string[] | null }).quote_notify_emails ?? []) as string[],
         }}
         userEmail={u.user.email ?? ""}
         userRole={ctx.role}
