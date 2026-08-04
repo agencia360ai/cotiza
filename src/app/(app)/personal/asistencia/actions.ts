@@ -236,6 +236,18 @@ export async function savePowerUsers(emails: string[]): Promise<Result> {
   return { ok: true };
 }
 
+// Números de WhatsApp autorizados a reenviar la PROGRAMACIÓN del día (0040).
+// Marca la asistencia de OTROS, por eso va restringido; sin lista, nadie puede.
+export async function saveRosterWaIds(numeros: string[]): Promise<Result> {
+  const c = await powerCtx();
+  if (!c.ok) return { error: c.error };
+  const clean = Array.from(new Set(numeros.map((n) => n.replace(/\D/g, "")).filter((n) => n.length >= 7)));
+  const { error } = await c.supabase.from("attendance_settings").upsert({ org_id: c.orgId, roster_wa_ids: clean }, { onConflict: "org_id" });
+  if (error) return { error: faltaMigracion(error.message) ? "Falta la migración 0040 — corre el SQL y reintenta." : error.message };
+  revalidatePath("/personal/asistencia");
+  return { ok: true };
+}
+
 type EventoActual = { id: string; technician_id: string; direction: "in" | "out"; occurred_at: string; status: string; note: string | null };
 
 export async function updateAttendanceEvent(
