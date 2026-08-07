@@ -20,6 +20,12 @@ async function requireAdmin(): Promise<RequireAdmin> {
   return { kind: "ok", ctx };
 }
 
+// Forma mínima de la tabla nueva (0043), que aún no está en los tipos generados.
+type AnyTable = {
+  upsert: (v: Record<string, unknown>, o?: { onConflict?: string }) => Promise<{ error: { message: string; code?: string } | null }>;
+  delete: () => { eq: (c: string, v: string) => Promise<{ error: { message: string } | null }> };
+};
+
 export async function inviteMember(input: {
   email: string;
   password: string;
@@ -72,18 +78,38 @@ export async function inviteMember(input: {
     page += 1;
   }
 
-  // 2) Crearlo si no existía. `invited: true` lo exime del candado de dominio
-  // y del auto-join de la migración 0025 — la membresía y el rol los pone
-  // este flujo, y puede ser de cualquier dominio (externos incluidos).
+  // 2) Crearlo si no existía. El candado de dominio de la 0025 vive en un trigger
+  // BEFORE INSERT sobre auth.users, así que hay que autorizar el correo ANTES de
+  // crearlo: se anota en signup_allowlist (0043). El app_metadata NO sirve para
+  // esto — Supabase no lo escribe en ese INSERT, así que el trigger no lo ve.
   if (!userId) {
+    // La tabla es nueva (0043) y no está en los tipos generados: se castea el
+    // cliente para poder tocarla sin regenerar todo el schema.
+    const allowlist = () => (admin as unknown as { from: (t: string) => AnyTable }).from("signup_allowlist");
+    const { error: allowErr } = await allowlist().upsert({ email, invited_by: ctx.user.id }, { onConflict: "email" });
+    if (allowErr && !/does not exist|schema cache|signup_allowlist/i.test(allowErr.message)) {
+      return { error: `No se pudo autorizar el correo: ${allowErr.message}` };
+    }
+
     const { data, error } = await adminAuth.admin.createUser({
       email,
       password: input.password,
       email_confirm: true,
-      app_metadata: { invited: true },
     });
-    if (error || !data?.user) return { error: error?.message ?? "No se pudo crear el usuario" };
+    if (error || !data?.user) {
+      // Se limpia para no dejar autorizado un correo que no llegó a crearse.
+      await allowlist().delete().eq("email", email);
+      const msg = error?.message ?? "No se pudo crear el usuario";
+      return {
+        error: /database error/i.test(msg)
+          ? `${msg}. Si el correo no es @dicecpanama.com, falta correr la migración 0043 en Supabase.`
+          : msg,
+      };
+    }
     userId = data.user.id;
+    // Ya existe el usuario: la autorización cumplió su función. Se borra para que
+    // el correo no quede habilitado a registrarse solo si algún día se elimina.
+    await allowlist().delete().eq("email", email);
   } else {
     // Existía — actualizar password para el contexto actual
     // (Si el usuario ya tenía cuenta en otra org y le estamos dando una nueva password,
