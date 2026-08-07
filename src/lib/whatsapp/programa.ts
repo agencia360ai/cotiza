@@ -1,22 +1,29 @@
 // Parser del mensaje de PROGRAMACIÓN del día que el supervisor reenvía al bot.
 //
-// Formato real que usa DICEC:
+// Aguanta los DOS órdenes que usa DICEC. Formato actual — el proyecto ABRE el
+// bloque y la gente va al final:
 //
-//   Buenos días equipo, espero se encuentren bien.
-//   Programación de hoy jueves 30 de julio:
+//   Programación de mañana viernes 7 de agosto
 //
-//   Cirion – Colón: @50761111111 @50762222222 @50763333333
-//   → DM25-16 Cirion Technologies Mantenimiento — Mantenimiento preventivo
+//   →DS26-22
+//   Carga de refrigerante a equipos      ← descripción
+//   Cirion Amador                        ← LUGAR (la línea pegada a la gente)
+//   @50761111111 , @50762222222 .
 //
-//   EFR – San Francisco: @50764444444 @50765555555
-//   → DM26-08 Mantenimiento EFR San Francisco — Mantenimiento preventivo
+//   Apoyo con transporte @50767777777
 //
-//   Apoyo con transporte: @50766666666
+// Y el formato anterior, donde la gente va primero y la flecha después:
+//
+//   Cirion – Colón: @50761111111 @50762222222
+//   → DM25-16 Cirion Technologies Mantenimiento
 //
 // Al reenviarse por la API, las menciones llegan como NÚMEROS (no como el
 // nombre que muestra la app), y esos números se cruzan contra el wa_id del
-// personal. Una sección sin línea "→" no tiene proyecto: se usa su etiqueta
-// (y "transporte" se normaliza a la labor "Transporte").
+// personal. OJO: alguien nombrado sin "@" (p. ej. "…, Humberto.") no viaja como
+// mención y por lo tanto no se puede marcar.
+//
+// Un bloque sin línea "→" usa su etiqueta como labor, y "transporte" se
+// normaliza a "Transporte".
 
 export type AsignacionPrograma = {
   waId: string; // número tal cual vino en la mención (solo dígitos)
@@ -62,55 +69,87 @@ function etiquetaDe(linea: string): string {
   if (iDosPuntos > 0 && (iArroba === -1 || iDosPuntos < iArroba)) {
     return linea.slice(0, iDosPuntos).trim();
   }
-  return linea.replace(RE_MENCION, "").replace(/[:\-–—]+\s*$/, "").trim();
+  // Quitadas las menciones puede no quedar nada útil: en "@X , @Y ." sobran solo
+  // los separadores. Si no queda ni una letra ni un dígito, NO hay etiqueta —
+  // si no, esa basura pisaría al lugar que venía en la línea de arriba.
+  const resto = linea.replace(RE_MENCION, "").replace(/[:\-–—,.;·|]+/g, " ").trim();
+  return /[\p{L}\p{N}]/u.test(resto) ? resto : "";
 }
 
 export function parsePrograma(texto: string): ProgramaParseado {
   const lineas = texto.split(/\r?\n/);
-  type Seccion = { etiqueta: string; waIds: string[]; projectNo: string | null };
-  const secciones: Seccion[] = [];
-  let actual: Seccion | null = null;
+  type Bloque = { etiqueta: string; waIds: string[]; projectNo: string | null };
+  const bloques: Bloque[] = [];
+  let actual: Bloque | null = null;
+  // Líneas sueltas entre el "→PROYECTO" y las menciones (descripción y lugar).
+  // La ÚLTIMA es el lugar: en el formato real va justo encima de la gente.
+  let pendiente: string | null = null;
+
+  // Fábrica pura: `actual` se asigna en el sitio de llamada para que TypeScript
+  // pueda estrechar el tipo (asignarlo dentro del closure lo volvía `never`).
+  const nuevoBloque = (etiqueta: string, projectNo: string | null): Bloque => {
+    const b: Bloque = { etiqueta, waIds: [], projectNo };
+    bloques.push(b);
+    return b;
+  };
 
   for (const linea of lineas) {
-    const menciones = mencionesDe(linea);
+    if (!linea.trim()) {
+      actual = null; // el bloque se cierra con una línea en blanco
+      pendiente = null;
+      continue;
+    }
 
+    // "→DS26-22" abre bloque y fija el proyecto. Puede venir ANTES de la gente
+    // (formato nuevo) o DESPUÉS de ella (formato viejo).
+    const mFlecha = linea.match(RE_LINEA_PROYECTO);
+    if (mFlecha) {
+      const cuerpo = mFlecha[1].trim();
+      const mProy = cuerpo.match(RE_PROYECTO);
+      const proyecto = mProy ? mProy[1].replace(/\s+/g, "").toUpperCase() : cuerpo.slice(0, 60);
+      // Si el bloque abierto ya tiene gente pero no proyecto, la flecha es SUYA
+      // (formato viejo: gente y luego la flecha).
+      if (actual && actual.waIds.length > 0 && !actual.projectNo) {
+        actual.projectNo = proyecto;
+      } else {
+        actual = nuevoBloque("", proyecto);
+        pendiente = null;
+      }
+      continue;
+    }
+
+    const menciones = mencionesDe(linea);
     if (menciones.length > 0) {
       const etiqueta = etiquetaDe(linea);
-      // Menciones sueltas debajo de una sección (se desbordó de línea) se suman
-      // a la sección abierta en vez de abrir una nueva sin nombre.
-      if (!etiqueta && actual) {
-        actual.waIds.push(...menciones);
-        continue;
+      // Una etiqueta nueva cuando el bloque ya tiene gente abre otro bloque
+      // ("Apoyo con transporte @X" después de una sección).
+      let bloque: Bloque;
+      if (!actual || (etiqueta && actual.waIds.length > 0)) bloque = nuevoBloque(etiqueta, null);
+      else {
+        bloque = actual;
+        if (etiqueta && !bloque.etiqueta) bloque.etiqueta = etiqueta;
       }
-      actual = { etiqueta, waIds: menciones, projectNo: null };
-      secciones.push(actual);
+      if (!bloque.etiqueta && pendiente) bloque.etiqueta = pendiente;
+      bloque.waIds.push(...menciones);
+      actual = bloque;
+      pendiente = null;
       continue;
     }
 
-    const mProy = linea.match(RE_LINEA_PROYECTO);
-    if (mProy && actual && !actual.projectNo) {
-      const m = mProy[1].match(RE_PROYECTO);
-      actual.projectNo = m ? m[1].replace(/\s+/g, "").toUpperCase() : mProy[1].trim().slice(0, 60);
-      continue;
-    }
-
-    // Línea en blanco: cierra la sección (lo que venga después es otra cosa).
-    if (!linea.trim()) actual = null;
+    // Texto suelto: candidato a lugar. Solo cuenta dentro de un bloque abierto,
+    // así el encabezado ("Programación de mañana viernes 7…") no se cuela.
+    if (actual && actual.waIds.length === 0) pendiente = linea.trim().replace(/[:\-–—]+$/, "").trim();
   }
 
   const asignaciones: AsignacionPrograma[] = [];
-  for (const s of secciones) {
-    const proyecto = s.projectNo ?? (s.etiqueta ? laborDeEtiqueta(s.etiqueta) : null);
-    for (const waId of s.waIds) {
-      asignaciones.push({ waId, siteLabel: s.etiqueta, projectNo: proyecto });
+  for (const b of bloques) {
+    const proyecto = b.projectNo ?? (b.etiqueta ? laborDeEtiqueta(b.etiqueta) : null);
+    for (const waId of b.waIds) {
+      asignaciones.push({ waId, siteLabel: b.etiqueta, projectNo: proyecto });
     }
   }
 
-  return {
-    asignaciones,
-    secciones: secciones.length,
-    sinMenciones: secciones.length === 0,
-  };
+  return { asignaciones, secciones: bloques.length, sinMenciones: asignaciones.length === 0 };
 }
 
 // Normaliza para comparar contra los wa_id guardados: WhatsApp puede mandar el
