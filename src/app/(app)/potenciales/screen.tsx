@@ -1032,6 +1032,9 @@ function QuoteDrawer({
         setError(r.error);
         return false;
       }
+      // Guardó, pero algo secundario falló (p. ej. el correo de aprobación).
+      // Se muestra sin bloquear: el dato quedó bien.
+      if (r.warning) setError(r.warning);
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Se cortó el guardado — reintenta");
