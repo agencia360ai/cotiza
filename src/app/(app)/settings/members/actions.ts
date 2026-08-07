@@ -212,3 +212,31 @@ export async function removeMember(memberId: string): Promise<Result> {
   revalidatePath("/settings/members");
   return { ok: true };
 }
+
+// Teléfono de WhatsApp del miembro (0044). Con él queda autorizado a reenviarle
+// al bot la programación del día — la autorización sale de aquí y no de una
+// lista suelta que se desincroniza cuando alguien deja la empresa.
+export async function setMemberWaPhone(memberId: string, phone: string | null): Promise<Result> {
+  const auth = await requireAdmin();
+  if (auth.kind === "err") return { error: auth.error };
+  const ctx = auth.ctx;
+
+  const limpio = phone?.replace(/\D/g, "") || null;
+  if (limpio && limpio.length < 7) return { error: "Número muy corto — usa el formato con código de país (5076…)." };
+
+  // wa_phone es de la 0044 y todavía no está en los tipos generados.
+  const { error } = await (membersTable() as unknown as {
+    update: (v: Record<string, unknown>) => {
+      eq: (c: string, v: string) => { eq: (c: string, v: string) => Promise<{ error: { message: string } | null }> };
+    };
+  })
+    .update({ wa_phone: limpio })
+    .eq("id", memberId)
+    .eq("org_id", ctx.orgId);
+  if (error) {
+    return { error: /wa_phone/.test(error.message) ? "Falta la migración 0044 — corre el SQL y reintenta." : error.message };
+  }
+  revalidatePath("/settings/members");
+  revalidatePath("/personal/asistencia");
+  return { ok: true };
+}

@@ -225,11 +225,21 @@ async function ayuda(admin: Admin, s: Settings, tech: Tech, to: string): Promise
 // marca ausente a nadie: el mensaje dice quién va a dónde, no quién faltó —
 // eso se ajusta a mano en la planilla.
 async function aplicarPrograma(admin: Admin, s: Settings, msg: IncomingMessage): Promise<void> {
-  const autorizados = s.roster_wa_ids ?? [];
+  // Autorizados: el teléfono de los MIEMBROS de la org (0044) — donde se
+  // administra el equipo, así nadie queda autorizado tras irse — más la lista
+  // suelta de attendance_settings, para números que no son usuarios de la app.
+  const { data: miembros } = (await admin
+    .from("org_members")
+    .select("wa_phone")
+    .eq("org_id", s.org_id)) as { data: { wa_phone: string | null }[] | null };
+  const autorizados = [
+    ...(s.roster_wa_ids ?? []),
+    ...(miembros ?? []).map((m) => m.wa_phone).filter((x): x is string => !!x),
+  ];
   if (!autorizados.some((n) => mismoNumero(n, msg.from))) {
     await sendText(
       msg.from,
-      "Recibí la programación, pero este número no está autorizado para marcar la asistencia del equipo. Pídele a un administrador que lo agregue en Asistencia → Configuración.",
+      "Recibí la programación, pero este número no está autorizado para marcar la asistencia del equipo. Pídele a un administrador que registre tu WhatsApp en Configuración → Miembros del equipo.",
     );
     return;
   }

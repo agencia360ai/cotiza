@@ -9,7 +9,7 @@ import { InviteMemberForm } from "./invite-form";
 
 export const dynamic = "force-dynamic";
 
-type MemberRow = { id: string; user_id: string; role: string; created_at: string };
+type MemberRow = { id: string; user_id: string; role: string; created_at: string; wa_phone?: string | null };
 
 export default async function MembersPage() {
   const supabase = await createClient();
@@ -25,11 +25,15 @@ export default async function MembersPage() {
   }
 
   const admin = createAdminClient();
-  const { data: members } = (await admin
-    .from("org_members")
-    .select("id, user_id, role, created_at")
-    .eq("org_id", ctx.orgId)
-    .order("created_at", { ascending: true })) as { data: MemberRow[] | null };
+  const traer = (cols: string) =>
+    admin.from("org_members").select(cols).eq("org_id", ctx.orgId).order("created_at", { ascending: true }) as unknown as Promise<{
+      data: MemberRow[] | null;
+      error: { message?: string } | null;
+    }>;
+  let res = await traer("id, user_id, role, created_at, wa_phone");
+  // 0044 pendiente: sin la columna, la pantalla igual funciona (sin teléfonos).
+  if (res.error && /wa_phone/.test(res.error.message ?? "")) res = await traer("id, user_id, role, created_at");
+  const members = res.data;
 
   // Resolver emails desde auth.users via admin
   type AdminAuth = {

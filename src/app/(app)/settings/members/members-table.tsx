@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Loader2, Trash2, User } from "lucide-react";
-import { changeMemberRole, removeMember } from "./actions";
+import { changeMemberRole, removeMember, setMemberWaPhone } from "./actions";
 
 type Member = {
   id: string;
@@ -12,6 +12,7 @@ type Member = {
   created_at: string;
   last_sign_in_at: string | null;
   is_self: boolean;
+  wa_phone?: string | null;
 };
 
 const ROLE_OPTIONS = [
@@ -57,6 +58,24 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
   const [role, setRole] = useState(member.role);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [tel, setTel] = useState(member.wa_phone ?? "");
+
+  // Con el número guardado, este miembro queda autorizado a reenviarle al bot la
+  // programación del día (Asistencia).
+  function guardarTel() {
+    const limpio = tel.replace(/\D/g, "");
+    if (limpio === (member.wa_phone ?? "")) return;
+    setError(null);
+    startTransition(async () => {
+      const r = await setMemberWaPhone(member.id, limpio || null);
+      if (r && "error" in r) {
+        setError(r.error);
+        setTel(member.wa_phone ?? "");
+      } else {
+        setTel(limpio);
+      }
+    });
+  }
 
   function handleRoleChange(next: string) {
     const prev = role;
@@ -94,6 +113,26 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
         <p className="text-[11px] text-slate-500">
           Último ingreso: {fmtRelative(member.last_sign_in_at)} · Miembro desde {fmtDateShort(member.created_at)}
         </p>
+        {canManage ? (
+          <div className="mt-1 flex items-center gap-1.5">
+            <input
+              value={tel}
+              onChange={(e) => setTel(e.target.value)}
+              onBlur={guardarTel}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              placeholder="WhatsApp 5076…"
+              inputMode="numeric"
+              className="w-36 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] outline-none focus:border-slate-900"
+            />
+            {member.wa_phone ? (
+              <span className="text-[10px] text-emerald-600" title="Puede reenviar la programación del día al bot">
+                autorizado
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         {error ? <p className="mt-0.5 text-[11px] text-red-600">{error}</p> : null}
       </div>
       {canManage && !member.is_self ? (
