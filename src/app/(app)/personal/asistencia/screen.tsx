@@ -1412,10 +1412,11 @@ function RosterWaCard({ numeros }: { numeros: string[] }) {
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <h3 className="text-sm font-semibold text-slate-900">Quién puede mandar la programación del día</h3>
+      <h3 className="text-sm font-semibold text-slate-900">Números extra para la programación del día</h3>
       <p className="mt-1 text-xs text-slate-500">
-        Reenviándole al bot el mensaje de programación, estos números marcan presentes a los mencionados y les asignan su
-        proyecto. Un número por línea, con código de país (ej. 50761234567). <b>Si la lista está vacía, nadie puede.</b>
+        Lo normal es registrar el WhatsApp de cada persona en <b>Configuración → Miembros del equipo</b>: con eso queda
+        autorizada a reenviarle la programación al bot. Esta lista es solo para números que <b>no</b> son usuarios de la app.
+        Un número por línea, con código de país (ej. 50761234567).
       </p>
       <textarea
         rows={3}
