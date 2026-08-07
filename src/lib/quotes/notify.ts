@@ -46,11 +46,19 @@ const fila = (k: string, v: string) =>
   `<tr><td style="padding:4px 12px 4px 0;color:#64748b;white-space:nowrap">${esc(k)}</td>` +
   `<td style="padding:4px 0;color:#0f172a;font-weight:600">${esc(v)}</td></tr>`;
 
-export async function notificarCotizacionAprobada(db: Db, orgId: string, quoteId: string, replyTo?: string | null): Promise<void> {
-  if (!hasEmailConfig()) return;
+// Devuelve el motivo si NO se pudo mandar, para que el caller lo muestre. Un
+// correo que falla en silencio hace creer que administración ya fue avisada.
+// null = se mandó, o no había nada que mandar (sin config / sin destinatarios).
+export async function notificarCotizacionAprobada(
+  db: Db,
+  orgId: string,
+  quoteId: string,
+  replyTo?: string | null,
+): Promise<string | null> {
+  if (!hasEmailConfig()) return null;
 
   const to = await destinatarios(db, orgId);
-  if (to.length === 0) return; // nadie configurado: no es un error
+  if (to.length === 0) return null; // nadie configurado: no es un error
 
   type Row = {
     quote_number: string;
@@ -72,7 +80,7 @@ export async function notificarCotizacionAprobada(db: Db, orgId: string, quoteId
     .eq("id", quoteId)
     .eq("org_id", orgId)
     .maybeSingle()) as { data: Row | null };
-  if (!q) return;
+  if (!q) return null;
 
   const cliente = q.client?.name ?? q.client_name ?? "Cliente";
   const total = q.letter ? letterTotals(q.letter).total : (q.amount_usd ?? 0);
@@ -133,11 +141,12 @@ export async function notificarCotizacionAprobada(db: Db, orgId: string, quoteId
   </p>
 </div>`;
 
-  await sendEmail({
+  const r = await sendEmail({
     to,
     subject: `Cotización aprobada · ${q.quote_number} — ${cliente} · ${money(total)}`,
     html,
     replyTo: replyTo ?? null,
     attachments: adjunto ? [adjunto] : undefined,
   });
+  return r.ok ? null : r.error;
 }

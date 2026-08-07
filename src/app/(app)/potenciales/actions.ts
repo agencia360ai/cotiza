@@ -10,7 +10,7 @@ import { listTenders } from "@/lib/pipeline/queries";
 import { matchClientByName } from "@/lib/clients/match";
 import { norm } from "@/lib/clients/normalize";
 
-type Result<T = void> = { error: string } | (T extends void ? { ok: true } : { ok: true; data: T });
+type Result<T = void> = { error: string } | (T extends void ? { ok: true; warning?: string } : { ok: true; data: T; warning?: string });
 
 async function ctx() {
   const supabase = await createClient();
@@ -82,12 +82,14 @@ export async function updateQuote(
   if (error) return { error: error.message };
   // Aviso a administración para registrar el proyecto en QBO a mano. Best-effort:
   // un fallo de correo NO debe deshacer ni ensuciar el guardado del usuario.
+  let avisoCorreo: string | null = null;
   if (recienAprobada) {
     try {
-      await notificarCotizacionAprobada(c.supabase, c.orgId, id, c.userEmail ?? null);
+      avisoCorreo = await notificarCotizacionAprobada(c.supabase, c.orgId, id, c.userEmail ?? null);
     } catch (e) {
-      console.error("[cotiza] aviso de aprobación falló:", e);
+      avisoCorreo = e instanceof Error ? e.message : "no se pudo enviar";
     }
+    if (avisoCorreo) console.error("[cotiza] aviso de aprobación falló:", avisoCorreo);
   }
   // Aprende del ajuste manual: guarda el alias (con sucursal si se asignó) para
   // que la próxima importación con ese mismo nombre se auto-linkee.
@@ -102,7 +104,9 @@ export async function updateQuote(
       );
   }
   revalidatePath(REVALIDATE);
-  return { ok: true };
+  // El guardado fue bien; si el correo falló, se reporta como AVISO (no error):
+  // la cotización quedó aprobada, pero administración no fue notificada.
+  return avisoCorreo ? { ok: true, warning: `Se guardó, pero el aviso por correo no salió: ${avisoCorreo}` } : { ok: true };
 }
 
 export async function createQuote(input: {
