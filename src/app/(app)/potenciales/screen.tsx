@@ -1876,6 +1876,10 @@ function LicitacionesTab({
   const [editing, setEditing] = useState<TenderRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [verArchivadas, setVerArchivadas] = useState(false);
+  // El cambio de estatus era mudo cuando fallaba: la fila volvía a su valor
+  // anterior sin decir por qué. Y con el aviso de orden de proceder hay un
+  // segundo caso que contar — se guardó, pero el correo no salió.
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
 
   const archivadasCount = useMemo(() => tenders.filter((t) => t.archived_at).length, [tenders]);
   const activasCount = tenders.length - archivadasCount;
@@ -1883,11 +1887,19 @@ function LicitacionesTab({
   // Cambio rápido de estatus desde la fila (optimista + revierte si falla).
   async function changeTenderStatus(t: TenderRow, next: TenderStatus) {
     setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: next } : x)));
+    const revertir = () => setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
+    setRowMsg(null);
     try {
       const r = await setTenderStatus(t.id, next);
-      if ("error" in r) setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
-    } catch {
-      setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
+      if ("error" in r) {
+        revertir();
+        setRowMsg(r.error);
+      } else if (r.warning) {
+        setRowMsg(r.warning);
+      }
+    } catch (e) {
+      revertir();
+      setRowMsg(e instanceof Error ? e.message : "No se pudo cambiar el estatus — reintenta");
     }
   }
 
@@ -2134,6 +2146,16 @@ function LicitacionesTab({
         {archivadasCount > 0 && !verArchivadas ? <span className="text-slate-400"> · {archivadasCount} archivada{archivadasCount === 1 ? "" : "s"} oculta{archivadasCount === 1 ? "" : "s"}</span> : null}
       </p>
 
+      {rowMsg ? (
+        <div className="mb-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span className="flex-1">{rowMsg}</span>
+          <button type="button" onClick={() => setRowMsg(null)} className="cursor-pointer font-semibold text-amber-700 hover:text-amber-900">
+            Cerrar
+          </button>
+        </div>
+      ) : null}
+
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -2268,9 +2290,10 @@ function LicitacionesTab({
           tender={editing}
           clients={clients}
           onClose={() => setEditing(null)}
-          onSaved={(u) => {
+          onSaved={(u, warning) => {
             setTenders((prev) => prev.map((x) => (x.id === u.id ? u : x)));
             setEditing(null);
+            setRowMsg(warning);
           }}
           onAutoUpdated={(id, patch) => setTenders((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)))}
         />
@@ -2846,7 +2869,7 @@ function TenderDrawer({
   tender: TenderRow;
   clients: ClientOpt[];
   onClose: () => void;
-  onSaved: (t: TenderRow) => void;
+  onSaved: (t: TenderRow, warning: string | null) => void;
   // "Check status" / "Buscar información" pueden cambiar campos en el server sin
   // pasar por Guardar: esto avisa al padre para que la tabla refleje el cambio.
   onAutoUpdated?: (id: string, patch: TenderAutoPatch) => void;
@@ -2881,7 +2904,10 @@ function TenderDrawer({
       setError(r.error);
       return;
     }
-    onSaved(f);
+    // El guardado SÍ ocurrió, así que la fila se actualiza y el drawer cierra;
+    // el aviso (p. ej. "el correo de orden de proceder no salió") sube al padre,
+    // que lo muestra sobre la tabla. Dejarlo acá se perdería al cerrar.
+    onSaved(f, r.warning ?? null);
   }
 
   async function archivar() {
@@ -2892,7 +2918,7 @@ function TenderDrawer({
       setError(r.error);
       return;
     }
-    onSaved({ ...f, archived_at: archived ? new Date().toISOString() : null });
+    onSaved({ ...f, archived_at: archived ? new Date().toISOString() : null }, null);
   }
 
   return (

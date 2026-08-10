@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { notificarCotizacionAprobada } from "@/lib/quotes/notify";
+import { notificarCotizacionAprobada, notificarOrdenDeProceder } from "@/lib/notify/registro-qbo";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
 import type { ProjectType } from "@/lib/projects/types";
@@ -269,6 +269,7 @@ export async function updateTender(
   if (!c.ok) return { error: c.error };
   const p = { ...patch };
   if ("location_id" in p && !(await locationSupported(c.supabase))) delete p.location_id;
+  const recien = await entraAOrdenDeProceder(c.supabase, c.orgId, id, p.status);
   const { error } = await c.supabase.from("tenders").update(p).eq("id", id).eq("org_id", c.orgId);
   // 0038 pendiente: se guarda el resto, pero se AVISA — el Nº lo escribe el
   // usuario y creer que quedó guardado cuando no, es peor que fallar.
@@ -279,8 +280,9 @@ export async function updateTender(
     return { error: "Se guardó todo menos el Nº de proyecto: falta la migración 0038." };
   }
   if (error) return { error: error.message };
+  const aviso = recien ? await avisarOrdenDeProceder(c.supabase, c.orgId, id, c.userEmail ?? null) : null;
   revalidatePath(REVALIDATE);
-  return { ok: true };
+  return aviso ? { ok: true, warning: `Se guardó, pero el aviso por correo no salió: ${aviso}` } : { ok: true };
 }
 
 // Crear licitación MANUAL en Mis Licitaciones — para procesos donde ya se
@@ -335,10 +337,49 @@ export async function createManualTender(input: {
 export async function setTenderStatus(id: string, status: TenderStatus): Promise<Result> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
+  const recien = await entraAOrdenDeProceder(c.supabase, c.orgId, id, status);
   const { error } = await c.supabase.from("tenders").update({ status }).eq("id", id).eq("org_id", c.orgId);
   if (error) return { error: error.message };
+  const aviso = recien ? await avisarOrdenDeProceder(c.supabase, c.orgId, id, c.userEmail ?? null) : null;
   revalidatePath(REVALIDATE);
-  return { ok: true };
+  return aviso ? { ok: true, warning: `Se guardó, pero el aviso por correo no salió: ${aviso}` } : { ok: true };
+}
+
+// ¿Este cambio es la TRANSICIÓN a orden de proceder? El aviso sale una sola vez:
+// volver a guardar una licitación que ya estaba en ese estado no re-notifica.
+async function entraAOrdenDeProceder(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  orgId: string,
+  id: string,
+  status: TenderStatus | undefined,
+): Promise<boolean> {
+  if (status !== "orden_proceder") return false;
+  const { data } = (await supabase
+    .from("tenders")
+    .select("status")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle()) as { data: { status: string } | null };
+  return !!data && data.status !== "orden_proceder";
+}
+
+// Best-effort: un fallo de correo NO deshace ni ensucia el guardado. Devuelve el
+// motivo para mostrarlo — un aviso que falla en silencio hace creer que
+// administración ya fue notificada.
+async function avisarOrdenDeProceder(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  orgId: string,
+  id: string,
+  replyTo: string | null,
+): Promise<string | null> {
+  let motivo: string | null = null;
+  try {
+    motivo = await notificarOrdenDeProceder(supabase, orgId, id, replyTo);
+  } catch (e) {
+    motivo = e instanceof Error ? e.message : "no se pudo enviar";
+  }
+  if (motivo) console.error("[cotiza] aviso de orden de proceder falló:", motivo);
+  return motivo;
 }
 
 // Archivar / desarchivar una licitación (la esconde de la lista, no la borra).

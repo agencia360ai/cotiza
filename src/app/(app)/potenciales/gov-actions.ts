@@ -1320,8 +1320,11 @@ export async function followGovTender(govId: string): Promise<Result<{ tenderId:
       modalidad,
       entity: g.entidad,
       objeto: g.titulo,
-      // "presentada" = Participada (el primer estado del pipeline propio).
-      status: "presentada",
+      // Seguir una licitación del portal es decidir MIRARLA, no haberla
+      // presentado: entra en "Por participar" y el equipo la asciende cuando
+      // de verdad participa. Antes entraba como "Participada" y las que se
+      // decidía no presentar quedaban contadas como participaciones.
+      status: "por_participar",
       amount_ref_usd: g.precio_ref,
       delivery_date: g.fecha_cierre ? String(g.fecha_cierre).slice(0, 10) : null,
       // Carpeta de Dropbox si ya existe (paso 1); si no, el link a PanamaCompra.
