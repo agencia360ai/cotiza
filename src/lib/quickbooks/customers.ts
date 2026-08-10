@@ -8,6 +8,7 @@
 // blob de texto "Found N customers:{…}{…}" que devuelve este server.
 
 import { listQboTools, callQboTool, type QboTool, type QboToolResult } from "./mcp";
+import { extractEntities, nested, str, toIsoDate } from "./parse";
 
 export type QboCustomer = {
   id: string;
@@ -21,6 +22,7 @@ export type QboCustomer = {
   parentId: string | null; // sub-customer/job → id del padre
   isProject: boolean; // QBO "IsProject"/"Job": es un proyecto, no una sucursal
   fullyQualifiedName: string | null; // "Padre:Hijo"
+  createdAt: string | null; // MetaData.CreateTime → cuándo se abrió en QBO
 };
 
 export type FetchResult = {
@@ -96,80 +98,7 @@ function buildArgs(schema: unknown, kind: "list" | "query"): Record<string, unkn
   return wrap ? { params: inner } : inner;
 }
 
-// Extrae objetos {…} de nivel superior de un blob (ignora llaves dentro de strings).
-function parseConcatenatedObjects(text: string): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-  let depth = 0, start = -1, inStr = false, esc = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') inStr = true;
-    else if (ch === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        try {
-          out.push(JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>);
-        } catch {
-          /* objeto incompleto */
-        }
-        start = -1;
-      }
-    }
-  }
-  return out;
-}
-
-function digArray(json: unknown): Record<string, unknown>[] {
-  if (json == null || typeof json !== "object") return [];
-  if (Array.isArray(json)) return json as Record<string, unknown>[];
-  const o = json as Record<string, unknown>;
-  const qr = o.QueryResponse as Record<string, unknown> | undefined;
-  if (qr && Array.isArray(qr.Customer)) return qr.Customer as Record<string, unknown>[];
-  for (const key of ["customers", "Customer", "data", "items", "results", "value"]) {
-    if (Array.isArray(o[key])) return o[key] as Record<string, unknown>[];
-  }
-  if (o.Id || o.id || o.DisplayName || o.displayName) return [o];
-  return [];
-}
-
-// Saca la lista de customers del tool result, probando todas las formas.
-function extractCustomers(result: QboToolResult): Record<string, unknown>[] {
-  if (result.structuredContent !== undefined) {
-    const a = digArray(result.structuredContent);
-    if (a.length) return a;
-  }
-  const text = (result.content ?? [])
-    .filter((c) => c.type === "text" && typeof c.text === "string")
-    .map((c) => c.text as string)
-    .join("\n")
-    .trim();
-  if (!text) return [];
-  try {
-    const a = digArray(JSON.parse(text));
-    if (a.length) return a;
-  } catch {
-    /* no es JSON limpio: cae al scanner */
-  }
-  return parseConcatenatedObjects(text);
-}
-
-function str(v: unknown): string | null {
-  if (v == null) return null;
-  const s = String(v).trim();
-  return s.length ? s : null;
-}
-function nested(o: Record<string, unknown>, a: string, b: string): string | null {
-  const x = o[a] as Record<string, unknown> | undefined;
-  return x ? str(x[b]) : null;
-}
+const extractCustomers = (result: QboToolResult) => extractEntities(result, "Customer");
 
 // Un proyecto de DICEC SIEMPRE se llama con el correlativo "DM26-16" / "DC-2607".
 // Sirve de respaldo para reconocerlo cuando QBO no expone la bandera: el campo
@@ -213,6 +142,10 @@ function mapCustomer(raw: Record<string, unknown>): QboCustomer | null {
     parentId: parentId ?? null,
     isProject,
     fullyQualifiedName,
+    // Cuándo se abrió el proyecto en QuickBooks. Es la única fecha propia del
+    // proyecto que la API REST expone (las de la sección Projects viven en la
+    // API GraphQL, que pide acceso de partner).
+    createdAt: toIsoDate(nested(raw, "MetaData", "CreateTime") ?? nested(raw, "metaData", "createTime")),
   };
 }
 

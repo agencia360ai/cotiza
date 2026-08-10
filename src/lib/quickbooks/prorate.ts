@@ -1,8 +1,13 @@
-// Prorrateo lineal de proyectos multi-período por días de overlap.
+// Cuánto de un proyecto cae dentro de un rango de fechas.
 //
-// Un DM25-025 que corre jun-2025 → jun-2026 "acapara" dos años: al filtrar
-// "este año" el monto mostrado debe ser SOLO la porción del contrato cuyos días
-// caen dentro del rango (asumiendo devengo lineal entre inicio y fin).
+// Hay dos caminos, y el primero gana siempre que exista:
+//
+//   1. MESES REALES (0045). QuickBooks nos da el P&L desglosado por mes, así
+//      que "cuánto de este proyecto es de marzo" no se estima: se suma.
+//   2. PRORRATEO. Para proyectos sin data mensual (cerrados con números
+//      congelados, o un contrato firmado cuyo monto total aún no se facturó)
+//      se reparte el monto linealmente por días entre inicio y fin.
+//
 // Fechas como "YYYY-MM-DD" (inclusive en ambos extremos), sin depender de TZ.
 
 export type DateRange = { from: string; to: string };
@@ -41,22 +46,76 @@ export function prorate(total: number, projStart: string, projEnd: string, range
   return Math.round(total * overlapFraction(projStart, projEnd, range) * 100) / 100;
 }
 
-// Fechas efectivas del proyecto: las guardadas, o el año calendario del
-// proyecto como supuesto (DM26 sin fechas ⇒ 2026 completo). `asumidas` avisa
-// a la UI que conviene editarlas para un prorrateo real.
-export function effectiveDates(p: { startDate: string | null; endDate: string | null; year: number | null }): {
-  start: string;
-  end: string;
-  asumidas: boolean;
-} | null {
-  if (p.startDate && p.endDate) return { start: p.startDate, end: p.endDate, asumidas: false };
-  if (p.startDate) {
+// ── Meses reales ─────────────────────────────────────────────────────────────
+
+export type MesMonto = { month: string; income: number; cost: number };
+
+/** Último día del mes de "2026-03-01" → "2026-03-31". */
+export function finDeMes(monthIso: string): string {
+  const [y, m] = monthIso.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * Suma de los meses que caen dentro del rango. Un mes partido por el rango
+ * (rangos de 90 días, o personalizados) aporta la parte proporcional de sus
+ * días — no todo el mes ni nada.
+ */
+export function sumarMeses(meses: MesMonto[], range: DateRange | null): { income: number; cost: number } {
+  let income = 0;
+  let cost = 0;
+  for (const m of meses) {
+    const f = range ? overlapFraction(m.month, finDeMes(m.month), range) : 1;
+    if (f === 0) continue;
+    income += m.income * f;
+    cost += m.cost * f;
+  }
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  return { income: round2(income), cost: round2(cost) };
+}
+
+// ── Fechas efectivas ─────────────────────────────────────────────────────────
+
+// De dónde salieron las fechas que se están mostrando. La UI lo dice: un rango
+// asumido no merece la misma confianza que uno que vino de QuickBooks.
+export type FuenteFechas = "manual" | "qbo" | "asumido";
+
+export type FechasInput = {
+  startDate: string | null; // cargadas a mano (contrato firmado)
+  endDate: string | null;
+  qboCreatedAt?: string | null; // MetaData.CreateTime del customer en QBO
+  firstTxnDate?: string | null; // primer mes con movimiento
+  lastTxnDate?: string | null; // último mes con movimiento
+  year: number | null; // año del correlativo — último recurso
+};
+
+const menor = (a: string | null | undefined, b: string | null | undefined) =>
+  a && b ? (a < b ? a : b) : (a ?? b ?? null);
+
+/**
+ * Fechas efectivas del proyecto, en orden de confianza:
+ *   1. manual  — las dos cargadas a mano: es el contrato, gana siempre.
+ *   2. qbo     — apertura del proyecto / primer movimiento → último movimiento.
+ *   3. asumido — solo inicio ⇒ +12 meses; ni eso ⇒ el año del correlativo.
+ */
+export function effectiveDates(p: FechasInput): { start: string; end: string; fuente: FuenteFechas } | null {
+  const start = p.startDate ?? menor(p.qboCreatedAt, p.firstTxnDate);
+  const end = p.endDate ?? p.lastTxnDate ?? null;
+
+  if (start && end) {
+    return {
+      start,
+      end: end >= start ? end : start,
+      fuente: p.startDate && p.endDate ? "manual" : "qbo",
+    };
+  }
+  if (start) {
     // Solo inicio: asumir 12 meses de contrato.
-    const d = new Date(p.startDate + "T00:00:00Z");
+    const d = new Date(start + "T00:00:00Z");
     d.setUTCFullYear(d.getUTCFullYear() + 1);
     d.setUTCDate(d.getUTCDate() - 1);
-    return { start: p.startDate, end: d.toISOString().slice(0, 10), asumidas: true };
+    return { start, end: d.toISOString().slice(0, 10), fuente: "asumido" };
   }
-  if (p.year) return { start: `${p.year}-01-01`, end: `${p.year}-12-31`, asumidas: true };
+  if (p.year) return { start: `${p.year}-01-01`, end: `${p.year}-12-31`, fuente: "asumido" };
   return null; // sin ninguna pista de fechas
 }

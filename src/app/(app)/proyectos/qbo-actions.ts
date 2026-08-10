@@ -12,9 +12,19 @@ import {
   type ProjectBizStatus,
   type PnlDiagnostico,
 } from "@/lib/quickbooks/projects";
+import { ventanaDeMeses, type MonthPnl } from "@/lib/quickbooks/parse";
 
 export type QboProjectsResult =
-  | { ok: true; projects: QboProject[]; financialsOk: boolean; year: number; syncedAt: number | null }
+  | {
+      ok: true;
+      projects: QboProject[];
+      financialsOk: boolean;
+      year: number;
+      syncedAt: number | null;
+      // Desde cuándo hay desglose mensual real. Antes de esa fecha el board
+      // solo puede prorratear, y lo dice en vez de fingir precisión.
+      mesesDesde: string | null;
+    }
   | { ok: false; error: string };
 
 type DB = Awaited<ReturnType<typeof createClient>>;
@@ -54,6 +64,9 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
     end_date?: string | null;
     contract_total?: number | null;
     quote_number?: string | null;
+    qbo_created_at?: string | null;
+    first_txn_date?: string | null;
+    last_txn_date?: string | null;
   };
   type Res = { data: Row[] | null; error: ({ message: string; code?: string }) | null };
   const run = async (cols: string): Promise<Res> => {
@@ -69,7 +82,9 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
     return { data: all, error: null };
   };
   const BASE_COLS = "qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at";
-  let res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number`);
+  const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number`;
+  let res = await run(`${COLS_0037}, qbo_created_at, first_txn_date, last_txn_date`);
+  if (isMissingColumn(res.error)) res = await run(COLS_0037); // 0045 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total`); // 0037 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date`); // 0023 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status`); // 0022 pendiente
@@ -78,6 +93,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
   // Un error real (RLS/conexión) NO se traga como "no hay proyectos".
   if (res.error) return { ok: false, error: res.error.message };
   const rows = res.data ?? [];
+  const { porProyecto: mesesPorProyecto, desde: mesesDesde } = await loadMeses(supabase, orgId);
   let syncedAt: number | null = null;
   const projects: QboProject[] = rows
     .map((r) => {
@@ -104,13 +120,48 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
         endDate: r.end_date ?? null,
         contractTotal: r.contract_total === null || r.contract_total === undefined ? null : Number(r.contract_total),
         quoteNumber: r.quote_number ?? null,
+        qboCreatedAt: r.qbo_created_at ?? null,
+        firstTxnDate: r.first_txn_date ?? null,
+        lastTxnDate: r.last_txn_date ?? null,
+        meses: mesesPorProyecto.get(r.qb_job_id) ?? [],
       };
     })
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
   // "Hay números" = algún income/cost guardado (no el margen: marginOf da null
   // con income 0, y un año legítimamente en cero mostraba el banner de error).
   const financialsOk = projects.some((p) => p.income !== null || p.cost !== null);
-  return { ok: true, projects, financialsOk, year, syncedAt };
+  return { ok: true, projects, financialsOk, year, syncedAt, mesesDesde };
+}
+
+// Movimiento mensual de TODOS los proyectos de la org (0045). Vive en su propia
+// tabla porque son ~24 filas por proyecto; se lee entero y se indexa en memoria.
+// Si la migración no corrió todavía, devuelve vacío y el board prorratea como antes.
+async function loadMeses(
+  supabase: DB,
+  orgId: string,
+): Promise<{ porProyecto: Map<string, MonthPnl[]>; desde: string | null }> {
+  const porProyecto = new Map<string, MonthPnl[]>();
+  let desde: string | null = null;
+  type MRow = { qb_job_id: string; month: string; income: number | string; cost: number | string };
+  for (let from = 0; from < 200_000; from += 1000) {
+    const r = (await supabase
+      .from("qbo_project_month")
+      .select("qb_job_id, month, income, cost")
+      .eq("org_id", orgId)
+      .order("qb_job_id")
+      .order("month")
+      .range(from, from + 999)) as unknown as { data: MRow[] | null; error: { message: string; code?: string } | null };
+    if (r.error) return { porProyecto: new Map(), desde: null }; // tabla ausente o RLS: se prorratea
+    for (const m of r.data ?? []) {
+      const mes = { month: String(m.month).slice(0, 10), income: Number(m.income), cost: Number(m.cost) };
+      const l = porProyecto.get(m.qb_job_id);
+      if (l) l.push(mes);
+      else porProyecto.set(m.qb_job_id, [mes]);
+      if (!desde || mes.month < desde) desde = mes.month;
+    }
+    if ((r.data?.length ?? 0) < 1000) break;
+  }
+  return { porProyecto, desde };
 }
 
 // ── "Actualizar": pull de QBO (lista + P&L de los abiertos) + persistir. ──────
@@ -132,6 +183,8 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     end_date?: string | null;
     contract_total?: number | null;
     quote_number?: string | null;
+    first_txn_date?: string | null;
+    last_txn_date?: string | null;
   };
   type StRes = { data: StRow[] | null; error: ({ message: string; code?: string }) | null };
   const readState = async (cols: string): Promise<StRes> => {
@@ -149,7 +202,9 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     }
     return { data: all, error: null };
   };
-  let st = await readState("qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total, quote_number");
+  const ST_0037 = "qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total, quote_number";
+  let st = await readState(`${ST_0037}, first_txn_date, last_txn_date`);
+  if (isMissingColumn(st.error)) st = await readState(ST_0037); // 0045 pendiente
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress, status");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress");
@@ -171,17 +226,23 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       p.startDate = s.start_date ?? null;
       p.endDate = s.end_date ?? null;
       p.contractTotal = s.contract_total === null || s.contract_total === undefined ? null : Number(s.contract_total);
+      // Ventana de actividad conocida. Los cerrados no vuelven a consultarse a
+      // QBO, así que para ellos ESTE es el único valor que van a tener.
+      p.firstTxnDate = s.first_txn_date ?? null;
+      p.lastTxnDate = s.last_txn_date ?? null;
     }
   }
 
   // Financials SOLO de los abiertos.
   let financialsOk = false;
+  let mesesDesde: string | null = null;
   try {
-    const { fin, errored } = await fetchProjectFinancials(
+    const { fin, errored, desde } = await fetchProjectFinancials(
       list.filter((p) => !p.closed).map((p) => ({ id: p.id, parentId: p.parentId, siblings: p.siblings })),
     );
     if (fin.size > 0) {
       financialsOk = true;
+      mesesDesde = desde;
       for (const p of list) {
         if (p.closed) continue; // cerrados: números congelados, no se tocan
         const f = fin.get(p.id);
@@ -189,6 +250,14 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
           p.income = f.income;
           p.cost = f.cost;
           p.margin = marginOf(f.income, f.cost);
+          p.meses = f.meses;
+          // Ventana real de actividad. Solo se pisa si QBO reportó movimiento:
+          // un proyecto recién abierto conserva lo que ya se sabía de él.
+          const v = ventanaDeMeses(f.meses);
+          if (v) {
+            p.firstTxnDate = v.first;
+            p.lastTxnDate = v.last;
+          }
         } else if (errored.has(p.id)) {
           // Fallo TRANSITORIO (red/gateway para este proyecto): conservar los
           // números previos que ya vienen del state merge — nullearlos por un
@@ -222,9 +291,16 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     cost: p.cost,
     synced_at: nowIso,
   }));
+  const fechas = list.map((p, i) => ({ ...rows[i], qbo_created_at: p.qboCreatedAt, first_txn_date: p.firstTxnDate, last_txn_date: p.lastTxnDate }));
   if (rows.length) {
-    const { error: upErr } = await supabase.from("qbo_project_state").upsert(rows, { onConflict: "org_id,qb_job_id" });
+    // Con las fechas de 0045 si la migración corrió; sin ellas si no (el resto
+    // de la sincronización no se pierde por una columna que todavía no existe).
+    let { error: upErr } = await supabase.from("qbo_project_state").upsert(fechas, { onConflict: "org_id,qb_job_id" });
+    if (isMissingColumn(upErr)) {
+      ({ error: upErr } = await supabase.from("qbo_project_state").upsert(rows, { onConflict: "org_id,qb_job_id" }));
+    }
     if (upErr) return { ok: false, error: upErr.message };
+    await guardarMeses(supabase, orgId, list, nowIso);
 
     // Reconciliar: borrar filas del año que ya NO vinieron de QBO (proyecto
     // borrado/renombrado) para que no queden huérfanas inflando conteos.
@@ -250,7 +326,45 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     if (isMissingColumn(recErr)) await runReconcile(false);
   }
 
-  return { ok: true, projects: list.sort((a, b) => a.fullName.localeCompare(b.fullName)), financialsOk, year, syncedAt: Date.now() };
+  return {
+    ok: true,
+    projects: list.sort((a, b) => a.fullName.localeCompare(b.fullName)),
+    financialsOk,
+    year,
+    syncedAt: Date.now(),
+    mesesDesde,
+  };
+}
+
+// Guarda el desglose mensual de los proyectos que lo trajeron. Best-effort: si
+// la tabla 0045 no existe todavía, el resto de la sincronización ya se guardó.
+//
+// Los meses SIN movimiento se borran en vez de guardarse en cero — así una
+// factura anulada o movida de mes desaparece del board en lugar de quedar
+// pegada como un mes fantasma del refresh anterior.
+async function guardarMeses(supabase: DB, orgId: string, list: QboProject[], nowIso: string): Promise<void> {
+  const conMeses = list.filter((p) => p.meses.length > 0);
+  if (conMeses.length === 0) return;
+  const filas = conMeses.flatMap((p) =>
+    p.meses
+      .filter((m) => m.income !== 0 || m.cost !== 0)
+      .map((m) => ({ org_id: orgId, qb_job_id: p.id, month: m.month, income: m.income, cost: m.cost, synced_at: nowIso })),
+  );
+  const ids = conMeses.map((p) => p.id);
+  for (let i = 0; i < ids.length; i += 200) {
+    const { error } = await supabase
+      .from("qbo_project_month")
+      .delete()
+      .eq("org_id", orgId)
+      .in("qb_job_id", ids.slice(i, i + 200));
+    if (error) return; // tabla ausente: el board prorratea como antes
+  }
+  for (let i = 0; i < filas.length; i += 1000) {
+    const { error } = await supabase
+      .from("qbo_project_month")
+      .upsert(filas.slice(i, i + 1000), { onConflict: "org_id,qb_job_id,month" });
+    if (error) return;
+  }
 }
 
 export async function getQboProjects(opts?: { force?: boolean; allYears?: boolean }): Promise<QboProjectsResult> {
