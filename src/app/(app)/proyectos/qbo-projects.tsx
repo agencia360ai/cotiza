@@ -65,6 +65,20 @@ const FUENTE_TITULO: Record<FuenteFechas | "sin", string> = {
   asumido: "Fechas asumidas (año del proyecto) — haz clic para poner las reales",
   sin: "Sin fechas — haz clic para agregarlas",
 };
+// Sin fecha de fin del contrato no hay cierre que mostrar. El label dice en qué
+// punto está según el estado, en vez de inventar una fecha.
+const SIN_FIN: Partial<Record<ProjectBizStatus, { label: string; title: string }>> = {
+  activo: {
+    label: "en ejecución",
+    title:
+      "Sigue en ejecución: no tiene fecha de fin cargada. QuickBooks solo sabe hasta cuándo hubo movimiento, no cuándo termina — haz clic para poner la del contrato.",
+  },
+  por_cobrar: {
+    label: "sin cierre",
+    title:
+      "El trabajo terminó pero el proyecto no está cerrado, y no tiene fecha de fin cargada — haz clic para poner la del contrato.",
+  },
+};
 
 // Cap de filas RENDERIZADAS: pintar cientos de proyectos (cada fila con su
 // selector de estado, barras y editor) dispara la memoria del navegador en
@@ -1027,7 +1041,7 @@ function DatesEditor({
         <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="mt-0.5 block rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-normal normal-case tracking-normal focus:outline-none" />
       </label>
       <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-        Fin
+        Fin <span className="font-normal normal-case tracking-normal text-slate-400">· vacío = en ejecución</span>
         <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="mt-0.5 block rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-normal normal-case tracking-normal focus:outline-none" />
       </label>
       <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
@@ -1220,6 +1234,11 @@ function ProjectRow({
   const meta = (p.rubro && RUBRO_META[p.rubro]) || RUBRO_FALLBACK;
   const RubroIcon = meta.icon;
   const cerrado = status === "cerrado";
+  // Sin fecha de fin del contrato, el "fin" que se calcula es el último mes con
+  // movimiento en QBO — que en un proyecto vivo es el mes actual. Pintarlo como
+  // fecha de cierre hace ver terminado lo que sigue corriendo. El cálculo del
+  // rango igual la usa (necesita un intervalo); lo que cambia es lo que se lee.
+  const sinFin = e.eff && !dates.endDate ? SIN_FIN[status] : undefined;
   // `parcial`: el rango muestra solo una porción del proyecto. `prorrateado`:
   // además esa porción es una ESTIMACIÓN (repartida por días) y no lo que
   // QuickBooks reportó en esos meses — solo ahí corresponde el aviso.
@@ -1246,11 +1265,15 @@ function ProjectRow({
                 "inline-flex cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset transition-colors",
                 FUENTE_BADGE[e.eff?.fuente ?? "sin"],
               )}
-              title={FUENTE_TITULO[e.eff?.fuente ?? "sin"]}
+              title={sinFin?.title ?? FUENTE_TITULO[e.eff?.fuente ?? "sin"]}
             >
               <CalendarRange className="size-3" />
-              {e.eff ? `${fmtCorta(e.eff.start)} → ${fmtCorta(e.eff.end)}` : "fechas"}
-              {e.eff?.fuente === "asumido" ? "*" : ""}
+              {!e.eff
+                ? "fechas"
+                : sinFin
+                  ? `desde ${fmtCorta(e.eff.start)} · ${sinFin.label}`
+                  : `${fmtCorta(e.eff.start)} → ${fmtCorta(e.eff.end)}`}
+              {e.eff?.fuente === "asumido" && !sinFin ? "*" : ""}
             </button>
             <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
           </p>
