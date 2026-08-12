@@ -22,6 +22,7 @@ function generatePassword(): string {
 
 export function InviteMemberForm() {
   const [email, setEmail] = useState("");
+  const [nombre, setNombre] = useState("");
   const [password, setPassword] = useState(generatePassword());
   const [role, setRole] = useState<Role>("engineer");
   const [showPwd, setShowPwd] = useState(false);
@@ -35,13 +36,14 @@ export function InviteMemberForm() {
     setError(null);
     setSuccess(null);
     startTransition(async () => {
-      const r = await inviteMember({ email: email.trim(), password, role });
+      const r = await inviteMember({ email: email.trim(), password, role, displayName: nombre.trim() || null });
       if (r && "error" in r) {
         setError(r.error);
         return;
       }
       setSuccess({ email: email.trim(), password });
       setEmail("");
+      setNombre("");
       setPassword(generatePassword());
     });
   }
@@ -73,6 +75,22 @@ export function InviteMemberForm() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block sm:col-span-2">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+            Nombre y apellido
+          </span>
+          <input
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            placeholder="Juan Pérez"
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+          />
+          <p className="mt-1 text-[10px] text-slate-500">
+            Con este nombre aparece en el resto de la app — por ejemplo como encargado de un lead. Si lo dejas vacío se
+            muestra su email.
+          </p>
+        </label>
+
         <label className="block">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
             Email *

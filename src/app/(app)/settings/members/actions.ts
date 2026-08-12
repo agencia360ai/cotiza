@@ -30,6 +30,7 @@ export async function inviteMember(input: {
   email: string;
   password: string;
   role: Role;
+  displayName?: string | null;
 }): Promise<Result> {
   const auth = await requireAdmin();
   if (auth.kind === "err") return { error: auth.error };
@@ -132,9 +133,15 @@ export async function inviteMember(input: {
   }
 
   // 4) Crear membership con admin client (bypass RLS)
-  const { error: memErr } = await (admin.from("org_members") as unknown as {
-    insert: (row: { org_id: string; user_id: string; role: Role }) => Promise<{ error: { message: string } | null }>;
-  }).insert({ org_id: ctx.orgId, user_id: userId, role: input.role });
+  const nombre = input.displayName?.trim() || null;
+  const insertar = (row: Record<string, unknown>) =>
+    (admin.from("org_members") as unknown as {
+      insert: (r: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+    }).insert(row);
+  const base = { org_id: ctx.orgId, user_id: userId, role: input.role };
+  let { error: memErr } = await insertar({ ...base, display_name: nombre });
+  // 0046 pendiente: se crea igual el miembro, solo sin nombre.
+  if (memErr && /display_name/.test(memErr.message)) ({ error: memErr } = await insertar(base));
   if (memErr) return { error: memErr.message };
 
   revalidatePath("/settings/members");
