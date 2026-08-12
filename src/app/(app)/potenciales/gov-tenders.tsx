@@ -85,9 +85,24 @@ const TIPO_RANGO: Record<string, string> = {
   compra_menor_10k: "hasta $10,000",
 };
 
+// Toda fecha que se muestre va en hora de Panamá. Si el día saliera del reloj
+// del navegador y la cuenta regresiva de Panamá, podrían contradecirse.
+const TZ = "America/Panama";
+const diaPanama = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: TZ });
+
+// Días de CALENDARIO que faltan para el cierre: hoy = 0, mañana = 1, ayer = -1.
+//
+// Antes se hacía Math.ceil() sobre los milisegundos restantes, y contaba mal
+// justo cuando más importa: un acto que cierra HOY a las 12:45 está a 0.03
+// días, el ceil lo subía a 1 y el chip decía "en 1 d" — o sea, mañana. Lo que
+// hay que responder no es cuánto tiempo falta sino QUÉ DÍA cierra, así que se
+// comparan los días, no los relojes.
 function diasParaCierre(iso: string | null): number | null {
   if (!iso) return null;
-  return Math.ceil((+new Date(iso) - Date.now()) / 86400000);
+  const cierre = new Date(iso);
+  if (Number.isNaN(+cierre)) return null;
+  const ms = +new Date(diaPanama(cierre) + "T00:00:00Z") - +new Date(diaPanama(new Date()) + "T00:00:00Z");
+  return Math.round(ms / 86400000);
 }
 
 // Días desde que ENTRÓ a la lista (created_at). Nueva = agregada en las últimas
@@ -96,7 +111,7 @@ function diasDesdeAgregada(iso: string | null): number | null {
   if (!iso) return null;
   return Math.floor((Date.now() - +new Date(iso)) / 86400000);
 }
-const FECHA_AGREGADA = new Intl.DateTimeFormat("es-PA", { day: "numeric", month: "short" });
+const FECHA_AGREGADA = new Intl.DateTimeFormat("es-PA", { day: "numeric", month: "short", timeZone: TZ });
 
 function estaAbierta(r: GovTenderRow): boolean {
   return !r.fecha_cierre || +new Date(r.fecha_cierre) >= Date.now();
@@ -122,8 +137,8 @@ function govSortValue(r: GovTenderRow, key: GovSortKey, score: number): string |
   }
 }
 
-const FECHA_DIA = new Intl.DateTimeFormat("es-PA", { weekday: "short", day: "numeric", month: "short" });
-const FECHA_HORA = new Intl.DateTimeFormat("es-PA", { hour: "numeric", minute: "2-digit", hour12: true });
+const FECHA_DIA = new Intl.DateTimeFormat("es-PA", { weekday: "short", day: "numeric", month: "short", timeZone: TZ });
+const FECHA_HORA = new Intl.DateTimeFormat("es-PA", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: TZ });
 
 // Categorización visual: bucket HVAC por keywords sobre título + motivo.
 // El ícono identifica el rubro de un vistazo; el color nunca es el único indicador.
@@ -840,7 +855,7 @@ function TenderTr({
                           : "bg-slate-100 text-slate-500 ring-slate-200",
                   )}
                 >
-                  {cerrada ? "cerrada" : dias === 0 ? "cierra hoy" : `en ${dias} d`}
+                  {cerrada ? "cerrada" : dias === 0 ? "cierra hoy" : dias === 1 ? "mañana" : `en ${dias} d`}
                 </span>
               ) : null}
             </div>
