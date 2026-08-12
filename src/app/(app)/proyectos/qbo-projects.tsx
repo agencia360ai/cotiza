@@ -17,11 +17,12 @@ import {
   Briefcase,
   ChevronDown,
   FileText,
+  ArrowUpRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, getQuotesPorProyecto, type QboProjectsResult, type QuotesPorProyecto } from "./qbo-actions";
+import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, getQuotesPorProyecto, listCotizacionesAsignables, asignarCotizaciones, type QboProjectsResult, type QuotesPorProyecto, type CotizacionAsignable } from "./qbo-actions";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
 import type { QboProject, ProjectBizStatus, PnlDiagnostico } from "@/lib/quickbooks/projects";
@@ -210,6 +211,7 @@ export function QboProjectsBoard() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [editingDates, setEditingDates] = useState<string | null>(null);
+  const [editingQuotes, setEditingQuotes] = useState<string | null>(null);
   const [quotes, setQuotes] = useState<QuotesPorProyecto>({});
   const quotesDe = (p: QboProject) => {
     const code = codigoDeProyecto(p.name) ?? codigoDeProyecto(p.fullName);
@@ -824,6 +826,9 @@ export function QboProjectsBoard() {
                       quotes={quotesDe(e.p)}
                       codigo={codigoDeProyecto(e.p.name) ?? codigoDeProyecto(e.p.fullName)}
                       editing={editingDates === e.p.id}
+                      pickingQuotes={editingQuotes === e.p.id}
+                      onTogglePickQuotes={() => setEditingQuotes((prev) => (prev === e.p.id ? null : e.p.id))}
+                      onQuotesChanged={() => void getQuotesPorProyecto().then(setQuotes)}
                       onToggleEdit={() => setEditingDates((prev) => (prev === e.p.id ? null : e.p.id))}
                       onChangeStatus={(s) => changeStatus(e.p, s)}
                       onSaveDates={async (v) => {
@@ -1088,6 +1093,161 @@ function DatesEditor({
   );
 }
 
+// Panel para armar las cotizaciones de un proyecto. Escribe en el MISMO campo
+// que la columna Proyecto de Cotizaciones (`sales_quotes.qbo_project_no`), así
+// que lo que se arma acá se ve allá y al revés — no hay dos verdades.
+function CotizacionesPicker({
+  codigo,
+  onClose,
+  onChanged,
+}: {
+  codigo: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [todas, setTodas] = useState<CotizacionAsignable[] | null>(null);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    void listCotizacionesAsignables().then((r) => {
+      if (vivo) setTodas(r);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  const puestas = useMemo(() => (todas ?? []).filter((c) => c.projectNo === codigo), [todas, codigo]);
+  // Solo se buscan las que NO están ya en el proyecto. Sin texto no se lista
+  // nada: son 390 y volcarlas todas no ayuda a encontrar una.
+  const resultados = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle || !todas) return [];
+    return todas
+      .filter((c) => c.projectNo !== codigo)
+      .filter((c) =>
+        `${c.quoteNumber} ${c.clientName ?? ""} ${c.description ?? ""}`.toLowerCase().includes(needle),
+      )
+      .slice(0, 40);
+  }, [todas, q, codigo]);
+
+  async function mover(c: CotizacionAsignable, destino: string | null) {
+    setBusy(c.id);
+    setError(null);
+    const antes = c.projectNo;
+    setTodas((prev) => (prev ?? []).map((x) => (x.id === c.id ? { ...x, projectNo: destino } : x)));
+    const r = await asignarCotizaciones([c.id], destino);
+    setBusy(null);
+    if (!r.ok) {
+      setTodas((prev) => (prev ?? []).map((x) => (x.id === c.id ? { ...x, projectNo: antes } : x)));
+      setError(r.error);
+      return;
+    }
+    onChanged();
+  }
+
+  const total = puestas.reduce((a, c) => a + (c.amount ?? 0), 0);
+
+  return (
+    <div className="mt-2 rounded-lg bg-slate-50 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-slate-700">
+          Cotizaciones de {codigo}
+          <span className="ml-1.5 font-normal text-slate-500">
+            {puestas.length === 0 ? "· ninguna todavía" : `· ${puestas.length} · ${bal(total)}`}
+          </span>
+        </p>
+        <button type="button" onClick={onClose} className="cursor-pointer rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-200">
+          Cerrar
+        </button>
+      </div>
+
+      {error ? (
+        <p className="mb-2 rounded-md bg-red-50 px-2 py-1.5 text-[11px] text-red-700 ring-1 ring-inset ring-red-600/20">{error}</p>
+      ) : null}
+
+      {todas === null ? (
+        <p className="py-3 text-center text-xs text-slate-500">Cargando cotizaciones…</p>
+      ) : (
+        <>
+          {puestas.length > 0 ? (
+            <ul className="mb-3 space-y-1">
+              {puestas.map((c) => (
+                <li key={c.id} className="flex items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs ring-1 ring-inset ring-slate-200">
+                  <FileText className="size-3.5 shrink-0 text-violet-500" />
+                  <span className="font-semibold text-slate-800">{c.quoteNumber}</span>
+                  <span className="min-w-0 flex-1 truncate text-slate-500">
+                    {c.clientName ?? "—"}
+                    {c.description ? ` · ${c.description}` : ""}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-slate-700">{c.amount !== null ? bal(c.amount) : "—"}</span>
+                  <button
+                    type="button"
+                    disabled={busy === c.id}
+                    onClick={() => mover(c, null)}
+                    title="Quitar del proyecto"
+                    className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-semibold text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                  >
+                    {busy === c.id ? "…" : "Quitar"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Buscar COT DC, cliente o descripción para agregar…"
+              className="w-full rounded-md border border-slate-200 bg-white py-1.5 pl-8 pr-2 text-xs focus:border-slate-400 focus:outline-none"
+            />
+          </div>
+
+          {q.trim() ? (
+            resultados.length === 0 ? (
+              <p className="mt-2 text-center text-[11px] text-slate-400">Ninguna cotización matchea.</p>
+            ) : (
+              <ul className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+                {resultados.map((c) => (
+                  <li key={c.id} className="flex items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs ring-1 ring-inset ring-slate-100">
+                    <span className="font-semibold text-slate-800">{c.quoteNumber}</span>
+                    <span className="min-w-0 flex-1 truncate text-slate-500">
+                      {c.clientName ?? "—"}
+                      {c.description ? ` · ${c.description}` : ""}
+                    </span>
+                    {/* Una cotización vive en un solo proyecto: si ya está en otro,
+                        agregarla acá la MUEVE. Se avisa antes, no después. */}
+                    {c.projectNo ? (
+                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                        en {c.projectNo}
+                      </span>
+                    ) : null}
+                    <span className="shrink-0 tabular-nums text-slate-700">{c.amount !== null ? bal(c.amount) : "—"}</span>
+                    <button
+                      type="button"
+                      disabled={busy === c.id}
+                      onClick={() => mover(c, codigo)}
+                      title={c.projectNo ? `Moverla de ${c.projectNo} a ${codigo}` : `Agregarla a ${codigo}`}
+                      className="shrink-0 cursor-pointer rounded bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {busy === c.id ? "…" : c.projectNo ? "Mover" : "Agregar"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 // Cotización de origen del proyecto. Se llena sola al enviar desde Cotizaciones;
 // editable a mano para los proyectos creados directo en QBO.
 function CotizacionChip({ qbJobId, value }: { qbJobId: string; value: string | null }) {
@@ -1227,6 +1387,9 @@ function ProjectRow({
   quotes,
   codigo,
   editing,
+  pickingQuotes,
+  onTogglePickQuotes,
+  onQuotesChanged,
   onToggleEdit,
   onChangeStatus,
   onSaveDates,
@@ -1238,6 +1401,9 @@ function ProjectRow({
   quotes: { count: number; amount: number } | undefined;
   codigo: string | null;
   editing: boolean;
+  pickingQuotes: boolean;
+  onTogglePickQuotes: () => void;
+  onQuotesChanged: () => void;
   onToggleEdit: () => void;
   onChangeStatus: (s: ProjectBizStatus) => void;
   onSaveDates: (v: { startDate: string | null; endDate: string | null; contractTotal: number | null }) => Promise<void>;
@@ -1368,17 +1534,48 @@ function ProjectRow({
         {/* Cotizaciones de origen. Un proyecto puede tener varias, así que el
             link lleva a Cotizaciones filtrado por el correlativo en vez de
             abrir una sola. Sin match, queda el número editable a mano. */}
+        {/* El chip abre el panel para armar la lista; la flecha va a verlas en
+            Cotizaciones. Sin correlativo no hay con qué vincular. */}
         <td className="hidden whitespace-nowrap px-3 py-2.5 md:table-cell">
-          {quotes && codigo ? (
-            <Link
-              href={`/potenciales?q=${encodeURIComponent(codigo)}`}
-              className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-600/20 transition-colors hover:bg-violet-100"
-              title={`${quotes.count} cotización${quotes.count === 1 ? "" : "es"} de ${codigo} · ${bal(quotes.amount)} cotizado — ver en Cotizaciones`}
-            >
-              <FileText className="size-3" />
-              {quotes.count}
-              <span className="font-normal text-violet-500">· {bal(quotes.amount)}</span>
-            </Link>
+          {codigo ? (
+            <span className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onTogglePickQuotes}
+                aria-expanded={pickingQuotes}
+                title={
+                  quotes
+                    ? `${quotes.count} cotización${quotes.count === 1 ? "" : "es"} · ${bal(quotes.amount)} cotizado — clic para agregar o quitar`
+                    : `Sin cotizaciones asignadas a ${codigo} — clic para agregarlas`
+                }
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset transition-colors",
+                  quotes
+                    ? "bg-violet-50 text-violet-700 ring-violet-600/20 hover:bg-violet-100"
+                    : "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100 hover:text-slate-600",
+                  pickingQuotes && "ring-2 ring-violet-400",
+                )}
+              >
+                <FileText className="size-3" />
+                {quotes ? (
+                  <>
+                    {quotes.count}
+                    <span className="font-normal text-violet-500">· {bal(quotes.amount)}</span>
+                  </>
+                ) : (
+                  "Agregar"
+                )}
+              </button>
+              {quotes ? (
+                <Link
+                  href={`/potenciales?q=${encodeURIComponent(codigo)}`}
+                  title={`Ver las cotizaciones de ${codigo} en Cotizaciones`}
+                  className="cursor-pointer rounded p-0.5 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <ArrowUpRight className="size-3.5" />
+                </Link>
+              ) : null}
+            </span>
           ) : (
             <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
           )}
@@ -1404,6 +1601,13 @@ function ProjectRow({
         <tr className="border-b border-slate-50">
           <td colSpan={10} className="px-3 pb-3">
             <DatesEditor initial={dates} onSave={onSaveDates} onCancel={onToggleEdit} />
+          </td>
+        </tr>
+      ) : null}
+      {pickingQuotes && codigo ? (
+        <tr className="border-b border-slate-50">
+          <td colSpan={10} className="px-3 pb-3">
+            <CotizacionesPicker codigo={codigo} onClose={onTogglePickQuotes} onChanged={onQuotesChanged} />
           </td>
         </tr>
       ) : null}
