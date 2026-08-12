@@ -17,10 +17,14 @@ import {
   Briefcase,
   ChevronDown,
   FileText,
+  ArrowUpRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, type QboProjectsResult } from "./qbo-actions";
+import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, getQuotesPorProyecto, listCotizacionesAsignables, asignarCotizaciones, type QboProjectsResult, type QuotesPorProyecto, type CotizacionAsignable } from "./qbo-actions";
+import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
+import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
 import type { QboProject, ProjectBizStatus, PnlDiagnostico } from "@/lib/quickbooks/projects";
 import {
   effectiveDates,
@@ -51,14 +55,6 @@ const STATUS_META: Record<ProjectBizStatus, { label: string; dot: string; text: 
 };
 const STATUS_ORDER: ProjectBizStatus[] = ["activo", "por_cobrar", "cerrado"];
 
-// De dónde salieron las fechas del proyecto. Ámbar = supuesto, no dato: es el
-// único caso donde el rango del board puede estar lejos de la realidad.
-const FUENTE_BADGE: Record<FuenteFechas | "sin", string> = {
-  manual: "bg-slate-100 text-slate-600 ring-slate-200 hover:bg-slate-200",
-  qbo: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 hover:bg-emerald-100",
-  asumido: "bg-amber-50 text-amber-700 ring-amber-600/20 hover:bg-amber-100",
-  sin: "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100",
-};
 const FUENTE_TITULO: Record<FuenteFechas | "sin", string> = {
   manual: "Fechas del contrato, cargadas a mano — haz clic para editar",
   qbo: "Actividad real en QuickBooks (apertura del proyecto → último movimiento) — haz clic para fijar las del contrato",
@@ -169,15 +165,7 @@ function rangeFor(key: RangeKey, customFrom: string, customTo: string): DateRang
   }
 }
 
-type SortKey = "nombre" | "cliente" | "cobro" | "gasto" | "margen" | "fin";
-const SORT_LABEL: Record<SortKey, string> = {
-  nombre: "Nombre A-Z",
-  cliente: "Cliente A-Z",
-  cobro: "Cobro (mayor)",
-  gasto: "Gasto (mayor)",
-  margen: "Margen (mayor)",
-  fin: "Fecha de fin",
-};
+type SortKey = "nombre" | "cliente" | "cobro" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
 
 // Proyección de un proyecto dentro del rango activo.
 //
@@ -218,11 +206,17 @@ export function QboProjectsBoard() {
   // Filtros / orden / búsqueda / rango.
   const [q, setQ] = useState("");
   const [statusFiltro, setStatusFiltro] = useState<ProjectBizStatus | "all">("all");
-  const [sort, setSort] = useState<SortKey>("cobro");
+  const [sort, setSort] = useState<SortState<SortKey>>({ key: "cobro", dir: "desc" });
   const [rangeKey, setRangeKey] = useState<RangeKey>("year");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [editingDates, setEditingDates] = useState<string | null>(null);
+  const [editingQuotes, setEditingQuotes] = useState<string | null>(null);
+  const [quotes, setQuotes] = useState<QuotesPorProyecto>({});
+  const quotesDe = (p: QboProject) => {
+    const code = codigoDeProyecto(p.name) ?? codigoDeProyecto(p.fullName);
+    return code ? quotes[code] : undefined;
+  };
 
   function pararBarra(completar: boolean) {
     if (refreshTimer.current) {
@@ -317,6 +311,7 @@ export function QboProjectsBoard() {
     }
   }
   useEffect(() => {
+    void getQuotesPorProyecto().then(setQuotes).catch(() => {});
     void load(); // lee de la base: abrir la página NO consulta QBO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -431,37 +426,44 @@ export function QboProjectsBoard() {
     [sinRubro, rubros],
   );
 
+  const rangeActive = !!range;
+
   const sorted = useMemo(() => {
     const arr = [...filtered];
-    const val = (e: Enriched): string | number => {
-      switch (sort) {
+    const val = (e: Enriched): string | number | null => {
+      switch (sort.key) {
         case "nombre":
           return e.p.fullName.toLowerCase();
         case "cliente":
           return e.p.clientName.toLowerCase();
         case "cobro":
-          return -(e.enRango ?? -1);
+          return e.enRango ?? e.p.income;
         case "gasto":
-          return -(e.gastoRango ?? -1);
+          return e.gastoRango ?? e.p.cost;
         case "margen":
-          return -(e.p.margin ?? -9);
+          return e.p.margin;
+        case "inicio":
+          return e.eff?.start ?? null;
         case "fin":
-          return e.eff?.end ?? "9999";
+          // Un proyecto sin fin cargado no tiene fecha que ordenar: va al final
+          // como cualquier vacío, en vez de colarse por su último movimiento.
+          return datesOf(e.p).endDate ?? (statusOf(e.p) === "cerrado" ? e.eff?.end ?? null : null);
+        case "estado":
+          return STATUS_ORDER.indexOf(statusOf(e.p));
+        case "cotizacion":
+          return quotesDe(e.p)?.count ?? null;
       }
     };
     arr.sort((a, b) => {
-      // Cerrados siempre al final.
+      // Cerrados siempre al final, ordene por lo que ordene.
       const ca = Number(statusOf(a.p) === "cerrado");
       const cb = Number(statusOf(b.p) === "cerrado");
       if (ca !== cb) return ca - cb;
-      const va = val(a);
-      const vb = val(b);
-      if (typeof va === "number" && typeof vb === "number") return va - vb;
-      return String(va).localeCompare(String(vb));
+      return compareVals(val(a), val(b), sort.dir);
     });
     return arr;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, sort, statusOv]);
+  }, [filtered, sort, statusOv, datesOv, quotes]);
 
   const porRubro = useMemo(() => {
     const m = new Map<string, { count: number; cobro: number; gasto: number }>();
@@ -651,18 +653,6 @@ export function QboProjectsBoard() {
                 </option>
               ))}
             </select>
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
-              aria-label="Ordenar por"
-              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
-            >
-              {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
-                <option key={k} value={k}>
-                  Ordenar: {SORT_LABEL[k]}
-                </option>
-              ))}
-            </select>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <CalendarRange className="size-3.5 text-slate-400" />
@@ -809,24 +799,47 @@ export function QboProjectsBoard() {
           </p>
         ) : (
           <>
-            <ul className="divide-y divide-slate-50 px-2 py-2">
-              {sorted.slice(0, RENDER_CAP).map((e) => (
-                <ProjectRow
-                  key={e.p.id}
-                  e={e}
-                  rangeActive={!!range}
-                  status={statusOf(e.p)}
-                  dates={datesOf(e.p)}
-                  editing={editingDates === e.p.id}
-                  onToggleEdit={() => setEditingDates((prev) => (prev === e.p.id ? null : e.p.id))}
-                  onChangeStatus={(s) => changeStatus(e.p, s)}
-                  onSaveDates={async (v) => {
-                    const ok = await saveDates(e.p, v);
-                    if (ok) setEditingDates(null);
-                  }}
-                />
-              ))}
-            </ul>
+            <div className="overflow-x-auto rounded-b-2xl">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
+                    <th className="hidden w-9 px-3 py-2.5 sm:table-cell"></th>
+                    <SortTh label="Proyecto" k="nombre" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
+                    <SortTh label={rangeActive ? "En rango" : "Cobro"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    <SortTh label="Gasto" k="gasto" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    <SortTh label="Margen" k="margen" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    <SortTh label="Inicio" k="inicio" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden lg:table-cell" />
+                    <SortTh label="Fin" k="fin" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden lg:table-cell" />
+                    <SortTh label="Estado" k="estado" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
+                    <SortTh label="Cotización" k="cotizacion" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden md:table-cell" />
+                    <th className="px-3 py-2.5"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.slice(0, RENDER_CAP).map((e) => (
+                    <ProjectRow
+                      key={e.p.id}
+                      e={e}
+                      rangeActive={rangeActive}
+                      status={statusOf(e.p)}
+                      dates={datesOf(e.p)}
+                      quotes={quotesDe(e.p)}
+                      codigo={codigoDeProyecto(e.p.name) ?? codigoDeProyecto(e.p.fullName)}
+                      editing={editingDates === e.p.id}
+                      pickingQuotes={editingQuotes === e.p.id}
+                      onTogglePickQuotes={() => setEditingQuotes((prev) => (prev === e.p.id ? null : e.p.id))}
+                      onQuotesChanged={() => void getQuotesPorProyecto().then(setQuotes)}
+                      onToggleEdit={() => setEditingDates((prev) => (prev === e.p.id ? null : e.p.id))}
+                      onChangeStatus={(s) => changeStatus(e.p, s)}
+                      onSaveDates={async (v) => {
+                        const ok = await saveDates(e.p, v);
+                        if (ok) setEditingDates(null);
+                      }}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {sorted.length > RENDER_CAP ? (
               <p className="border-t border-slate-100 px-4 py-2.5 text-center text-xs text-slate-400">
                 Mostrando los primeros {RENDER_CAP} de {sorted.length} · afina el rango, el rubro o la búsqueda para ver el resto.
@@ -1080,6 +1093,161 @@ function DatesEditor({
   );
 }
 
+// Panel para armar las cotizaciones de un proyecto. Escribe en el MISMO campo
+// que la columna Proyecto de Cotizaciones (`sales_quotes.qbo_project_no`), así
+// que lo que se arma acá se ve allá y al revés — no hay dos verdades.
+function CotizacionesPicker({
+  codigo,
+  onClose,
+  onChanged,
+}: {
+  codigo: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [todas, setTodas] = useState<CotizacionAsignable[] | null>(null);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    void listCotizacionesAsignables().then((r) => {
+      if (vivo) setTodas(r);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  const puestas = useMemo(() => (todas ?? []).filter((c) => c.projectNo === codigo), [todas, codigo]);
+  // Solo se buscan las que NO están ya en el proyecto. Sin texto no se lista
+  // nada: son 390 y volcarlas todas no ayuda a encontrar una.
+  const resultados = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle || !todas) return [];
+    return todas
+      .filter((c) => c.projectNo !== codigo)
+      .filter((c) =>
+        `${c.quoteNumber} ${c.clientName ?? ""} ${c.description ?? ""}`.toLowerCase().includes(needle),
+      )
+      .slice(0, 40);
+  }, [todas, q, codigo]);
+
+  async function mover(c: CotizacionAsignable, destino: string | null) {
+    setBusy(c.id);
+    setError(null);
+    const antes = c.projectNo;
+    setTodas((prev) => (prev ?? []).map((x) => (x.id === c.id ? { ...x, projectNo: destino } : x)));
+    const r = await asignarCotizaciones([c.id], destino);
+    setBusy(null);
+    if (!r.ok) {
+      setTodas((prev) => (prev ?? []).map((x) => (x.id === c.id ? { ...x, projectNo: antes } : x)));
+      setError(r.error);
+      return;
+    }
+    onChanged();
+  }
+
+  const total = puestas.reduce((a, c) => a + (c.amount ?? 0), 0);
+
+  return (
+    <div className="mt-2 rounded-lg bg-slate-50 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-slate-700">
+          Cotizaciones de {codigo}
+          <span className="ml-1.5 font-normal text-slate-500">
+            {puestas.length === 0 ? "· ninguna todavía" : `· ${puestas.length} · ${bal(total)}`}
+          </span>
+        </p>
+        <button type="button" onClick={onClose} className="cursor-pointer rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-200">
+          Cerrar
+        </button>
+      </div>
+
+      {error ? (
+        <p className="mb-2 rounded-md bg-red-50 px-2 py-1.5 text-[11px] text-red-700 ring-1 ring-inset ring-red-600/20">{error}</p>
+      ) : null}
+
+      {todas === null ? (
+        <p className="py-3 text-center text-xs text-slate-500">Cargando cotizaciones…</p>
+      ) : (
+        <>
+          {puestas.length > 0 ? (
+            <ul className="mb-3 space-y-1">
+              {puestas.map((c) => (
+                <li key={c.id} className="flex items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs ring-1 ring-inset ring-slate-200">
+                  <FileText className="size-3.5 shrink-0 text-violet-500" />
+                  <span className="font-semibold text-slate-800">{c.quoteNumber}</span>
+                  <span className="min-w-0 flex-1 truncate text-slate-500">
+                    {c.clientName ?? "—"}
+                    {c.description ? ` · ${c.description}` : ""}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-slate-700">{c.amount !== null ? bal(c.amount) : "—"}</span>
+                  <button
+                    type="button"
+                    disabled={busy === c.id}
+                    onClick={() => mover(c, null)}
+                    title="Quitar del proyecto"
+                    className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-semibold text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                  >
+                    {busy === c.id ? "…" : "Quitar"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Buscar COT DC, cliente o descripción para agregar…"
+              className="w-full rounded-md border border-slate-200 bg-white py-1.5 pl-8 pr-2 text-xs focus:border-slate-400 focus:outline-none"
+            />
+          </div>
+
+          {q.trim() ? (
+            resultados.length === 0 ? (
+              <p className="mt-2 text-center text-[11px] text-slate-400">Ninguna cotización matchea.</p>
+            ) : (
+              <ul className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+                {resultados.map((c) => (
+                  <li key={c.id} className="flex items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs ring-1 ring-inset ring-slate-100">
+                    <span className="font-semibold text-slate-800">{c.quoteNumber}</span>
+                    <span className="min-w-0 flex-1 truncate text-slate-500">
+                      {c.clientName ?? "—"}
+                      {c.description ? ` · ${c.description}` : ""}
+                    </span>
+                    {/* Una cotización vive en un solo proyecto: si ya está en otro,
+                        agregarla acá la MUEVE. Se avisa antes, no después. */}
+                    {c.projectNo ? (
+                      <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                        en {c.projectNo}
+                      </span>
+                    ) : null}
+                    <span className="shrink-0 tabular-nums text-slate-700">{c.amount !== null ? bal(c.amount) : "—"}</span>
+                    <button
+                      type="button"
+                      disabled={busy === c.id}
+                      onClick={() => mover(c, codigo)}
+                      title={c.projectNo ? `Moverla de ${c.projectNo} a ${codigo}` : `Agregarla a ${codigo}`}
+                      className="shrink-0 cursor-pointer rounded bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {busy === c.id ? "…" : c.projectNo ? "Mover" : "Agregar"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 // Cotización de origen del proyecto. Se llena sola al enviar desde Cotizaciones;
 // editable a mano para los proyectos creados directo en QBO.
 function CotizacionChip({ qbJobId, value }: { qbJobId: string; value: string | null }) {
@@ -1216,7 +1384,12 @@ function ProjectRow({
   rangeActive,
   status,
   dates,
+  quotes,
+  codigo,
   editing,
+  pickingQuotes,
+  onTogglePickQuotes,
+  onQuotesChanged,
   onToggleEdit,
   onChangeStatus,
   onSaveDates,
@@ -1225,7 +1398,12 @@ function ProjectRow({
   rangeActive: boolean;
   status: ProjectBizStatus;
   dates: { startDate: string | null; endDate: string | null; contractTotal: number | null };
+  quotes: { count: number; amount: number } | undefined;
+  codigo: string | null;
   editing: boolean;
+  pickingQuotes: boolean;
+  onTogglePickQuotes: () => void;
+  onQuotesChanged: () => void;
   onToggleEdit: () => void;
   onChangeStatus: (s: ProjectBizStatus) => void;
   onSaveDates: (v: { startDate: string | null; endDate: string | null; contractTotal: number | null }) => Promise<void>;
@@ -1244,87 +1422,197 @@ function ProjectRow({
   // QuickBooks reportó en esos meses — solo ahí corresponde el aviso.
   const parcial = rangeActive && e.fraction < 1;
   const prorrateado = parcial && !e.real;
+  const conDatos = e.enRango !== null || p.income !== null;
+  const fuente = e.eff?.fuente ?? "sin";
+  const cobro = e.enRango ?? p.income ?? 0;
+  const gasto = e.gastoRango ?? p.cost ?? 0;
+  const celdaFecha = "hidden whitespace-nowrap px-3 py-2.5 lg:table-cell";
   return (
-    <li className={cn("rounded-lg px-2 py-3 hover:bg-slate-50/60", cerrado && "opacity-60")}>
-      <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
-        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", meta.chip)} title={meta.label}>
-          <RubroIcon className="size-4" />
-        </span>
+    <>
+      <tr className={cn("border-b border-slate-50 last:border-0 hover:bg-slate-50/60", cerrado && "opacity-60")}>
+        <td className="hidden px-3 py-2.5 sm:table-cell">
+          <span className={cn("flex size-8 items-center justify-center rounded-xl", meta.chip)} title={meta.label}>
+            <RubroIcon className="size-4" />
+          </span>
+        </td>
 
-        <div className="min-w-0 flex-1 basis-full sm:basis-0">
-          <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
-            <span className="inline-flex min-w-0 items-center gap-1">
-              <Building2 className="size-3 shrink-0 text-slate-400" />
-              <span className="truncate">{p.clientName || meta.label}</span>
+        <td className="max-w-[150px] px-3 py-2.5 sm:max-w-[260px] xl:max-w-[380px]">
+          <div className="truncate font-medium text-slate-900" title={p.fullName}>
+            {p.name}
+          </div>
+          <div className="mt-0.5 flex items-center gap-1 text-xs text-slate-500">
+            <Building2 className="size-3 shrink-0 text-slate-400" />
+            <span className="truncate" title={p.clientName}>
+              {p.clientName || meta.label}
             </span>
-            <button
-              type="button"
-              onClick={onToggleEdit}
-              className={cn(
-                "inline-flex cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset transition-colors",
-                FUENTE_BADGE[e.eff?.fuente ?? "sin"],
-              )}
-              title={sinFin?.title ?? FUENTE_TITULO[e.eff?.fuente ?? "sin"]}
-            >
-              <CalendarRange className="size-3" />
-              {!e.eff
-                ? "fechas"
-                : sinFin
-                  ? `desde ${fmtCorta(e.eff.start)} · ${sinFin.label}`
-                  : `${fmtCorta(e.eff.start)} → ${fmtCorta(e.eff.end)}`}
-              {e.eff?.fuente === "asumido" && !sinFin ? "*" : ""}
-            </button>
-            <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
-          </p>
-        </div>
+          </div>
+        </td>
 
-        {/* Financiero — prorrateado al rango cuando el proyecto lo cruza */}
-        <div className="w-44 shrink-0 sm:w-52">
-          {e.enRango !== null || p.income !== null ? (
+        {/* Cobro. Con rango activo el número es el del rango; el total queda de
+            apoyo abajo para no perder la escala del proyecto completo. */}
+        <td className="whitespace-nowrap px-3 py-2.5 text-right">
+          {conDatos ? (
             <>
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-[11px] text-slate-400">{parcial ? "En rango" : "Cobro"}</span>
-                <span className="text-sm font-bold tabular-nums text-slate-900">{bal(e.enRango ?? p.income ?? 0)}</span>
-              </div>
+              <div className="font-semibold tabular-nums text-slate-900">{bal(cobro)}</div>
               {parcial && e.totalBase !== null ? (
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-[10px] text-slate-400">{e.usaContrato ? "Contrato total" : "Total"}</span>
-                  <span className="text-[11px] font-semibold tabular-nums text-slate-500">
-                    {bal(e.totalBase)} <span className="text-slate-400">({Math.round(e.fraction * 100)}%)</span>
-                  </span>
+                <div className="text-[11px] tabular-nums text-slate-400" title={e.usaContrato ? "Contrato total" : "Total del proyecto"}>
+                  de {bal(e.totalBase)} ({Math.round(e.fraction * 100)}%)
                 </div>
               ) : null}
-              <div className="mt-0.5 flex items-baseline justify-between gap-2">
-                <span className="text-[11px] text-rose-400">{prorrateado ? "Gasto (prorr.)" : "Gasto"}</span>
-                <span className="text-xs font-semibold tabular-nums text-rose-600">
-                  {e.gastoRango !== null ? bal(e.gastoRango) : p.cost !== null ? bal(p.cost) : "—"}
-                </span>
-              </div>
-              <div className="mt-1.5">
-                <ProfitBar income={e.enRango ?? p.income ?? 0} cost={e.gastoRango ?? p.cost ?? 0} />
-                {p.margin !== null ? (
-                  <p className={cn("mt-1 text-right text-[10px] font-semibold tabular-nums", marginTextColor(p.margin))}>
-                    {Math.round(p.margin * 100)}% margen
-                  </p>
-                ) : null}
-              </div>
             </>
           ) : (
             <div className="text-right">
-              <p className="text-[11px] italic text-slate-300">{cerrado ? "—" : "sin datos de QBO"}</p>
+              <span className="text-[11px] italic text-slate-300">{cerrado ? "—" : "sin datos de QBO"}</span>
               <PorQueSinDatos qbJobId={p.id} cerrado={cerrado} />
             </div>
           )}
-        </div>
+        </td>
 
-        {/* Status — cambio fácil */}
-        <div className="shrink-0">
+        <td className="whitespace-nowrap px-3 py-2.5 text-right">
+          {conDatos ? (
+            <span className="font-medium tabular-nums text-rose-600" title={prorrateado ? "Prorrateado por días: el rango corta meses sin desglose en QuickBooks" : undefined}>
+              {e.gastoRango !== null ? bal(e.gastoRango) : p.cost !== null ? bal(p.cost) : "—"}
+              {prorrateado ? <span className="text-rose-300"> ~</span> : null}
+            </span>
+          ) : (
+            <span className="text-slate-300">—</span>
+          )}
+        </td>
+
+        <td className="w-28 whitespace-nowrap px-3 py-2.5 text-right">
+          {conDatos ? (
+            <>
+              {p.margin !== null ? (
+                <div className={cn("text-xs font-semibold tabular-nums", marginTextColor(p.margin))}>{Math.round(p.margin * 100)}%</div>
+              ) : (
+                <div className="text-xs text-slate-300">—</div>
+              )}
+              <div className="mt-1">
+                <ProfitBar income={cobro} cost={gasto} />
+              </div>
+            </>
+          ) : (
+            <span className="text-slate-300">—</span>
+          )}
+        </td>
+
+        {/* Fechas: clic en cualquiera abre el editor, igual que el chip anterior.
+            El ámbar marca "asumida", que es la única que puede estar lejos. */}
+        <td className={celdaFecha}>
+          <button
+            type="button"
+            onClick={onToggleEdit}
+            title={FUENTE_TITULO[fuente]}
+            className={cn(
+              "cursor-pointer rounded px-1 py-0.5 text-xs tabular-nums hover:bg-slate-100",
+              fuente === "asumido" ? "text-amber-700" : fuente === "manual" ? "font-medium text-slate-900" : "text-slate-600",
+            )}
+          >
+            {e.eff ? fmtCorta(e.eff.start) : "—"}
+            {fuente === "asumido" ? "*" : ""}
+          </button>
+        </td>
+
+        <td className={celdaFecha}>
+          <button
+            type="button"
+            onClick={onToggleEdit}
+            title={sinFin?.title ?? FUENTE_TITULO[fuente]}
+            className={cn(
+              "cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-slate-100",
+              sinFin ? "font-medium text-slate-500" : fuente === "asumido" ? "tabular-nums text-amber-700" : fuente === "manual" ? "font-medium tabular-nums text-slate-900" : "tabular-nums text-slate-600",
+            )}
+          >
+            {!e.eff ? "—" : sinFin ? sinFin.label : `${fmtCorta(e.eff.end)}${fuente === "asumido" ? "*" : ""}`}
+          </button>
+        </td>
+
+        <td className="whitespace-nowrap px-3 py-2.5">
           <StatusPicker value={status} onChange={onChangeStatus} />
-        </div>
-      </div>
+        </td>
 
-      {editing ? <DatesEditor initial={dates} onSave={onSaveDates} onCancel={onToggleEdit} /> : null}
-    </li>
+        {/* Cotizaciones de origen. Un proyecto puede tener varias, así que el
+            link lleva a Cotizaciones filtrado por el correlativo en vez de
+            abrir una sola. Sin match, queda el número editable a mano. */}
+        {/* El chip abre el panel para armar la lista; la flecha va a verlas en
+            Cotizaciones. Sin correlativo no hay con qué vincular. */}
+        <td className="hidden whitespace-nowrap px-3 py-2.5 md:table-cell">
+          {codigo ? (
+            <span className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onTogglePickQuotes}
+                aria-expanded={pickingQuotes}
+                title={
+                  quotes
+                    ? `${quotes.count} cotización${quotes.count === 1 ? "" : "es"} · ${bal(quotes.amount)} cotizado — clic para agregar o quitar`
+                    : `Sin cotizaciones asignadas a ${codigo} — clic para agregarlas`
+                }
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset transition-colors",
+                  quotes
+                    ? "bg-violet-50 text-violet-700 ring-violet-600/20 hover:bg-violet-100"
+                    : "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100 hover:text-slate-600",
+                  pickingQuotes && "ring-2 ring-violet-400",
+                )}
+              >
+                <FileText className="size-3" />
+                {quotes ? (
+                  <>
+                    {quotes.count}
+                    <span className="font-normal text-violet-500">· {bal(quotes.amount)}</span>
+                  </>
+                ) : (
+                  "Agregar"
+                )}
+              </button>
+              {quotes ? (
+                <Link
+                  href={`/potenciales?q=${encodeURIComponent(codigo)}`}
+                  title={`Ver las cotizaciones de ${codigo} en Cotizaciones`}
+                  className="cursor-pointer rounded p-0.5 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <ArrowUpRight className="size-3.5" />
+                </Link>
+              ) : null}
+            </span>
+          ) : (
+            <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
+          )}
+        </td>
+
+        <td className="px-3 py-2.5 text-right">
+          <button
+            type="button"
+            onClick={onToggleEdit}
+            aria-label="Editar fechas y contrato"
+            aria-expanded={editing}
+            title="Editar fechas y monto del contrato"
+            className={cn(
+              "cursor-pointer rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700",
+              editing && "bg-slate-100 text-slate-700",
+            )}
+          >
+            <CalendarRange className="size-4" />
+          </button>
+        </td>
+      </tr>
+      {editing ? (
+        <tr className="border-b border-slate-50">
+          <td colSpan={10} className="px-3 pb-3">
+            <DatesEditor initial={dates} onSave={onSaveDates} onCancel={onToggleEdit} />
+          </td>
+        </tr>
+      ) : null}
+      {pickingQuotes && codigo ? (
+        <tr className="border-b border-slate-50">
+          <td colSpan={10} className="px-3 pb-3">
+            <CotizacionesPicker codigo={codigo} onClose={onTogglePickQuotes} onChanged={onQuotesChanged} />
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
+
+

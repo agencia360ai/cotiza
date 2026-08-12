@@ -219,11 +219,13 @@ export function PotencialesScreen({
   tenders: tendersProp,
   clients,
   projectOptions = [],
+  initialQuery = "",
 }: {
   quotes: QuoteRow[];
   tenders: TenderRow[];
   clients: ClientOpt[];
   projectOptions?: ProjectOption[];
+  initialQuery?: string;
 }) {
   const [tab, setTab] = useState<Tab>("cotizaciones");
   const [quotes, setQuotes] = useState<QuoteRow[]>(quotesProp);
@@ -250,7 +252,7 @@ export function PotencialesScreen({
       </div>
 
       {tab === "cotizaciones" ? (
-        <CotizacionesTab quotes={quotes} setQuotes={setQuotes} clients={clients} />
+        <CotizacionesTab quotes={quotes} setQuotes={setQuotes} clients={clients} initialQuery={initialQuery} />
       ) : (
         <LicitacionesTab tenders={tenders} setTenders={setTenders} clients={clients} />
       )}
@@ -266,16 +268,18 @@ function CotizacionesTab({
   quotes,
   setQuotes,
   clients,
+  initialQuery = "",
 }: {
   quotes: QuoteRow[];
   setQuotes: React.Dispatch<React.SetStateAction<QuoteRow[]>>;
   clients: ClientOpt[];
+  initialQuery?: string;
 }) {
   const years = useMemo(
     () => Array.from(new Set(quotes.map((q) => q.year).filter((y): y is number => !!y))).sort((a, b) => b - a),
     [quotes],
   );
-  const [year, setYear] = useState<number | "all">(years[0] ?? "all");
+  const [year, setYear] = useState<number | "all">(initialQuery ? "all" : years[0] ?? "all");
   const [estado, setEstado] = useState<QuoteStatus | "all">("all");
   // Multi-select de rubros: vacío = todos. Se puede escoger varios.
   const [rubros, setRubros] = useState<Set<Rubro>>(new Set());
@@ -286,7 +290,7 @@ function CotizacionesTab({
       else n.add(r);
       return n;
     });
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuery);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [soloSinCliente, setSoloSinCliente] = useState(false);
@@ -321,7 +325,7 @@ function CotizacionesTab({
       if (to && (!x.sent_date || x.sent_date > to)) return false;
       if (needle) {
         const hay = [x, ...older]
-          .map((r) => `${r.quote_number} ${r.client_name ?? ""} ${r.client_std_name ?? ""} ${r.description ?? ""}`)
+          .map((r) => `${r.quote_number} ${r.client_name ?? ""} ${r.client_std_name ?? ""} ${r.description ?? ""} ${r.qbo_project_no ?? ""}`)
           .join(" ")
           .toLowerCase();
         if (!hay.includes(needle)) return false;

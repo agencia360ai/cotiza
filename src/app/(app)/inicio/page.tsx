@@ -13,15 +13,13 @@ import {
   Landmark,
   Receipt,
   TrendingUp,
-  Wrench,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgContext } from "@/lib/org-context";
-import { projectImageUrl, PROJECT_STATUS_COLOR, PROJECT_STATUS_LABEL } from "@/lib/projects/types";
 import { pipelineDerived, formatMoney, formatMoneyExact, type PipelineData } from "@/lib/pipeline/types";
 import { getPipelineData } from "@/lib/pipeline/queries";
 import { groupRevisions } from "@/lib/pipeline/revisions";
-import { getMaintenanceSummary, colorForScore, one, type Maybe } from "@/lib/maintenance/summary";
+import { getMaintenanceSummary, colorForScore, type Maybe } from "@/lib/maintenance/summary";
 import { getQboProjects } from "@/app/(app)/proyectos/qbo-actions";
 import type { QboProject } from "@/lib/quickbooks/projects";
 import { tamizScore, BANDA_META } from "@/lib/panamacompra/tamiz";
@@ -287,19 +285,6 @@ export default async function InicioDashboard() {
               </h2>
               <RubroDonut slices={donutSlices} title={`Distribución por rubro ${year}`} />
             </div>
-          </section>
-        ) : null}
-
-        {/* Proyectos en ejecución */}
-        {activeProjects.length > 0 ? (
-          <section className="mb-6">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-900">Proyectos en ejecución</h2>
-              <Link href="/proyectos" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
-                Ver todos <ArrowRight className="size-3" />
-              </Link>
-            </div>
-            <ProjectsGrid projects={activeProjects.slice(0, 3)} />
           </section>
         ) : null}
 
@@ -619,69 +604,5 @@ function MiniStat({ label, value, sub, color }: { label: string; value: string |
       </p>
       {sub ? <p className="text-[11px] text-slate-500">{sub}</p> : null}
     </div>
-  );
-}
-
-function ProjectsGrid({ projects }: { projects: ProjectGridItem[] }) {
-  if (projects.length === 0) return null;
-  return (
-    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {projects.map((p) => {
-        const client = one(p.client);
-        const location = one(p.location);
-        const total = p.milestones.length;
-        const done = p.milestones.filter((m) => m.status === "completado").length;
-        const pct = total === 0 ? 0 : Math.round((done / total) * 100);
-        const sc = PROJECT_STATUS_COLOR[p.status as keyof typeof PROJECT_STATUS_COLOR] ?? "#64748B";
-        return (
-          <li key={p.id}>
-            <Link
-              href={`/proyectos/${p.id}`}
-              className="group flex h-full cursor-pointer flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
-            >
-              <div
-                className="relative aspect-[16/8] w-full bg-slate-100"
-                style={
-                  p.cover_photo_path
-                    ? { backgroundImage: `url(${projectImageUrl(p.cover_photo_path)})`, backgroundSize: "cover", backgroundPosition: "center" }
-                    : undefined
-                }
-              >
-                {!p.cover_photo_path ? (
-                  <div className="flex h-full w-full items-center justify-center">
-                    <Wrench className="size-7 text-slate-300" />
-                  </div>
-                ) : null}
-                <span
-                  className="absolute left-2.5 top-2.5 inline-flex items-center gap-1 rounded-full bg-white/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset"
-                  style={{ color: sc, borderColor: `${sc}20` }}
-                >
-                  <span className="size-1.5 rounded-full" style={{ backgroundColor: sc }} />
-                  {PROJECT_STATUS_LABEL[p.status as keyof typeof PROJECT_STATUS_LABEL] ?? p.status}
-                </span>
-              </div>
-              <div className="flex flex-1 flex-col p-3">
-                <p className="truncate text-sm font-semibold text-slate-900">{p.name}</p>
-                <p className={cn("mt-0.5 truncate text-[11px] text-slate-500")}>
-                  {client?.name ?? "—"}
-                  {location ? ` · ${location.name}` : ""}
-                </p>
-                <div className="mt-2">
-                  <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    <span>
-                      {done}/{total} hitos
-                    </span>
-                    <span style={{ color: sc }}>{pct}%</span>
-                  </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: sc }} />
-                  </div>
-                </div>
-              </div>
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
   );
 }
