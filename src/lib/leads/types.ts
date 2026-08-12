@@ -29,6 +29,11 @@ export const LEAD_STATUS_ACTIVAS: LeadStatus[] = ["nuevo", "contactado", "en_seg
 
 export type LeadActivity = { at: string; text: string };
 
+// Un miembro de la organización, listo para el selector de encargado. La
+// etiqueta se arma en el servidor (el email vive en auth.users y resolverlo
+// necesita el cliente admin), así el tablero solo recibe texto.
+export type LeadOwner = { id: string; label: string; email: string };
+
 export type LeadRow = {
   id: string;
   company_name: string | null;
@@ -44,6 +49,7 @@ export type LeadRow = {
   lost_reason: string | null;
   client_id: string | null;
   converted_quote_id: string | null;
+  owner_member_id: string | null; // quién lo sigue (org_members.id) — 0046
   activity: LeadActivity[];
   created_at: string | null;
   updated_at: string | null;

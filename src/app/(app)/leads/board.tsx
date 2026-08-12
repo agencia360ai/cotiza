@@ -17,6 +17,7 @@ import {
   ArrowUpRight,
   FileText,
   GripVertical,
+  UserRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -28,6 +29,7 @@ import {
   LEAD_SOURCE_LABEL,
   type LeadRow,
   type LeadStatus,
+  type LeadOwner,
 } from "@/lib/leads/types";
 import {
   listLeads,
@@ -99,7 +101,45 @@ function Kpi({ label, value, sub, accent }: { label: string; value: string; sub:
 }
 
 // ── card ─────────────────────────────────────────────────────────────────────
-function LeadCard({ lead, onOpen, onDragStart }: { lead: LeadRow; onOpen: () => void; onDragStart: () => void }) {
+// Iniciales del encargado, en un círculo. En una tarjeta de tablero no cabe un
+// nombre completo, y el color sale del nombre para que cada persona sea siempre
+// del mismo color — se reconoce de un vistazo sin leer.
+const AVATAR_COLORS = ["bg-indigo-100 text-indigo-700", "bg-sky-100 text-sky-700", "bg-emerald-100 text-emerald-700", "bg-amber-100 text-amber-700", "bg-violet-100 text-violet-700", "bg-rose-100 text-rose-700"];
+function iniciales(nombre: string): string {
+  const partes = nombre.trim().split(/[\s._-]+/).filter(Boolean);
+  if (partes.length === 0) return "?";
+  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
+  return (partes[0][0] + partes[1][0]).toUpperCase();
+}
+function colorDe(nombre: string): string {
+  let h = 0;
+  for (let i = 0; i < nombre.length; i++) h = (h * 31 + nombre.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+function OwnerAvatar({ owner, size = "sm" }: { owner: LeadOwner | null; size?: "sm" | "md" }) {
+  const clase = size === "sm" ? "size-5 text-[9px]" : "size-7 text-[11px]";
+  if (!owner) {
+    return (
+      <span
+        className={cn("flex shrink-0 items-center justify-center rounded-full border border-dashed border-slate-300 text-slate-400", clase)}
+        title="Sin encargado"
+      >
+        <UserRound className="size-3" />
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn("flex shrink-0 items-center justify-center rounded-full font-bold", clase, colorDe(owner.label))}
+      title={`Encargado: ${owner.label}${owner.email ? ` (${owner.email})` : ""}`}
+    >
+      {iniciales(owner.label)}
+    </span>
+  );
+}
+
+function LeadCard({ lead, owner, onOpen, onDragStart }: { lead: LeadRow; owner: LeadOwner | null; onOpen: () => void; onDragStart: () => void }) {
   const wa = waLink(lead.whatsapp);
   return (
     <div
@@ -146,10 +186,13 @@ function LeadCard({ lead, onOpen, onDragStart }: { lead: LeadRow; onOpen: () => 
               </a>
             ) : null}
             {lead.converted_quote_id ? (
-              <span title="Ya tiene cotización" className="ml-auto">
+              <span title="Ya tiene cotización">
                 <FileText className="size-3.5 text-violet-500" />
               </span>
             ) : null}
+            <span className="ml-auto">
+              <OwnerAvatar owner={owner} />
+            </span>
           </div>
         </div>
       </div>
@@ -158,7 +201,9 @@ function LeadCard({ lead, onOpen, onDragStart }: { lead: LeadRow; onOpen: () => 
 }
 
 // ── board ────────────────────────────────────────────────────────────────────
-export function LeadsBoard() {
+export function LeadsBoard({ members, currentMemberId }: { members: LeadOwner[]; currentMemberId: string | null }) {
+  const porId = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
+  const ownerDe = (l: LeadRow) => (l.owner_member_id ? porId.get(l.owner_member_id) ?? null : null);
   const [leads, setLeads] = useState<LeadRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -167,6 +212,8 @@ export function LeadsBoard() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<LeadStatus | null>(null);
+  // "" = todos · "sin" = sin encargado · <id> = ese miembro.
+  const [encargado, setEncargado] = useState("");
 
   useEffect(() => {
     void listLeads().then((r) => {
@@ -178,11 +225,16 @@ export function LeadsBoard() {
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return leads;
-    return leads.filter((l) =>
-      `${l.company_name ?? ""} ${l.contact_name ?? ""} ${l.description ?? ""} ${l.email ?? ""}`.toLowerCase().includes(needle),
-    );
-  }, [leads, q]);
+    return leads.filter((l) => {
+      if (encargado === "sin" && l.owner_member_id) return false;
+      if (encargado && encargado !== "sin" && l.owner_member_id !== encargado) return false;
+      if (!needle) return true;
+      const dueno = l.owner_member_id ? porId.get(l.owner_member_id)?.label ?? "" : "";
+      return `${l.company_name ?? ""} ${l.contact_name ?? ""} ${l.description ?? ""} ${l.email ?? ""} ${dueno}`
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [leads, q, encargado, porId]);
 
   const byStatus = useMemo(() => {
     const m = new Map<LeadStatus, LeadRow[]>();
@@ -267,6 +319,25 @@ export function LeadsBoard() {
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar cliente, contacto, proyecto…" className={cn(inputCls, "pl-8")} />
         </div>
+        {members.length > 0 ? (
+          <select
+            value={encargado}
+            onChange={(e) => setEncargado(e.target.value)}
+            aria-label="Filtrar por encargado"
+            className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
+          >
+            <option value="">Todos los encargados</option>
+            {currentMemberId ? <option value={currentMemberId}>Mis leads</option> : null}
+            <option value="sin">Sin asignar</option>
+            {members
+              .filter((m) => m.id !== currentMemberId)
+              .map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+          </select>
+        ) : null}
         {kpis.vencidos > 0 ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-600/20">
             <AlertTriangle className="size-3.5" /> {kpis.vencidos} con seguimiento vencido
@@ -319,6 +390,7 @@ export function LeadsBoard() {
                   <div className="flex flex-1 flex-col gap-2 p-2.5">
                     {col.map((l) => (
                       <LeadCard
+                        owner={ownerDe(l)}
                         key={l.id}
                         lead={l}
                         onOpen={() => setOpenId(l.id)}
@@ -338,6 +410,8 @@ export function LeadsBoard() {
 
       {creating ? (
         <NewLeadDrawer
+          members={members}
+          defaultOwner={currentMemberId}
           onClose={() => setCreating(false)}
           onCreated={(l) => {
             setLeads((ls) => [l, ...ls]);
@@ -348,6 +422,7 @@ export function LeadsBoard() {
 
       {openLead ? (
         <LeadDrawer
+          members={members}
           lead={openLead}
           onClose={() => setOpenId(null)}
           onChanged={(l) => setLeads((ls) => ls.map((x) => (x.id === l.id ? l : x)))}
@@ -398,10 +473,44 @@ const EMPTY: LeadInput = {
   estimated_value: null,
   source: null,
   next_follow_up: null,
+  owner_member_id: null,
 };
 
-function NewLeadDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: (l: LeadRow) => void }) {
-  const [f, setF] = useState<LeadInput>(EMPTY);
+// Selector de encargado. Vacío = sin asignar: un lead sin dueño se ve en el
+// tablero con el avatar punteado, para que se note y alguien lo tome.
+function OwnerSelect({
+  members,
+  value,
+  onChange,
+}: {
+  members: LeadOwner[];
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  return (
+    <select className={inputCls} value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+      <option value="">Sin asignar</option>
+      {members.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function NewLeadDrawer({
+  members,
+  defaultOwner,
+  onClose,
+  onCreated,
+}: {
+  members: LeadOwner[];
+  defaultOwner: string | null;
+  onClose: () => void;
+  onCreated: (l: LeadRow) => void;
+}) {
+  const [f, setF] = useState<LeadInput>({ ...EMPTY, owner_member_id: defaultOwner });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof LeadInput>(k: K, v: LeadInput[K]) => setF((p) => ({ ...p, [k]: v }));
@@ -475,6 +584,9 @@ function NewLeadDrawer({ onClose, onCreated }: { onClose: () => void; onCreated:
             </select>
           </Field>
         </div>
+        <Field label="Encargado" hint="Quién le da seguimiento a este lead">
+          <OwnerSelect members={members} value={f.owner_member_id} onChange={(id) => set("owner_member_id", id)} />
+        </Field>
         {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
         <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
           <button
@@ -497,11 +609,13 @@ function NewLeadDrawer({ onClose, onCreated }: { onClose: () => void; onCreated:
 
 // ── drawer: detalle / edición / bitácora / convertir ─────────────────────────
 function LeadDrawer({
+  members,
   lead,
   onClose,
   onChanged,
   onDeleted,
 }: {
+  members: LeadOwner[];
   lead: LeadRow;
   onClose: () => void;
   onChanged: (l: LeadRow) => void;
@@ -536,6 +650,7 @@ function LeadDrawer({
         source: f.source,
         next_follow_up: f.next_follow_up,
         lost_reason: f.lost_reason,
+        owner_member_id: f.owner_member_id,
       });
       setSaving(false);
       if ("error" in r) setError(r.error);
@@ -557,6 +672,7 @@ function LeadDrawer({
     f.source,
     f.next_follow_up,
     f.lost_reason,
+    f.owner_member_id,
   ]);
 
   async function guardarNota() {
@@ -689,6 +805,13 @@ function LeadDrawer({
             </select>
           </Field>
         </div>
+
+        <Field label="Encargado" hint="Quién le da seguimiento a este lead">
+          <div className="flex items-center gap-2">
+            <OwnerAvatar owner={f.owner_member_id ? members.find((m) => m.id === f.owner_member_id) ?? null : null} size="md" />
+            <OwnerSelect members={members} value={f.owner_member_id} onChange={(id) => set("owner_member_id", id)} />
+          </div>
+        </Field>
 
         {/* Convertir a cotización */}
         <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-3">

@@ -20,8 +20,12 @@ async function ctx() {
 
 const REVALIDATE = "/leads";
 
-const COLS =
+const COLS_BASE =
   "id, company_name, contact_name, whatsapp, email, description, status, estimated_value, source, next_follow_up, last_contact_at, lost_reason, client_id, converted_quote_id, activity, created_at, updated_at";
+const COLS = `${COLS_BASE}, owner_member_id`;
+
+// 0046 pendiente: la pantalla igual funciona, sin encargado.
+const faltaOwner = (e: { message?: string } | null) => !!e && /owner_member_id/.test(e.message ?? "");
 
 function mapRow(r: Record<string, unknown>): LeadRow {
   return {
@@ -39,6 +43,7 @@ function mapRow(r: Record<string, unknown>): LeadRow {
     lost_reason: (r.lost_reason as string) ?? null,
     client_id: (r.client_id as string) ?? null,
     converted_quote_id: (r.converted_quote_id as string) ?? null,
+    owner_member_id: (r.owner_member_id as string) ?? null,
     activity: Array.isArray(r.activity) ? (r.activity as LeadActivity[]) : [],
     created_at: (r.created_at as string) ?? null,
     updated_at: (r.updated_at as string) ?? null,
@@ -48,13 +53,15 @@ function mapRow(r: Record<string, unknown>): LeadRow {
 export async function listLeads(): Promise<Result<LeadRow[]>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const { data, error } = (await c.supabase
-    .from("leads")
-    .select(COLS)
-    .eq("org_id", c.orgId)
-    .order("updated_at", { ascending: false })) as { data: Record<string, unknown>[] | null; error: { message: string } | null };
-  if (error) return { error: error.message };
-  return { ok: true, data: (data ?? []).map(mapRow) };
+  const traer = (cols: string) =>
+    c.supabase.from("leads").select(cols).eq("org_id", c.orgId).order("updated_at", { ascending: false }) as unknown as Promise<{
+      data: Record<string, unknown>[] | null;
+      error: { message: string } | null;
+    }>;
+  let res = await traer(COLS);
+  if (faltaOwner(res.error)) res = await traer(COLS_BASE);
+  if (res.error) return { error: res.error.message };
+  return { ok: true, data: (res.data ?? []).map(mapRow) };
 }
 
 export type LeadInput = {
@@ -67,6 +74,7 @@ export type LeadInput = {
   estimated_value: number | null;
   source: string | null;
   next_follow_up: string | null;
+  owner_member_id: string | null;
 };
 
 export async function createLead(input: LeadInput): Promise<Result<LeadRow>> {
@@ -90,6 +98,7 @@ export async function createLead(input: LeadInput): Promise<Result<LeadRow>> {
       source: input.source,
       next_follow_up: input.next_follow_up,
       client_id: matched?.id ?? null,
+      owner_member_id: input.owner_member_id,
     })
     .select(COLS)
     .single()) as { data: Record<string, unknown> | null; error: { message: string } | null };
@@ -111,11 +120,13 @@ export async function updateLead(
     source: string | null;
     next_follow_up: string | null;
     lost_reason: string | null;
+    owner_member_id: string | null;
   }>,
 ): Promise<Result> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   const { error } = await c.supabase.from("leads").update(patch).eq("id", id).eq("org_id", c.orgId);
+  if (faltaOwner(error)) return { error: "Falta la migración 0046 — corre el SQL en Supabase y reintenta." };
   if (error) return { error: error.message };
   revalidatePath(REVALIDATE);
   return { ok: true };

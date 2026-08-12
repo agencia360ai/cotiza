@@ -240,3 +240,28 @@ export async function setMemberWaPhone(memberId: string, phone: string | null): 
   revalidatePath("/personal/asistencia");
   return { ok: true };
 }
+
+// Nombre visible del miembro (0046). La app nunca pidió un nombre — solo el
+// email — y "jfguerra" como etiqueta de encargado en el tablero de Leads es
+// ruido. Vacío = volver a mostrar la parte del email antes de la arroba.
+export async function setMemberDisplayName(memberId: string, nombre: string | null): Promise<Result> {
+  const auth = await requireAdmin();
+  if (auth.kind === "err") return { error: auth.error };
+  const ctx = auth.ctx;
+
+  const v = nombre?.trim() || null;
+  // display_name es de la 0046 y todavía no está en los tipos generados.
+  const { error } = await (membersTable() as unknown as {
+    update: (v: Record<string, unknown>) => {
+      eq: (c: string, v: string) => { eq: (c: string, v: string) => Promise<{ error: { message: string } | null }> };
+    };
+  })
+    .update({ display_name: v })
+    .eq("id", memberId)
+    .eq("org_id", ctx.orgId);
+  if (error) {
+    return { error: /display_name/.test(error.message) ? "Falta la migración 0046 — corre el SQL y reintenta." : error.message };
+  }
+  revalidatePath("/settings/members");
+  return { ok: true };
+}
