@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Loader2, Trash2, User } from "lucide-react";
-import { changeMemberRole, removeMember, setMemberWaPhone } from "./actions";
+import { changeMemberRole, removeMember, setMemberWaPhone, setMemberDisplayName } from "./actions";
 
 type Member = {
   id: string;
@@ -13,6 +13,7 @@ type Member = {
   last_sign_in_at: string | null;
   is_self: boolean;
   wa_phone?: string | null;
+  display_name?: string | null;
 };
 
 const ROLE_OPTIONS = [
@@ -59,6 +60,22 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [tel, setTel] = useState(member.wa_phone ?? "");
+  const [nombre, setNombre] = useState(member.display_name ?? "");
+
+  // Nombre con el que aparece en el resto de la app (encargado de un lead, por
+  // ejemplo). Sin él se muestra el email, que en una tarjeta es ruido.
+  function guardarNombre() {
+    const limpio = nombre.trim();
+    if (limpio === (member.display_name ?? "")) return;
+    setError(null);
+    startTransition(async () => {
+      const r = await setMemberDisplayName(member.id, limpio || null);
+      if (r && "error" in r) {
+        setError(r.error);
+        setNombre(member.display_name ?? "");
+      }
+    });
+  }
 
   // Con el número guardado, este miembro queda autorizado a reenviarle al bot la
   // programación del día (Asistencia).
@@ -105,16 +122,26 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold text-slate-900">
-          {member.email}
+          {member.display_name?.trim() || member.email}
           {member.is_self ? (
             <span className="ml-2 rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">VOS</span>
           ) : null}
         </p>
-        <p className="text-[11px] text-slate-500">
-          Último ingreso: {fmtRelative(member.last_sign_in_at)} · Miembro desde {fmtDateShort(member.created_at)}
+        <p className="truncate text-[11px] text-slate-500">
+          {member.display_name?.trim() ? `${member.email} · ` : ""}Último ingreso: {fmtRelative(member.last_sign_in_at)} · Miembro desde {fmtDateShort(member.created_at)}
         </p>
         {canManage ? (
-          <div className="mt-1 flex items-center gap-1.5">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <input
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              onBlur={guardarNombre}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              placeholder="Nombre y apellido"
+              className="w-40 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] outline-none focus:border-slate-900"
+            />
             <input
               value={tel}
               onChange={(e) => setTel(e.target.value)}

@@ -2,14 +2,13 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, AlertTriangle, ShieldCheck, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient, hasAdminCredentials } from "@/lib/supabase/admin";
+import { hasAdminCredentials } from "@/lib/supabase/admin";
+import { listOrgMembers } from "@/lib/org/members";
 import { getActiveOrgContext } from "@/lib/org-context";
 import { MembersTable } from "./members-table";
 import { InviteMemberForm } from "./invite-form";
 
 export const dynamic = "force-dynamic";
-
-type MemberRow = { id: string; user_id: string; role: string; created_at: string; wa_phone?: string | null };
 
 export default async function MembersPage() {
   const supabase = await createClient();
@@ -24,38 +23,10 @@ export default async function MembersPage() {
     return <ServiceRoleMissing />;
   }
 
-  const admin = createAdminClient();
-  const traer = (cols: string) =>
-    admin.from("org_members").select(cols).eq("org_id", ctx.orgId).order("created_at", { ascending: true }) as unknown as Promise<{
-      data: MemberRow[] | null;
-      error: { message?: string } | null;
-    }>;
-  let res = await traer("id, user_id, role, created_at, wa_phone");
-  // 0044 pendiente: sin la columna, la pantalla igual funciona (sin teléfonos).
-  if (res.error && /wa_phone/.test(res.error.message ?? "")) res = await traer("id, user_id, role, created_at");
-  const members = res.data;
-
-  // Resolver emails desde auth.users via admin
-  type AdminAuth = {
-    admin: {
-      getUserById: (id: string) => Promise<{
-        data: { user: { id: string; email: string | null; last_sign_in_at: string | null } | null } | null;
-        error: { message: string } | null;
-      }>;
-    };
-  };
-  const adminAuth = (admin.auth as unknown) as AdminAuth;
-  const enriched = await Promise.all(
-    (members ?? []).map(async (m) => {
-      const { data } = await adminAuth.admin.getUserById(m.user_id);
-      return {
-        ...m,
-        email: data?.user?.email ?? "—",
-        last_sign_in_at: data?.user?.last_sign_in_at ?? null,
-        is_self: m.user_id === u.user!.id,
-      };
-    }),
-  );
+  // La lista (con emails de auth.users) la arma listOrgMembers, compartida con
+  // el selector de encargado de Leads.
+  const miembros = await listOrgMembers(ctx.orgId);
+  const enriched = miembros.map((m) => ({ ...m, is_self: m.user_id === u.user!.id }));
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-4xl">
