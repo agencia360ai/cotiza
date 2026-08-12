@@ -13,6 +13,7 @@ import {
   type PnlDiagnostico,
 } from "@/lib/quickbooks/projects";
 import { ventanaDeMeses, type MonthPnl } from "@/lib/quickbooks/parse";
+import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 
 export type QboProjectsResult =
   | {
@@ -519,4 +520,39 @@ export async function setProjectQuoteNo(
   if (isMissingColumn(error)) return { ok: false, error: "Falta la migración 0037 — corre el SQL en Supabase y reintenta." };
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+// ── Cotizaciones de origen de cada proyecto ───────────────────────────────────
+//
+// El vínculo NO es `qbo_project_state.quote_number` (se llena a mano y casi
+// nadie lo usa): es `sales_quotes.qbo_project_no`, que ya viene poblado en 123
+// cotizaciones. Machea contra el correlativo con que arranca el nombre del
+// proyecto en QuickBooks — "DS26-19 Cantina del Tigre" → "DS26-19".
+//
+// Un proyecto puede tener MUCHAS cotizaciones (hasta 18), así que se devuelve
+// el conteo y el monto sumado, no una sola.
+export type QuotesPorProyecto = Record<string, { count: number; amount: number }>;
+
+export async function getQuotesPorProyecto(): Promise<QuotesPorProyecto> {
+  const supabase = await createClient();
+  const orgId = await getActiveOrgId();
+  if (!orgId) return {};
+  const { data, error } = await supabase
+    .from("sales_quotes")
+    .select("qbo_project_no, amount_usd")
+    .eq("org_id", orgId)
+    .not("qbo_project_no", "is", null);
+  // La pantalla de proyectos no depende de esto: sin cotizaciones la columna
+  // queda vacía, pero el board carga igual.
+  if (error || !data) return {};
+
+  const out: QuotesPorProyecto = {};
+  for (const r of data as { qbo_project_no: string | null; amount_usd: number | null }[]) {
+    const code = codigoDeProyecto(r.qbo_project_no);
+    if (!code) continue;
+    const cur = (out[code] ??= { count: 0, amount: 0 });
+    cur.count += 1;
+    cur.amount += r.amount_usd ?? 0;
+  }
+  return out;
 }
