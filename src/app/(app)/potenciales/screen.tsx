@@ -34,7 +34,6 @@ import {
   ArchiveRestore,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { norm } from "@/lib/clients/normalize";
 import {
   RUBROS,
   QUOTE_STATUS_LABEL,
@@ -92,7 +91,7 @@ const RUBRO_KEYS = Object.keys(RUBROS) as Rubro[];
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
 
 type QSortKey = "quote_number" | "client_name" | "amount_usd" | "status" | "sent_date" | "qbo_project_no";
-type TSortKey = "entity" | "acto_number" | "amount_ref_usd" | "status" | "modalidad" | "delivery_date";
+type TSortKey = "objeto" | "entity" | "acto_number" | "amount_ref_usd" | "status" | "modalidad" | "delivery_date";
 const QUOTE_STATUSES: QuoteStatus[] = ["borrador", "enviada", "aprobada", "rechazada"];
 const TENDER_STATUSES: TenderStatus[] = ["por_participar", "presentada", "en_revision", "por_partir", "no_ganada", "ganada", "orden_proceder"];
 // Orden del flujo, con la RAMIFICACIÓN tras la revisión:
@@ -106,6 +105,47 @@ const MODALIDAD_SHORT: Record<Modalidad, string> = {
   contratacion_menor: "CM contr.",
   otro: "Otro",
 };
+
+// ── Código de modalidad de PanamaCompra ──────────────────────────────────────
+// El número de acto lo lleva en el penúltimo segmento:
+//   2026-1-10-01-06-CL-048370  →  CL
+// Sale de ahí y no del enum `modalidad`, que solo tiene cuatro valores y manda
+// a "Otro" todo lo que no encaja — una cotización en línea tiene su propio
+// código (CL) y aparecía en la tabla como "Otro".
+const RE_CODIGO_ACTO = /-([A-Z]{2,3})-\d+\s*$/;
+const CODIGO_LABEL: Record<string, string> = {
+  LP: "Licitación pública",
+  LA: "Licitación abreviada",
+  LV: "Licitación por mejor valor",
+  CM: "Compra menor",
+  CL: "Cotización en línea",
+  CD: "Contratación directa",
+  SB: "Subasta de bienes públicos",
+  CP: "Convenio marco",
+};
+// Fallback cuando el acto no trae código (cargas manuales, actos sin formato).
+const CODIGO_DE_MODALIDAD: Record<Modalidad, string | null> = {
+  licitacion_publica: "LP",
+  compra_menor: "CM",
+  contratacion_menor: "CM",
+  otro: null,
+};
+
+function codigoModalidad(x: { acto_number: string | null; modalidad: Modalidad | null }): string | null {
+  const m = x.acto_number?.toUpperCase().match(RE_CODIGO_ACTO);
+  if (m) return m[1];
+  return x.modalidad ? CODIGO_DE_MODALIDAD[x.modalidad] : null;
+}
+
+// El código es el dato de PanamaCompra; el enum solo dice cómo lo clasificamos.
+// Si difieren, el tooltip muestra los dos en vez de esconder el desacuerdo.
+function tituloModalidad(x: { acto_number: string | null; modalidad: Modalidad | null }): string | undefined {
+  const cod = codigoModalidad(x);
+  const delCodigo = cod ? CODIGO_LABEL[cod] : undefined;
+  const delEnum = x.modalidad ? MODALIDAD_LABEL[x.modalidad] : undefined;
+  if (delCodigo && delEnum && delCodigo !== delEnum) return `${delCodigo} · clasificada como ${delEnum}`;
+  return delCodigo ?? delEnum;
+}
 
 // Fecha LOCAL de Panamá (UTC-5): toISOString() es UTC y después de las 7pm
 // local ya devuelve "mañana" — corría follow-ups un día antes.
@@ -1836,6 +1876,10 @@ function LicitacionesTab({
   const [editing, setEditing] = useState<TenderRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [verArchivadas, setVerArchivadas] = useState(false);
+  // El cambio de estatus era mudo cuando fallaba: la fila volvía a su valor
+  // anterior sin decir por qué. Y con el aviso de orden de proceder hay un
+  // segundo caso que contar — se guardó, pero el correo no salió.
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
 
   const archivadasCount = useMemo(() => tenders.filter((t) => t.archived_at).length, [tenders]);
   const activasCount = tenders.length - archivadasCount;
@@ -1843,11 +1887,19 @@ function LicitacionesTab({
   // Cambio rápido de estatus desde la fila (optimista + revierte si falla).
   async function changeTenderStatus(t: TenderRow, next: TenderStatus) {
     setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: next } : x)));
+    const revertir = () => setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
+    setRowMsg(null);
     try {
       const r = await setTenderStatus(t.id, next);
-      if ("error" in r) setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
-    } catch {
-      setTenders((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x)));
+      if ("error" in r) {
+        revertir();
+        setRowMsg(r.error);
+      } else if (r.warning) {
+        setRowMsg(r.warning);
+      }
+    } catch (e) {
+      revertir();
+      setRowMsg(e instanceof Error ? e.message : "No se pudo cambiar el estatus — reintenta");
     }
   }
 
@@ -1880,7 +1932,11 @@ function LicitacionesTab({
       }
       return true;
     });
-    arr.sort((a, b) => compareVals(a[sort.key], b[sort.key], sort.dir));
+    // "Tipo" ordena por el código que se muestra (CL, CM, LP), no por el enum:
+    // ordenar por `modalidad` mandaba todas las CL al grupo "otro" y la columna
+    // quedaba visiblemente desordenada.
+    const val = (r: TenderRow) => (sort.key === "modalidad" ? codigoModalidad(r) : r[sort.key]);
+    arr.sort((a, b) => compareVals(val(a), val(b), sort.dir));
     return arr;
   }, [tenders, estatus, modalidad, q, from, to, sort, verArchivadas]);
 
@@ -2090,14 +2146,24 @@ function LicitacionesTab({
         {archivadasCount > 0 && !verArchivadas ? <span className="text-slate-400"> · {archivadasCount} archivada{archivadasCount === 1 ? "" : "s"} oculta{archivadasCount === 1 ? "" : "s"}</span> : null}
       </p>
 
+      {rowMsg ? (
+        <div className="mb-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span className="flex-1">{rowMsg}</span>
+          <button type="button" onClick={() => setRowMsg(null)} className="cursor-pointer font-semibold text-amber-700 hover:text-amber-900">
+            Cerrar
+          </button>
+        </div>
+      ) : null}
+
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
-                <SortTh label="Entidad" k="entity" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <SortTh label="Licitación" k="objeto" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Acto" k="acto_number" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
-                <SortTh label="Modalidad" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
+                <SortTh label="Tipo" k="modalidad" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
                 <SortTh label="Participación" k="delivery_date" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} />
                 <SortTh label="Ref. ($)" k="amount_ref_usd" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k, "desc"))} align="right" className="text-right" />
                 <SortTh label="Estatus" k="status" sort={sort} onSort={(k) => setSort((s) => toggleSort(s, k))} />
@@ -2123,23 +2189,43 @@ function LicitacionesTab({
                       x.archived_at && "bg-slate-50/40 opacity-60",
                     )}
                   >
-                    <td className="max-w-[180px] px-3 py-2.5">
+                    <td className="max-w-[320px] px-3 py-2.5">
+                      {/* El título manda: "Suministro de aires acondicionados" dice
+                          qué es la licitación; la entidad se repite entre decenas de
+                          filas. Cuando no hay título, la entidad sube a primera línea
+                          para no dejar la celda en un guion. */}
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate font-medium text-slate-900">{x.client_std_name ?? x.entity ?? "—"}</span>
+                        <span className="truncate font-medium text-slate-900" title={x.objeto ?? x.entity ?? undefined}>
+                          {x.objeto?.trim() || x.client_std_name || x.entity || "—"}
+                        </span>
                         {x.archived_at ? (
                           <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
                             <Archive className="size-2.5" /> Archivada
                           </span>
                         ) : null}
                       </div>
-                      {!x.client_id && x.entity ? (
-                        <span className="text-[10px] font-medium text-amber-600">sin estandarizar</span>
-                      ) : x.client_std_name && x.entity && norm(x.client_std_name) !== norm(x.entity) ? (
-                        <span className="block truncate text-[10px] text-slate-400">{x.entity}</span>
-                      ) : null}
+                      <div className="mt-0.5 flex items-center gap-1.5">
+                        {x.objeto?.trim() && (x.client_std_name || x.entity) ? (
+                          <span className="truncate text-[11px] text-slate-500">{x.client_std_name ?? x.entity}</span>
+                        ) : null}
+                        {!x.client_id && x.entity ? (
+                          <span className="shrink-0 text-[10px] font-medium text-amber-600">sin estandarizar</span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-500" title={x.acto_number ?? undefined}>{x.acto_number ?? "—"}</td>
-                    <td className="whitespace-nowrap px-3 py-2.5 text-slate-600" title={x.modalidad ? MODALIDAD_LABEL[x.modalidad] : undefined}>{x.modalidad ? MODALIDAD_SHORT[x.modalidad] : "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5">
+                      {codigoModalidad(x) ? (
+                        <span
+                          className="inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-600 ring-1 ring-inset ring-slate-200"
+                          title={tituloModalidad(x)}
+                        >
+                          {codigoModalidad(x)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{x.delivery_date ? fmtDate(x.delivery_date.slice(0, 10)) : "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-700">
                       {x.amount_ref_usd === null ? "—" : formatMoneyExact(x.amount_ref_usd)}
@@ -2204,9 +2290,10 @@ function LicitacionesTab({
           tender={editing}
           clients={clients}
           onClose={() => setEditing(null)}
-          onSaved={(u) => {
+          onSaved={(u, warning) => {
             setTenders((prev) => prev.map((x) => (x.id === u.id ? u : x)));
             setEditing(null);
+            setRowMsg(warning);
           }}
           onAutoUpdated={(id, patch) => setTenders((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)))}
         />
@@ -2782,7 +2869,7 @@ function TenderDrawer({
   tender: TenderRow;
   clients: ClientOpt[];
   onClose: () => void;
-  onSaved: (t: TenderRow) => void;
+  onSaved: (t: TenderRow, warning: string | null) => void;
   // "Check status" / "Buscar información" pueden cambiar campos en el server sin
   // pasar por Guardar: esto avisa al padre para que la tabla refleje el cambio.
   onAutoUpdated?: (id: string, patch: TenderAutoPatch) => void;
@@ -2817,7 +2904,10 @@ function TenderDrawer({
       setError(r.error);
       return;
     }
-    onSaved(f);
+    // El guardado SÍ ocurrió, así que la fila se actualiza y el drawer cierra;
+    // el aviso (p. ej. "el correo de orden de proceder no salió") sube al padre,
+    // que lo muestra sobre la tabla. Dejarlo acá se perdería al cerrar.
+    onSaved(f, r.warning ?? null);
   }
 
   async function archivar() {
@@ -2828,7 +2918,7 @@ function TenderDrawer({
       setError(r.error);
       return;
     }
-    onSaved({ ...f, archived_at: archived ? new Date().toISOString() : null });
+    onSaved({ ...f, archived_at: archived ? new Date().toISOString() : null }, null);
   }
 
   return (

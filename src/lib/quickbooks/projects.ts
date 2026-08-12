@@ -1,6 +1,7 @@
 import "server-only";
 import { fetchQboCustomers } from "./customers";
-import { listQboTools, withQboSession, type QboToolResult } from "./mcp";
+import { listQboTools, withQboSession } from "./mcp";
+import { parsePnl, type MonthPnl, type Pnl } from "./parse";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
 export type QboProject = {
@@ -23,7 +24,13 @@ export type QboProject = {
   endDate: string | null; // fin del contrato
   contractTotal: number | null; // monto total del contrato (0023) — se prorratea
   quoteNumber: string | null; // cotización de origen ("COT DC 26-141") — 0037
+  // Fechas REALES de QuickBooks (0045). No las pone nadie a mano.
+  qboCreatedAt: string | null; // MetaData.CreateTime del customer
+  firstTxnDate: string | null; // primer mes con movimiento en el P&L
+  lastTxnDate: string | null; // último mes con movimiento
+  meses: MonthPnl[]; // movimiento mes a mes (vacío = sin data mensual todavía)
 };
+
 
 export type ProjectBizStatus = "activo" | "por_cobrar" | "cerrado";
 
@@ -63,6 +70,10 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
       const ry = parseRubroYear(p.displayName) ?? parseRubroYear(p.fullyQualifiedName ?? "");
       const parent = p.parentId ? byId.get(p.parentId) : null;
       return {
+        qboCreatedAt: p.createdAt,
+        firstTxnDate: null, // lo llena el P&L mensual
+        lastTxnDate: null,
+        meses: [] as MonthPnl[],
         id: p.id,
         name: leafName(p.fullyQualifiedName, p.displayName),
         fullName: p.displayName,
@@ -97,7 +108,15 @@ export function marginOf(income: number | null, cost: number | null): number | n
 // QBO calcula el Income vs Cost por project. Lo sacamos con get_profit_and_loss
 // FILTRADO por customer = el project (cada project es un customer). Una llamada
 // por proyecto (chunked); el reporte es el formato estándar de Intuit.
-type Pnl = { income: number; cost: number };
+//
+// Se pide con summarize_column_by=Month: el reporte trae UNA COLUMNA POR MES
+// más la del total, así que la misma llamada que antes daba solo el total ahora
+// también dice EN QUÉ MESES hubo movimiento. De ahí salen tres cosas que antes
+// se adivinaban: la ventana real del proyecto, el monto que de verdad cae dentro
+// de un rango (sumar meses, no prorratear un total anual) y la gráfica por mes.
+
+// Dos P&L son "el mismo" si coinciden los totales — el desglose mensual no
+// entra en la comparación porque las guardias anti-rollup razonan sobre totales.
 const samePnl = (a: Pnl | null, b: Pnl | null) =>
   !!a && !!b && Math.abs(a.income - b.income) < 0.5 && Math.abs(a.cost - b.cost) < 0.5;
 
@@ -106,21 +125,28 @@ export type FinancialsResult = {
   // Proyectos donde TODAS las variantes fallaron/no parsearon (transitorio):
   // el caller debe CONSERVAR los números previos, no ponerlos en null.
   errored: Set<string>;
+  desde: string; // inicio de la ventana consultada (para saber qué cubre la data)
 };
+
+// Ventana del P&L: desde enero del año PASADO hasta hoy. Antes era solo el año
+// corriente, y por eso filtrar "Año pasado" en el board devolvía una fracción de
+// números del año actual — un dato que se veía plausible y estaba mal.
+const ANIOS_ATRAS = 1;
 
 export async function fetchProjectFinancials(
   projects: { id: string; parentId: string | null; siblings?: number }[],
 ): Promise<FinancialsResult> {
   const out = new Map<string, Pnl>();
   const errored = new Set<string>();
-  if (projects.length === 0) return { fin: out, errored };
+  const year = new Date().getFullYear();
+  const start = `${year - ANIOS_ATRAS}-01-01`;
+  const end = new Date().toISOString().slice(0, 10);
+  if (projects.length === 0) return { fin: out, errored, desde: start };
   const tools = await listQboTools();
   const tool = tools.find((t) => /profit.*loss|profit_loss|\bp_l\b|pnl/i.test(t.name));
-  if (!tool) return { fin: out, errored };
+  if (!tool) return { fin: out, errored, desde: start };
 
-  const year = new Date().getFullYear();
-  const start = `${year}-01-01`;
-  const end = new Date().toISOString().slice(0, 10);
+  const PORMES = { summarize_column_by: "Month" };
 
   // TODAS las llamadas P&L sobre UNA sola sesión (un handshake, no ~8s de
   // initialize por proyecto) y SECUENCIALES — nada de Promise.all: dos requests
@@ -129,7 +155,7 @@ export async function fetchProjectFinancials(
   await withQboSession(async (call) => {
     const pnlBy = async (extra: Record<string, unknown>): Promise<Pnl | null> => {
       try {
-        return parsePnl(await call(tool.name, { params: { start_date: start, end_date: end, ...extra } }));
+        return parsePnl(await call(tool.name, { params: { start_date: start, end_date: end, ...PORMES, ...extra } }));
       } catch {
         return null;
       }
@@ -173,9 +199,9 @@ export async function fetchProjectFinancials(
     const one = async (p: { id: string; parentId: string | null; siblings?: number }): Promise<void> => {
       const parentTotal = p.parentId ? parentPnl.get(p.parentId) ?? null : null;
       const variants: Record<string, unknown>[] = [
-        { params: { start_date: start, end_date: end, customer: p.id } },
-        { params: { start_date: start, end_date: end, customer_id: p.id } },
-        { start_date: start, end_date: end, customer: p.id },
+        { params: { start_date: start, end_date: end, ...PORMES, customer: p.id } },
+        { params: { start_date: start, end_date: end, ...PORMES, customer_id: p.id } },
+        { start_date: start, end_date: end, ...PORMES, customer: p.id },
       ];
       let algunaParseo = false;
       let comoElPadre: Pnl | null = null;
@@ -231,10 +257,9 @@ export async function fetchProjectFinancials(
     }
   });
 
-  return { fin: out, errored };
+  return { fin: out, errored, desde: start };
 }
 
-type PnlRow = { group?: string; Summary?: { ColData?: { value?: string }[] }; Rows?: { Row?: PnlRow[] } };
 
 // ── Diagnóstico de UN proyecto ───────────────────────────────────────────────
 // Cuando un proyecto sale "sin datos de QBO" hay varias razones posibles
@@ -327,55 +352,4 @@ export async function diagnosticarPnl(
       conclusion,
     };
   });
-}
-
-// Parser del ProfitAndLoss de QBO (un solo customer/project). Toma los totales
-// de las secciones de nivel superior; si hay NetIncome, cost = income - net.
-function parsePnl(result: QboToolResult): { income: number; cost: number } | null {
-  let json: unknown = result.structuredContent;
-  if (json === undefined) {
-    const text = (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
-    // El gateway antepone "Profit and Loss Report:" antes del JSON → arrancamos en la "{".
-    const start = text.indexOf("{");
-    if (start < 0) return null;
-    try {
-      json = JSON.parse(text.slice(start));
-    } catch {
-      return null;
-    }
-  }
-  const report = (json as { Report?: unknown }).Report ?? json;
-  const rows = ((report as { Rows?: { Row?: PnlRow[] } }).Rows?.Row ?? []) as PnlRow[];
-
-  const total = (r: PnlRow): number => {
-    const cd = r.Summary?.ColData ?? [];
-    for (let i = cd.length - 1; i >= 0; i--) {
-      const raw = cd[i].value ?? "";
-      if (!raw) continue;
-      // Formato contable "(62.00)" = negativo; el replace pelón perdía el signo.
-      const neg = /^\s*\(.*\)\s*$/.test(raw);
-      const v = Number(raw.replace(/[^0-9.-]/g, ""));
-      if (!Number.isNaN(v)) return neg ? -Math.abs(v) : v;
-    }
-    return 0;
-  };
-
-  let income = 0;
-  let cost = 0;
-  let net: number | null = null;
-  let huboGastos = false;
-  for (const r of rows) {
-    const g = (r.group ?? "").toLowerCase();
-    if (g === "income" || g === "otherincome") income += total(r);
-    else if (g === "netincome") net = total(r);
-    else if (g === "cogs" || g === "expenses" || g === "otherexpenses" || g.includes("expense")) {
-      cost += total(r);
-      huboGastos = true;
-    }
-  }
-  // cost = income - net SOLO como fallback cuando el reporte no trae secciones
-  // de gastos: con OtherIncome presente, esa resta daba costos NEGATIVOS y
-  // márgenes >100% (net incluye el otro ingreso).
-  if (!huboGastos && net !== null && income > 0) return { income, cost: income - net };
-  return { income, cost };
 }

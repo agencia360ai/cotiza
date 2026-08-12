@@ -1,20 +1,21 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendEmail, hasEmailConfig, esc } from "@/lib/email/send";
-import { letterTotals, type LetterData } from "./letter";
-import { renderQuotePdf } from "./pdf";
+import { letterTotals, type LetterData } from "@/lib/quotes/letter";
+import { renderQuotePdf } from "@/lib/quotes/pdf";
 import { nextContractNumber } from "@/lib/quickbooks/create-project";
 
-// Aviso a administración cuando una cotización queda APROBADA.
+// Avisos a administración para REGISTRAR UN PROYECTO EN QUICKBOOKS a mano.
 //
-// Desde que la app ya no puede crear proyectos en QuickBooks, ese registro se
-// hace a mano. Este correo es el disparador de esa tarea: lleva el PDF adjunto y
-// los datos ya formateados para copiar en QBO, incluido el PRÓXIMO NÚMERO de
-// contrato sugerido (calculado sobre los proyectos ya sincronizados, sin llamar
-// a QuickBooks).
+// Desde que la app ya no puede crear proyectos en QBO, ese registro es trabajo
+// manual, y hay dos momentos en que se dispara: una cotización que queda
+// APROBADA y una licitación que recibe ORDEN DE PROCEDER. Los dos correos van a
+// los mismos destinatarios y llevan los datos ya formateados para copiar,
+// incluido el PRÓXIMO NÚMERO de contrato sugerido (calculado sobre los
+// proyectos ya sincronizados, sin llamar a QuickBooks).
 //
-// Es best-effort: si falla, la cotización queda aprobada igual — no se pierde el
-// trabajo del usuario por un problema de correo.
+// Son best-effort: si el correo falla, el cambio de estado queda guardado igual
+// — no se pierde el trabajo del usuario por un problema de correo.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = SupabaseClient<any, any, any>;
@@ -147,6 +148,98 @@ export async function notificarCotizacionAprobada(
     html,
     replyTo: replyTo ?? null,
     attachments: adjunto ? [adjunto] : undefined,
+  });
+  return r.ok ? null : r.error;
+}
+
+// ── Licitación con orden de proceder ─────────────────────────────────────────
+// Misma idea que el aviso de cotización aprobada, y a los mismos destinatarios:
+// una licitación con orden de proceder es trabajo adjudicado que hay que
+// registrar como proyecto en QuickBooks a mano. Lo que cambia son los datos —
+// una licitación tiene número de acto y entidad, no número de cotización ni
+// carta en PDF, así que este correo no lleva adjunto.
+export async function notificarOrdenDeProceder(
+  db: Db,
+  orgId: string,
+  tenderId: string,
+  replyTo?: string | null,
+): Promise<string | null> {
+  if (!hasEmailConfig()) return null;
+
+  const to = await destinatarios(db, orgId);
+  if (to.length === 0) return null; // nadie configurado: no es un error
+
+  type Row = {
+    acto_number: string | null;
+    entity: string | null;
+    objeto: string | null;
+    amount_ref_usd: number | null;
+    delivery_date: string | null;
+    rubro: string | null;
+    folder_url: string | null;
+    notes: string | null;
+    client: { name: string } | null;
+  };
+  const { data: t } = (await db
+    .from("tenders")
+    .select("acto_number, entity, objeto, amount_ref_usd, delivery_date, rubro, folder_url, notes, client:clients(name)")
+    .eq("id", tenderId)
+    .eq("org_id", orgId)
+    .maybeSingle()) as { data: Row | null };
+  if (!t) return null;
+
+  const cliente = t.client?.name ?? t.entity ?? "Entidad";
+  const total = t.amount_ref_usd === null ? null : Number(t.amount_ref_usd);
+  const titulo = t.objeto?.trim() || t.acto_number || "Licitación";
+  const sugerido = await numeroSugerido(db, orgId, t.rubro);
+
+  const html = `
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;max-width:640px">
+  <p style="margin:0 0 4px;font-size:13px;color:#64748b">Cotiza · DICEC</p>
+  <h2 style="margin:0 0 4px;font-size:19px">Orden de proceder</h2>
+  <p style="margin:0 0 16px;color:#475569;font-size:14px">
+    Hay que registrar el proyecto en QuickBooks. Abajo están los datos listos para copiar.
+  </p>
+
+  <table style="border-collapse:collapse;font-size:14px;margin-bottom:18px">
+    ${fila("Licitación", titulo)}
+    ${t.acto_number ? fila("Acto", t.acto_number) : ""}
+    ${fila("Entidad", cliente)}
+    ${fila("Monto", money(total))}
+    ${t.delivery_date ? fila("Fecha de participación", t.delivery_date) : ""}
+    ${t.rubro ? fila("Rubro", t.rubro) : ""}
+  </table>
+
+  <div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;background:#f8fafc">
+    <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#0f172a">Para crear en QuickBooks</p>
+    <table style="border-collapse:collapse;font-size:14px">
+      ${sugerido ? fila("Nº sugerido", sugerido) : ""}
+      ${fila("Cliente", cliente)}
+      ${fila("Nombre del proyecto", `${sugerido ?? ""} ${titulo}`.trim())}
+      ${fila("Monto del contrato", money(total))}
+    </table>
+    ${
+      sugerido
+        ? `<p style="margin:8px 0 0;font-size:12px;color:#64748b">El Nº sugerido sale del último proyecto sincronizado — confírmalo en QuickBooks antes de crearlo.</p>`
+        : ""
+    }
+  </div>
+
+  ${
+    t.folder_url
+      ? `<p style="margin:16px 0 0;font-size:14px"><a href="${esc(t.folder_url)}" style="color:#2563eb">Ver la carpeta de la licitación</a></p>`
+      : ""
+  }
+  <p style="margin:18px 0 0;font-size:12px;color:#94a3b8">
+    Enviado automáticamente por Cotiza al marcarse la licitación con orden de proceder.
+  </p>
+</div>`;
+
+  const r = await sendEmail({
+    to,
+    subject: `Orden de proceder · ${t.acto_number ?? titulo} — ${cliente} · ${money(total)}`,
+    html,
+    replyTo: replyTo ?? null,
   });
   return r.ok ? null : r.error;
 }

@@ -22,7 +22,15 @@ import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, type QboProjectsResult } from "./qbo-actions";
 import type { QboProject, ProjectBizStatus, PnlDiagnostico } from "@/lib/quickbooks/projects";
-import { effectiveDates, overlapFraction, type DateRange } from "@/lib/quickbooks/prorate";
+import {
+  effectiveDates,
+  overlapFraction,
+  sumarMeses,
+  finDeMes,
+  type DateRange,
+  type FuenteFechas,
+  type MesMonto,
+} from "@/lib/quickbooks/prorate";
 
 // Identidad visual por rubro (misma paleta que el donut del Inicio):
 // DC índigo · DM sky · DS esmeralda · DV ámbar. Ícono + color, nunca solo color.
@@ -42,6 +50,21 @@ const STATUS_META: Record<ProjectBizStatus, { label: string; dot: string; text: 
   cerrado: { label: "Cerrado", dot: "bg-slate-400", text: "text-slate-600", bg: "bg-slate-100 ring-slate-300" },
 };
 const STATUS_ORDER: ProjectBizStatus[] = ["activo", "por_cobrar", "cerrado"];
+
+// De dónde salieron las fechas del proyecto. Ámbar = supuesto, no dato: es el
+// único caso donde el rango del board puede estar lejos de la realidad.
+const FUENTE_BADGE: Record<FuenteFechas | "sin", string> = {
+  manual: "bg-slate-100 text-slate-600 ring-slate-200 hover:bg-slate-200",
+  qbo: "bg-emerald-50 text-emerald-700 ring-emerald-600/20 hover:bg-emerald-100",
+  asumido: "bg-amber-50 text-amber-700 ring-amber-600/20 hover:bg-amber-100",
+  sin: "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100",
+};
+const FUENTE_TITULO: Record<FuenteFechas | "sin", string> = {
+  manual: "Fechas del contrato, cargadas a mano — haz clic para editar",
+  qbo: "Actividad real en QuickBooks (apertura del proyecto → último movimiento) — haz clic para fijar las del contrato",
+  asumido: "Fechas asumidas (año del proyecto) — haz clic para poner las reales",
+  sin: "Sin fechas — haz clic para agregarlas",
+};
 
 // Cap de filas RENDERIZADAS: pintar cientos de proyectos (cada fila con su
 // selector de estado, barras y editor) dispara la memoria del navegador en
@@ -81,6 +104,21 @@ function shiftDays(iso: string, days: number): string {
   const d = new Date(iso + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+// Meses ("YYYY-MM-01") que toca el intervalo, ambos extremos incluidos.
+function mesesEntre(desde: string, hasta: string): string[] {
+  if (hasta < desde) return [];
+  const out: string[] = [];
+  const d = new Date(desde.slice(0, 7) + "-01T00:00:00Z");
+  const fin = hasta.slice(0, 7);
+  // Tope de 5 años: un dato sucio (fecha del 2099) no debe colgar el navegador.
+  for (let i = 0; i < 60; i++) {
+    const mes = d.toISOString().slice(0, 7);
+    out.push(`${mes}-01`);
+    if (mes >= fin) break;
+    d.setUTCMonth(d.getUTCMonth() + 1);
+  }
+  return out;
 }
 
 // ── Rangos de fecha (presets + custom) ────────────────────────────────────────
@@ -128,21 +166,30 @@ const SORT_LABEL: Record<SortKey, string> = {
 };
 
 // Proyección de un proyecto dentro del rango activo.
+//
+// `real` distingue las dos formas de llegar a los montos del rango:
+//   true  → se sumaron los meses que QuickBooks reportó dentro del rango.
+//   false → se prorrateó el total por días (proyecto sin desglose mensual:
+//           cerrado con números congelados, o un contrato aún sin facturar).
 type Enriched = {
   p: QboProject;
-  eff: { start: string; end: string; asumidas: boolean } | null;
+  eff: { start: string; end: string; fuente: FuenteFechas } | null;
   fraction: number; // 0..1 dentro del rango (1 sin rango o sin fechas)
   inRange: boolean;
+  real: boolean;
   totalBase: number | null; // contrato (o cobro real como fallback)
   usaContrato: boolean;
-  enRango: number | null; // totalBase × fraction
-  gastoRango: number | null; // gasto × fraction
+  enRango: number | null; // meses del rango, o totalBase × fraction
+  gastoRango: number | null;
+  meses: MesMonto[]; // desglose del proyecto (vacío si no hay)
 };
 
 export function QboProjectsBoard() {
   const [res, setRes] = useState<QboProjectsResult | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<string>("all");
+  // Rubros seleccionados. Vacío = todos. Es un SET, no una pestaña: el equipo
+  // mira "contratos + mantenimiento" o "contratos + servicio" como un bloque.
+  const [rubros, setRubros] = useState<Set<string>>(new Set());
   const [statusOv, setStatusOv] = useState<Map<string, ProjectBizStatus>>(new Map());
   const [datesOv, setDatesOv] = useState<Map<string, { startDate: string | null; endDate: string | null; contractTotal: number | null }>>(new Map());
   const [rowError, setRowError] = useState<string | null>(null);
@@ -262,12 +309,53 @@ export function QboProjectsBoard() {
 
   const projects = res?.ok ? res.projects : [];
   const range = useMemo(() => rangeFor(rangeKey, customFrom, customTo), [rangeKey, customFrom, customTo]);
+  // QuickBooks se consulta desde enero del año pasado. Si el rango elegido va
+  // más atrás, esos meses no tienen desglose y sus montos son estimaciones — se
+  // avisa en vez de mostrar un número que parece exacto y no lo es.
+  const mesesDesde = res?.ok ? res.mesesDesde : null;
+  const fueraDeCobertura = !!mesesDesde && (!range || range.from < mesesDesde);
 
-  // Proyección con prorrateo: cada proyecto con su fracción dentro del rango.
+  // Proyección de cada proyecto dentro del rango. Con desglose mensual de QBO
+  // los montos se SUMAN (número real); sin él, se prorratean por días.
   const enriched: Enriched[] = useMemo(() => {
     return projects.map((p) => {
       const d = datesOf(p);
-      const eff = effectiveDates({ startDate: d.startDate, endDate: d.endDate, year: p.year });
+      const eff = effectiveDates({
+        startDate: d.startDate,
+        endDate: d.endDate,
+        qboCreatedAt: p.qboCreatedAt,
+        firstTxnDate: p.firstTxnDate,
+        lastTxnDate: p.lastTxnDate,
+        year: p.year,
+      });
+      const meses = p.meses ?? [];
+      const contractTotal = d.contractTotal;
+      const usaContrato = contractTotal !== null;
+      const totalBase = contractTotal ?? p.income;
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+
+      // Camino real: sumar los meses del rango. Se usa cuando hay desglose y no
+      // hay un total de contrato que mande (un contrato firmado se devenga a lo
+      // largo del período aunque todavía no se haya facturado completo).
+      if (meses.length > 0 && !usaContrato) {
+        const s = sumarMeses(meses, range);
+        // Dentro del rango = tuvo movimiento ahí. Un proyecto de 2025 deja de
+        // aparecer en "Este año" solo porque su nombre diga 26.
+        const inRange = !range || s.income !== 0 || s.cost !== 0;
+        return {
+          p,
+          eff,
+          fraction: totalBase && totalBase > 0 ? Math.min(1, s.income / totalBase) : 1,
+          inRange,
+          real: true,
+          totalBase,
+          usaContrato,
+          enRango: s.income,
+          gastoRango: s.cost,
+          meses,
+        };
+      }
+
       let fraction = 1;
       let inRange = true;
       if (range) {
@@ -276,31 +364,31 @@ export function QboProjectsBoard() {
           inRange = fraction > 0;
         } // sin ninguna pista de fechas: se muestra siempre (no se puede juzgar)
       }
-      const contractTotal = d.contractTotal;
-      const usaContrato = contractTotal !== null;
-      const totalBase = contractTotal ?? p.income;
-      const round2 = (n: number) => Math.round(n * 100) / 100;
       return {
         p,
         eff,
         fraction,
         inRange,
+        real: false,
         totalBase,
         usaContrato,
         enRango: totalBase === null ? null : round2(totalBase * fraction),
         gastoRango: p.cost === null ? null : round2(p.cost * fraction),
+        meses,
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, range, datesOv]);
 
-  // Búsqueda: nombre, cliente, número — y montos si escribes dígitos.
-  const filtered = useMemo(() => {
+  // Todos los filtros MENOS el de rubro. Las cards de arriba SON ese filtro, así
+  // que se calculan sobre esto: al buscar "Cirion" muestran los rubros de
+  // Cirion. Antes ignoraban búsqueda y estado, y sus números no cuadraban con la
+  // lista de abajo. Búsqueda: nombre, cliente — y montos si escribes dígitos.
+  const sinRubro = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const digits = needle.replace(/[^0-9]/g, "");
     return enriched.filter((e) => {
       if (!e.inRange) return false;
-      if (tab !== "all" && e.p.rubro !== tab) return false;
       if (statusFiltro !== "all" && statusOf(e.p) !== statusFiltro) return false;
       if (!needle) return true;
       const hay = `${e.p.fullName} ${e.p.name} ${e.p.clientName}`.toLowerCase();
@@ -314,7 +402,20 @@ export function QboProjectsBoard() {
       return false;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enriched, q, tab, statusFiltro, statusOv]);
+  }, [enriched, q, statusFiltro, statusOv]);
+
+  const toggleRubro = (key: string) =>
+    setRubros((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+
+  // Set vacío = todos los rubros.
+  const filtered = useMemo(
+    () => (rubros.size === 0 ? sinRubro : sinRubro.filter((e) => rubros.has(e.p.rubro ?? "otro"))),
+    [sinRubro, rubros],
+  );
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -348,13 +449,10 @@ export function QboProjectsBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered, sort, statusOv]);
 
-  // Resumen por rubro (sobre lo filtrado por rango/búsqueda/status, NO por tab —
-  // las cards son el filtro de rubro). Montos PRORRATEADOS al rango.
   const porRubro = useMemo(() => {
     const m = new Map<string, { count: number; cobro: number; gasto: number }>();
     for (const key of RUBRO_ORDER) m.set(key, { count: 0, cobro: 0, gasto: 0 });
-    for (const e of enriched) {
-      if (!e.inRange) continue;
+    for (const e of sinRubro) {
       const key = e.p.rubro && RUBRO_META[e.p.rubro] ? e.p.rubro : "otro";
       const b = m.get(key) ?? { count: 0, cobro: 0, gasto: 0 };
       b.count++;
@@ -363,9 +461,43 @@ export function QboProjectsBoard() {
       m.set(key, b);
     }
     return m;
-  }, [enriched]);
+  }, [sinRubro]);
 
-  // Totales de la vista actual (prorrateados al rango activo).
+  // Serie mensual de la vista: cobro y gasto por mes, sumando lo que QuickBooks
+  // reportó en cada uno. Los proyectos sin desglose (cerrados, contratos aún sin
+  // facturar) reparten su monto prorrateado entre los meses que cubren, para que
+  // la gráfica no se contradiga con el total de la barra de resumen.
+  const serieMensual = useMemo(() => {
+    const acc = new Map<string, { cobro: number; gasto: number }>();
+    const suma = (mes: string, cobro: number, gasto: number) => {
+      const b = acc.get(mes) ?? { cobro: 0, gasto: 0 };
+      b.cobro += cobro;
+      b.gasto += gasto;
+      acc.set(mes, b);
+    };
+    for (const e of sorted) {
+      if (e.real) {
+        for (const m of e.meses) {
+          const f = range ? overlapFraction(m.month, finDeMes(m.month), range) : 1;
+          if (f > 0) suma(m.month, m.income * f, m.cost * f);
+        }
+        continue;
+      }
+      if (!e.eff || (e.enRango === null && e.gastoRango === null)) continue;
+      const cubiertos = mesesEntre(
+        range && range.from > e.eff.start ? range.from : e.eff.start,
+        range && range.to < e.eff.end ? range.to : e.eff.end,
+      );
+      if (cubiertos.length === 0) continue;
+      const porMes = 1 / cubiertos.length;
+      for (const mes of cubiertos) suma(mes, (e.enRango ?? 0) * porMes, (e.gastoRango ?? 0) * porMes);
+    }
+    return Array.from(acc, ([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month));
+  }, [sorted, range]);
+
+  // Totales de la vista actual. `prorrateados` cuenta los que NO tienen desglose
+  // mensual de QBO y por lo tanto llevan un monto repartido por días — es el
+  // aviso de "este número es una estimación", no un dato de QuickBooks.
   const vista = useMemo(() => {
     let cobro = 0;
     let gasto = 0;
@@ -373,7 +505,7 @@ export function QboProjectsBoard() {
     for (const e of sorted) {
       cobro += e.enRango ?? 0;
       gasto += e.gastoRango ?? 0;
-      if (e.fraction < 1) prorrateados++;
+      if (!e.real && e.fraction < 1) prorrateados++;
     }
     return { cobro, gasto, prorrateados, margen: cobro > 0 ? (cobro - gasto) / cobro : null };
   }, [sorted]);
@@ -418,21 +550,26 @@ export function QboProjectsBoard() {
         </div>
       ) : null}
 
-      {/* Filtros grandes por rubro (con cobro prorrateado al rango). */}
+      {/* Filtros por rubro. Se COMBINAN: contratos + mantenimiento, contratos +
+          servicio, lo que haga falta. Ninguno marcado = todos. */}
       {hasProjects ? (
         <div className="mb-3 grid grid-cols-2 gap-2.5 lg:grid-cols-4">
           {RUBRO_ORDER.map((key) => {
             const meta = RUBRO_META[key];
             const Icon = meta.icon;
             const b = porRubro.get(key) ?? { count: 0, cobro: 0, gasto: 0 };
-            const active = tab === key;
+            const active = rubros.has(key);
+            const maxCobro = Math.max(...RUBRO_ORDER.map((k) => porRubro.get(k)?.cobro ?? 0), 1);
+            const margen = b.cobro > 0 ? (b.cobro - b.gasto) / b.cobro : null;
             return (
               <button
                 key={key}
                 type="button"
-                onClick={() => setTab(active ? "all" : key)}
+                aria-pressed={active}
+                onClick={() => toggleRubro(key)}
                 className={cn(
-                  "group cursor-pointer rounded-2xl border bg-white p-3.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  "group relative cursor-pointer overflow-hidden rounded-2xl border bg-white p-3.5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2",
                   active ? cn("border-transparent ring-2", meta.ring) : "border-slate-100",
                 )}
               >
@@ -440,14 +577,38 @@ export function QboProjectsBoard() {
                   <span className={cn("flex size-8 items-center justify-center rounded-xl", meta.chip)}>
                     <Icon className="size-4" />
                   </span>
-                  <span className="text-lg font-bold tabular-nums text-slate-900">{b.count}</span>
+                  <span className="flex items-center gap-1.5">
+                    {active ? <Check className="size-3.5 text-slate-400" /> : null}
+                    <span className="text-lg font-bold tabular-nums text-slate-900">{b.count}</span>
+                  </span>
                 </div>
                 <p className="mt-2 text-sm font-semibold text-slate-800">{meta.label}</p>
-                <p className="mt-0.5 text-xs tabular-nums text-slate-500">{b.cobro > 0 ? `${balCompact(b.cobro)} en el rango` : "—"}</p>
+                <p className="mt-0.5 flex items-baseline gap-1.5 text-xs tabular-nums text-slate-500">
+                  {b.cobro > 0 ? (
+                    <>
+                      <span className="font-semibold text-slate-700">{balCompact(b.cobro)}</span>
+                      {margen !== null ? <span className={marginTextColor(margen)}>{Math.round(margen * 100)}%</span> : null}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </p>
+                {/* Barra de proporción: el peso del rubro se ve, no se calcula. */}
+                <span className="mt-2 block h-1 overflow-hidden rounded-full bg-slate-100">
+                  <span
+                    className="block h-full rounded-full transition-all"
+                    style={{ width: `${Math.max(b.cobro > 0 ? 4 : 0, (b.cobro / maxCobro) * 100)}%`, backgroundColor: meta.accent }}
+                  />
+                </span>
               </button>
             );
           })}
         </div>
+      ) : null}
+
+      {/* Cobro vs gasto mes a mes dentro del rango. */}
+      {hasProjects && serieMensual.length > 1 ? (
+        <MonthlyProfitChart data={serieMensual} todoReal={sorted.every((e) => e.real)} />
       ) : null}
 
       {/* Toolbar: búsqueda + rango de fechas + status + orden */}
@@ -496,8 +657,10 @@ export function QboProjectsBoard() {
                 key={k}
                 type="button"
                 onClick={() => setRangeKey(k)}
+                aria-pressed={rangeKey === k}
                 className={cn(
                   "cursor-pointer rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-1",
                   rangeKey === k ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200",
                 )}
               >
@@ -523,6 +686,11 @@ export function QboProjectsBoard() {
                 />
               </span>
             ) : null}
+            {fueraDeCobertura ? (
+              <span className="text-[11px] text-slate-400" title="El desglose mensual se trae desde esa fecha. Antes solo hay el total del proyecto, repartido por días.">
+                Detalle mensual desde {fmtCorta(mesesDesde!)}
+              </span>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -532,14 +700,18 @@ export function QboProjectsBoard() {
         {hasProjects ? (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-slate-100 px-4 py-2.5 text-xs">
             <span className="font-semibold text-slate-700">
-              {tab === "all" ? "Todos" : RUBRO_META[tab]?.label ?? tab}
+              {rubros.size === 0
+                ? "Todos"
+                : RUBRO_ORDER.filter((k) => rubros.has(k))
+                    .map((k) => RUBRO_META[k].label)
+                    .join(" + ")}
               <span className="ml-1 tabular-nums text-slate-400">{sorted.length}</span>
             </span>
-            {tab !== "all" || q || statusFiltro !== "all" ? (
+            {rubros.size > 0 || q || statusFiltro !== "all" ? (
               <button
                 type="button"
                 onClick={() => {
-                  setTab("all");
+                  setRubros(new Set());
                   setQ("");
                   setStatusFiltro("all");
                 }}
@@ -650,6 +822,139 @@ export function QboProjectsBoard() {
         )}
       </div>
     </section>
+  );
+}
+
+// ── Cobro vs gasto por mes ───────────────────────────────────────────────────
+// Mismas specs que los charts del Inicio: SVG puro, grid recesivo, marcas con
+// tope redondeado ancladas a la base, tooltip por mes y texto en tokens de
+// texto (nunca del color de la serie). El gasto va DENTRO de la barra de cobro
+// en vez de al lado: lo que importa leer de un vistazo es cuánto del cobro se
+// fue en gasto, y dos barras pegadas obligan a compararlas a ojo.
+type PuntoMes = { month: string; cobro: number; gasto: number };
+
+function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: boolean }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const W = 720;
+  const H = 168;
+  const PAD_L = 8;
+  const PAD_B = 20;
+  const PAD_T = 16;
+  const max = Math.max(1, ...data.map((d) => d.cobro), ...data.map((d) => d.gasto));
+  const innerW = W - PAD_L * 2;
+  const slot = innerW / data.length;
+  const barW = Math.min(30, slot * 0.6);
+  const y = (v: number) => H - PAD_B - (v / max) * (H - PAD_B - PAD_T);
+  const maxIdx = data.reduce((mi, d, i) => (d.cobro > data[mi].cobro ? i : mi), 0);
+  const totalCobro = data.reduce((a, d) => a + d.cobro, 0);
+  const totalGasto = data.reduce((a, d) => a + d.gasto, 0);
+  const margen = totalCobro > 0 ? (totalCobro - totalGasto) / totalCobro : null;
+
+  // Barra con el tope redondeado. Piso de 3px: un mes de $200 al lado de uno de
+  // $50,000 se dibujaría como una raya invisible y se leería como "sin
+  // movimiento", que es justo lo contrario de lo que dice el dato.
+  const barra = (v: number, x: number, w: number): string => {
+    const base = H - PAD_B;
+    const top = Math.min(y(v), base - 3);
+    const r = Math.min(4, (base - top) / 2);
+    return `M ${x} ${base} L ${x} ${top + r} Q ${x} ${top} ${x + r} ${top} L ${x + w - r} ${top} Q ${x + w} ${top} ${x + w} ${top + r} L ${x + w} ${base} Z`;
+  };
+
+  return (
+    <div className="mb-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h3 className="text-sm font-semibold text-slate-900">Cobro y gasto por mes</h3>
+        <div className="flex items-center gap-3 text-[11px]">
+          <span className="inline-flex items-center gap-1.5 text-slate-500">
+            <span className="size-2 rounded-full bg-slate-800" /> Cobro
+            <span className="font-semibold tabular-nums text-slate-900">{balCompact(totalCobro)}</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-slate-500">
+            <span className="size-2 rounded-full bg-rose-400" /> Gasto
+            <span className="font-semibold tabular-nums text-rose-600">{balCompact(totalGasto)}</span>
+          </span>
+          {margen !== null ? (
+            <span className={cn("font-semibold tabular-nums", marginTextColor(margen))}>{Math.round(margen * 100)}% margen</span>
+          ) : null}
+        </div>
+      </div>
+      <p className="mb-2 text-[11px] text-slate-400">
+        {todoReal
+          ? "Lo que QuickBooks reporta en cada mes."
+          : "Los proyectos sin desglose mensual en QBO reparten su monto entre los meses que cubren."}
+      </p>
+
+      <div className="relative">
+        {/* El aria-label lleva los números, no solo el título: para un lector de
+            pantalla la gráfica es su descripción — "gráfica de barras" no dice nada. */}
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="w-full"
+          role="img"
+          aria-label={`Cobro y gasto por mes. ${data
+            .map((d) => `${fmtCorta(d.month)}: cobro ${balCompact(d.cobro)}, gasto ${balCompact(d.gasto)}`)
+            .join(". ")}`}
+        >
+          {[0.25, 0.5, 0.75, 1].map((f) => (
+            <line key={f} x1={PAD_L} x2={W - PAD_L} y1={y(max * f)} y2={y(max * f)} stroke="#F1F5F9" strokeWidth="1" />
+          ))}
+          <line x1={PAD_L} x2={W - PAD_L} y1={H - PAD_B} y2={H - PAD_B} stroke="#E2E8F0" strokeWidth="1" />
+
+          {data.map((d, i) => {
+            const cx = PAD_L + slot * i + slot / 2;
+            const x = cx - barW / 2;
+            const active = hover === i;
+            const dim = hover !== null && !active;
+            const gastoW = barW * 0.55;
+            return (
+              <g key={d.month} opacity={dim ? 0.4 : 1} style={{ transition: "opacity 150ms" }}>
+                <rect
+                  x={PAD_L + slot * i}
+                  y={PAD_T}
+                  width={slot}
+                  height={H - PAD_B - PAD_T}
+                  fill="transparent"
+                  onMouseEnter={() => setHover(i)}
+                  onMouseLeave={() => setHover(null)}
+                />
+                {d.cobro > 0 ? (
+                  <path d={barra(d.cobro, x, barW)} fill={active ? "#0F172A" : "#334155"} style={{ pointerEvents: "none" }} />
+                ) : null}
+                {d.gasto > 0 ? (
+                  <path
+                    d={barra(d.gasto, cx - gastoW / 2, gastoW)}
+                    fill="#FB7185"
+                    opacity={0.92}
+                    style={{ pointerEvents: "none" }}
+                  />
+                ) : null}
+                {/* Etiqueta directa solo en el mes más alto: da la escala sin
+                    obligar a pasar el mouse ni llenar la gráfica de números. */}
+                {i === maxIdx && d.cobro > 0 && hover === null ? (
+                  <text x={cx} y={y(d.cobro) - 5} textAnchor="middle" className="fill-slate-600" fontSize="10" fontWeight="600">
+                    {balCompact(d.cobro)}
+                  </text>
+                ) : null}
+                <text x={cx} y={H - 6} textAnchor="middle" className="fill-slate-500" fontSize="9">
+                  {MESES_CORTOS[Number(d.month.slice(5, 7)) - 1]}
+                  {data.length > 12 && d.month.slice(5, 7) === "01" ? ` ${d.month.slice(2, 4)}` : ""}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+
+        {hover !== null ? (
+          <div
+            className="pointer-events-none absolute -top-1 z-10 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] leading-relaxed text-white shadow-lg"
+            style={{ left: `${((PAD_L + slot * hover + slot / 2) / W) * 100}%`, transform: "translateX(-50%)" }}
+          >
+            <span className="font-semibold">{fmtCorta(data[hover].month)}</span> · cobro {balCompact(data[hover].cobro)} · gasto{" "}
+            {balCompact(data[hover].gasto)}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -915,7 +1220,11 @@ function ProjectRow({
   const meta = (p.rubro && RUBRO_META[p.rubro]) || RUBRO_FALLBACK;
   const RubroIcon = meta.icon;
   const cerrado = status === "cerrado";
-  const prorrateado = rangeActive && e.fraction < 1;
+  // `parcial`: el rango muestra solo una porción del proyecto. `prorrateado`:
+  // además esa porción es una ESTIMACIÓN (repartida por días) y no lo que
+  // QuickBooks reportó en esos meses — solo ahí corresponde el aviso.
+  const parcial = rangeActive && e.fraction < 1;
+  const prorrateado = parcial && !e.real;
   return (
     <li className={cn("rounded-lg px-2 py-3 hover:bg-slate-50/60", cerrado && "opacity-60")}>
       <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
@@ -935,23 +1244,13 @@ function ProjectRow({
               onClick={onToggleEdit}
               className={cn(
                 "inline-flex cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset transition-colors",
-                e.eff
-                  ? e.eff.asumidas
-                    ? "bg-amber-50 text-amber-700 ring-amber-600/20 hover:bg-amber-100"
-                    : "bg-slate-100 text-slate-600 ring-slate-200 hover:bg-slate-200"
-                  : "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100",
+                FUENTE_BADGE[e.eff?.fuente ?? "sin"],
               )}
-              title={
-                e.eff
-                  ? e.eff.asumidas
-                    ? "Fechas asumidas (año del proyecto) — haz clic para poner las reales"
-                    : "Fechas del contrato — haz clic para editar"
-                  : "Sin fechas — haz clic para agregarlas"
-              }
+              title={FUENTE_TITULO[e.eff?.fuente ?? "sin"]}
             >
               <CalendarRange className="size-3" />
               {e.eff ? `${fmtCorta(e.eff.start)} → ${fmtCorta(e.eff.end)}` : "fechas"}
-              {e.eff?.asumidas ? "*" : ""}
+              {e.eff?.fuente === "asumido" ? "*" : ""}
             </button>
             <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
           </p>
@@ -962,10 +1261,10 @@ function ProjectRow({
           {e.enRango !== null || p.income !== null ? (
             <>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="text-[11px] text-slate-400">{prorrateado ? "En rango" : "Cobro"}</span>
+                <span className="text-[11px] text-slate-400">{parcial ? "En rango" : "Cobro"}</span>
                 <span className="text-sm font-bold tabular-nums text-slate-900">{bal(e.enRango ?? p.income ?? 0)}</span>
               </div>
-              {prorrateado && e.totalBase !== null ? (
+              {parcial && e.totalBase !== null ? (
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-[10px] text-slate-400">{e.usaContrato ? "Contrato total" : "Total"}</span>
                   <span className="text-[11px] font-semibold tabular-nums text-slate-500">
