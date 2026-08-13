@@ -319,7 +319,7 @@ export function LeadsBoard({ members, currentMemberId }: { members: LeadOwner[];
   const openLead = leads.find((l) => l.id === openId) ?? null;
 
   return (
-    <div className="px-4 py-6 md:px-10 md:py-8">
+    <div className="max-w-[1400px] px-4 py-6 md:px-8">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Leads</h1>

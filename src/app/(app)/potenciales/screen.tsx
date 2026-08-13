@@ -229,7 +229,7 @@ export function PotencialesScreen({
   return (
     <ProjectOptionsCtx.Provider value={projectOptions}>
     <div className="min-h-full bg-slate-50/70">
-    <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
+    <div className="max-w-[1400px] px-4 py-6 md:px-8">
       <header className="mb-6">
         <h1 className="text-[21px] font-bold tracking-[-0.03em] text-slate-900">Cotizaciones</h1>
         <p className="text-xs text-slate-500">Lo que se cotizó y todavía no es negocio</p>
