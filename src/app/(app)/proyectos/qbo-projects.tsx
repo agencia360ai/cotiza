@@ -63,16 +63,18 @@ const FUENTE_TITULO: Record<FuenteFechas | "sin", string> = {
 };
 // Sin fecha de fin del contrato no hay cierre que mostrar. El label dice en qué
 // punto está según el estado, en vez de inventar una fecha.
-const SIN_FIN: Partial<Record<ProjectBizStatus, { label: string; title: string }>> = {
+const SIN_FIN: Partial<Record<ProjectBizStatus, { label: string; title: string; cls: string }>> = {
   activo: {
-    label: "en ejecución",
+    cls: "bg-slate-100 text-slate-600 ring-slate-200",
+    label: "Sin cerrar",
     title:
       "Sigue en ejecución: no tiene fecha de fin cargada. QuickBooks solo sabe hasta cuándo hubo movimiento, no cuándo termina — haz clic para poner la del contrato.",
   },
   por_cobrar: {
-    label: "sin cierre",
+    cls: "bg-rose-50 text-rose-700 ring-rose-600/20",
+    label: "Falta fecha",
     title:
-      "El trabajo terminó pero el proyecto no está cerrado, y no tiene fecha de fin cargada — haz clic para poner la del contrato.",
+      "El trabajo terminó pero el proyecto sigue sin fecha de fin. Hay que cargarla en QuickBooks — haz clic para ponerla acá.",
   },
 };
 
@@ -428,6 +430,7 @@ export function QboProjectsBoard() {
 
   const rangeActive = !!range;
 
+
   const sorted = useMemo(() => {
     const arr = [...filtered];
     const val = (e: Enriched): string | number | null => {
@@ -523,8 +526,44 @@ export function QboProjectsBoard() {
       gasto += e.gastoRango ?? 0;
       if (!e.real && e.fraction < 1) prorrateados++;
     }
-    return { cobro, gasto, prorrateados, margen: cobro > 0 ? (cobro - gasto) / cobro : null };
-  }, [sorted]);
+    // Por cobrar y abiertos son del proyecto ENTERO, no de la porción en rango:
+    // un proyecto no está "medio por cobrar" porque el filtro corte su año.
+    let porCobrar = 0;
+    let nPorCobrar = 0;
+    let abiertos = 0;
+    for (const e of sorted) {
+      const st = statusOf(e.p);
+      if (st === "por_cobrar") {
+        nPorCobrar++;
+        porCobrar += e.p.income ?? 0;
+      }
+      if (st !== "cerrado") abiertos++;
+    }
+    return {
+      cobro,
+      gasto,
+      prorrateados,
+      porCobrar,
+      nPorCobrar,
+      abiertos,
+      margen: cobro > 0 ? (cobro - gasto) / cobro : null,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sorted, statusOv]);
+
+  // Pendientes de la vista. Se cuentan sobre lo FILTRADO: si el equipo mira
+  // solo mantenimiento, el pie tiene que hablar de mantenimiento.
+  const pendientes = useMemo(() => {
+    let sinCotizacion = 0;
+    let sinFechaFin = 0;
+    for (const e of sorted) {
+      const code = codigoDeProyecto(e.p.name) ?? codigoDeProyecto(e.p.fullName);
+      if (!code || !quotes[code]) sinCotizacion++;
+      if (statusOf(e.p) === "por_cobrar" && !datesOf(e.p).endDate) sinFechaFin++;
+    }
+    return { sinCotizacion, sinFechaFin };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sorted, quotes, statusOv, datesOv]);
 
   const hasProjects = projects.length > 0;
 
@@ -563,6 +602,28 @@ export function QboProjectsBoard() {
           <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
             <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${refreshPct}%` }} />
           </div>
+        </div>
+      ) : null}
+
+      {/* Los cinco números que resumen la vista. Responden al rango y a los
+          filtros activos: es el estado de LO QUE SE ESTÁ MIRANDO. */}
+      {hasProjects ? (
+        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+          <KpiProyecto label={rangeActive ? "Cobro en rango" : "Cobro"} value={bal(vista.cobro)} />
+          <KpiProyecto label="Gasto" value={bal(vista.gasto)} color="#BE123C" />
+          <KpiProyecto
+            label="Margen"
+            value={vista.margen !== null ? `${Math.round(vista.margen * 100)}%` : "s/d"}
+            color={vista.margen !== null && vista.margen >= 0.3 ? "#047857" : "#B45309"}
+            tint="bg-[#F8FDFB]"
+          />
+          <KpiProyecto
+            label="Por cobrar"
+            value={bal(vista.porCobrar)}
+            sub={`${vista.nPorCobrar} pendiente${vista.nPorCobrar === 1 ? "" : "s"}`}
+            color="#B45309"
+          />
+          <KpiProyecto label="Abiertos" value={String(vista.abiertos)} sub={`de ${sorted.length} en la vista`} />
         </div>
       ) : null}
 
@@ -800,18 +861,19 @@ export function QboProjectsBoard() {
         ) : (
           <>
             <div className="overflow-x-auto rounded-b-2xl">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[1080px] text-[13px]">
                 <thead>
                   <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
                     <th className="hidden w-9 px-3 py-2.5 sm:table-cell"></th>
                     <SortTh label="Proyecto" k="nombre" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
+                    <SortTh label="Cliente" k="cliente" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} className="hidden lg:table-cell" />
+                    <SortTh label="Cotización" k="cotizacion" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden md:table-cell" />
                     <SortTh label={rangeActive ? "En rango" : "Cobro"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Gasto" k="gasto" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Margen" k="margen" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Inicio" k="inicio" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden lg:table-cell" />
                     <SortTh label="Fin" k="fin" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden lg:table-cell" />
                     <SortTh label="Estado" k="estado" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
-                    <SortTh label="Cotización" k="cotizacion" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden md:table-cell" />
                     <th className="px-3 py-2.5"></th>
                   </tr>
                 </thead>
@@ -839,6 +901,24 @@ export function QboProjectsBoard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-soft bg-surface-muted px-4 py-2.5 text-[11px] text-slate-500">
+              <span>
+                Mostrando{" "}
+                <span className="font-semibold tabular-nums text-slate-700">
+                  {Math.min(sorted.length, RENDER_CAP)} de {projects.length}
+                </span>
+              </span>
+              {pendientes.sinCotizacion > 0 ? (
+                <span className="text-orange-700">
+                  · <span className="font-semibold tabular-nums">{pendientes.sinCotizacion}</span> sin cotización vinculada
+                </span>
+              ) : null}
+              {pendientes.sinFechaFin > 0 ? (
+                <span className="text-rose-700">
+                  · <span className="font-semibold tabular-nums">{pendientes.sinFechaFin}</span> por cobrar sin fecha de fin en QuickBooks
+                </span>
+              ) : null}
             </div>
             {sorted.length > RENDER_CAP ? (
               <p className="border-t border-slate-100 px-4 py-2.5 text-center text-xs text-slate-400">
@@ -986,6 +1066,35 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
 }
 
 // Barra de rentabilidad: gasto (rosa) vs margen (verde) como % del cobro.
+// KPI de la cabecera de Proyectos. El valor va con clamp y nowrap: cinco
+// montos en fila no se pueden pisar entre sí en pantallas angostas.
+function KpiProyecto({
+  label,
+  value,
+  sub,
+  color,
+  tint,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  color?: string;
+  tint?: string;
+}) {
+  return (
+    <div className={cn("rounded-card border border-line bg-surface px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,.04)]", tint)}>
+      <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">{label}</p>
+      <p
+        className="mt-0.5 whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"
+        style={{ fontSize: "clamp(18px, 1.6vw, 24px)", ...(color ? { color } : {}) }}
+      >
+        {value}
+      </p>
+      {sub ? <p className="text-[11px] text-slate-500">{sub}</p> : null}
+    </div>
+  );
+}
+
 function ProfitBar({ income, cost }: { income: number; cost: number }) {
   // Sin actividad (0/0): barra vacía neutra — una barra verde llena parecía
   // "100% de margen" en un proyecto sin movimientos.
@@ -1417,6 +1526,10 @@ function ProjectRow({
   // fecha de cierre hace ver terminado lo que sigue corriendo. El cálculo del
   // rango igual la usa (necesita un intervalo); lo que cambia es lo que se lee.
   const sinFin = e.eff && !dates.endDate ? SIN_FIN[status] : undefined;
+  // Gasto en cero con cobro registrado en un proyecto vivo no es 100% de
+  // margen: es gasto sin cargar. Mostrar 100% invita a leer una ganancia que
+  // no existe, así que el margen dice s/d y la barra queda gris.
+  const faltaGasto = (e.gastoRango ?? p.cost ?? 0) === 0 && (e.enRango ?? p.income ?? 0) > 0 && status !== "cerrado";
   // `parcial`: el rango muestra solo una porción del proyecto. `prorrateado`:
   // además esa porción es una ESTIMACIÓN (repartida por días) y no lo que
   // QuickBooks reportó en esos meses — solo ahí corresponde el aviso.
@@ -1436,16 +1549,70 @@ function ProjectRow({
           </span>
         </td>
 
-        <td className="max-w-[150px] px-3 py-2.5 sm:max-w-[260px] xl:max-w-[380px]">
-          <div className="truncate font-medium text-slate-900" title={p.fullName}>
+        <td className="max-w-[150px] px-3 py-2.5 sm:max-w-[260px] xl:max-w-[320px]">
+          <div className="truncate font-semibold text-slate-900" title={p.fullName}>
             {p.name}
           </div>
-          <div className="mt-0.5 flex items-center gap-1 text-xs text-slate-500">
+          {/* En pantallas chicas Cliente no tiene columna, así que baja acá. */}
+          <div className="mt-0.5 flex items-center gap-1 text-xs text-slate-500 lg:hidden">
             <Building2 className="size-3 shrink-0 text-slate-400" />
-            <span className="truncate" title={p.clientName}>
-              {p.clientName || meta.label}
-            </span>
+            <span className="truncate">{p.clientName || meta.label}</span>
           </div>
+        </td>
+
+        <td className="hidden max-w-[170px] px-3 py-2.5 lg:table-cell">
+          <span className="block truncate text-slate-600" title={p.clientName}>
+            {p.clientName || "—"}
+          </span>
+        </td>
+
+        {/* Cotización de origen: el chip abre el panel para armarla; la flecha
+            lleva a verlas en Cotizaciones. Sin correlativo no hay con qué
+            vincular, así que queda el número editable a mano. */}
+        <td className="hidden whitespace-nowrap px-3 py-2.5 md:table-cell">
+          {codigo ? (
+            <span className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onTogglePickQuotes}
+                aria-expanded={pickingQuotes}
+                title={
+                  quotes
+                    ? `${quotes.count} cotización${quotes.count === 1 ? "" : "es"} · ${bal(quotes.amount)} cotizado — clic para agregar o quitar`
+                    : `Sin cotizaciones vinculadas a ${codigo} — clic para vincularlas`
+                }
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset transition-colors",
+                  quotes
+                    ? "bg-violet-50 text-violet-700 ring-violet-600/20 hover:bg-violet-100"
+                    : // Naranja: es una acción pendiente, no un dato faltante.
+                      "bg-orange-50 text-orange-700 ring-orange-600/20 hover:bg-orange-100",
+                  pickingQuotes && "ring-2 ring-violet-400",
+                )}
+              >
+                <FileText className="size-3" />
+                {quotes ? (
+                  <>
+                    {quotes.count}
+                    <span className="font-normal text-violet-500">· {bal(quotes.amount)}</span>
+                  </>
+                ) : (
+                  "Vincular cotización"
+                )}
+              </button>
+              {quotes ? (
+                <Link
+                  href={`/potenciales?q=${encodeURIComponent(codigo)}`}
+                  title={`Ver las cotizaciones de ${codigo} en Cotizaciones`}
+                  className="cursor-pointer rounded p-0.5 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <ArrowUpRight className="size-3.5" />
+                </Link>
+              ) : null}
+            </span>
+          ) : (
+            <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
+          )}
         </td>
 
         {/* Cobro. Con rango activo el número es el del rango; el total queda de
@@ -1480,7 +1647,16 @@ function ProjectRow({
         </td>
 
         <td className="w-28 whitespace-nowrap px-3 py-2.5 text-right">
-          {conDatos ? (
+          {!conDatos ? (
+            <span className="text-slate-300">—</span>
+          ) : faltaGasto ? (
+            <>
+              <div className="text-xs font-semibold text-orange-600" title="Falta cargar el gasto en QuickBooks">
+                s/d
+              </div>
+              <div className="mt-1 h-1.5 rounded-full bg-slate-200" />
+            </>
+          ) : (
             <>
               {p.margin !== null ? (
                 <div className={cn("text-xs font-semibold tabular-nums", marginTextColor(p.margin))}>{Math.round(p.margin * 100)}%</div>
@@ -1491,8 +1667,6 @@ function ProjectRow({
                 <ProfitBar income={cobro} cost={gasto} />
               </div>
             </>
-          ) : (
-            <span className="text-slate-300">—</span>
           )}
         </td>
 
@@ -1520,10 +1694,18 @@ function ProjectRow({
             title={sinFin?.title ?? FUENTE_TITULO[fuente]}
             className={cn(
               "cursor-pointer rounded px-1 py-0.5 text-xs hover:bg-slate-100",
-              sinFin ? "font-medium text-slate-500" : fuente === "asumido" ? "tabular-nums text-amber-700" : fuente === "manual" ? "font-medium tabular-nums text-slate-900" : "tabular-nums text-slate-600",
+              sinFin ? "" : fuente === "asumido" ? "tabular-nums text-amber-700" : fuente === "manual" ? "font-medium tabular-nums text-slate-900" : "tabular-nums text-slate-600",
             )}
           >
-            {!e.eff ? "—" : sinFin ? sinFin.label : `${fmtCorta(e.eff.end)}${fuente === "asumido" ? "*" : ""}`}
+            {!e.eff ? (
+              "—"
+            ) : sinFin ? (
+              <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset", sinFin.cls)}>
+                {sinFin.label}
+              </span>
+            ) : (
+              <span className="font-semibold">{`${fmtCorta(e.eff.end)}${fuente === "asumido" ? "*" : ""}`}</span>
+            )}
           </button>
         </td>
 
@@ -1534,52 +1716,6 @@ function ProjectRow({
         {/* Cotizaciones de origen. Un proyecto puede tener varias, así que el
             link lleva a Cotizaciones filtrado por el correlativo en vez de
             abrir una sola. Sin match, queda el número editable a mano. */}
-        {/* El chip abre el panel para armar la lista; la flecha va a verlas en
-            Cotizaciones. Sin correlativo no hay con qué vincular. */}
-        <td className="hidden whitespace-nowrap px-3 py-2.5 md:table-cell">
-          {codigo ? (
-            <span className="inline-flex items-center gap-1">
-              <button
-                type="button"
-                onClick={onTogglePickQuotes}
-                aria-expanded={pickingQuotes}
-                title={
-                  quotes
-                    ? `${quotes.count} cotización${quotes.count === 1 ? "" : "es"} · ${bal(quotes.amount)} cotizado — clic para agregar o quitar`
-                    : `Sin cotizaciones asignadas a ${codigo} — clic para agregarlas`
-                }
-                className={cn(
-                  "inline-flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset transition-colors",
-                  quotes
-                    ? "bg-violet-50 text-violet-700 ring-violet-600/20 hover:bg-violet-100"
-                    : "bg-slate-50 text-slate-400 ring-slate-200 hover:bg-slate-100 hover:text-slate-600",
-                  pickingQuotes && "ring-2 ring-violet-400",
-                )}
-              >
-                <FileText className="size-3" />
-                {quotes ? (
-                  <>
-                    {quotes.count}
-                    <span className="font-normal text-violet-500">· {bal(quotes.amount)}</span>
-                  </>
-                ) : (
-                  "Agregar"
-                )}
-              </button>
-              {quotes ? (
-                <Link
-                  href={`/potenciales?q=${encodeURIComponent(codigo)}`}
-                  title={`Ver las cotizaciones de ${codigo} en Cotizaciones`}
-                  className="cursor-pointer rounded p-0.5 text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                >
-                  <ArrowUpRight className="size-3.5" />
-                </Link>
-              ) : null}
-            </span>
-          ) : (
-            <CotizacionChip qbJobId={p.id} value={p.quoteNumber} />
-          )}
-        </td>
 
         <td className="px-3 py-2.5 text-right">
           <button
@@ -1599,14 +1735,14 @@ function ProjectRow({
       </tr>
       {editing ? (
         <tr className="border-b border-slate-50">
-          <td colSpan={10} className="px-3 pb-3">
+          <td colSpan={11} className="px-3 pb-3">
             <DatesEditor initial={dates} onSave={onSaveDates} onCancel={onToggleEdit} />
           </td>
         </tr>
       ) : null}
       {pickingQuotes && codigo ? (
         <tr className="border-b border-slate-50">
-          <td colSpan={10} className="px-3 pb-3">
+          <td colSpan={11} className="px-3 pb-3">
             <CotizacionesPicker codigo={codigo} onClose={onTogglePickQuotes} onChanged={onQuotesChanged} />
           </td>
         </tr>
