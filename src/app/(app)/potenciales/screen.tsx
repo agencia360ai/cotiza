@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   AlarmClock,
-  FileText,
   Gavel,
   Plus,
   Search,
@@ -207,7 +206,6 @@ function waLink(phone: string | null): string | null {
 // los KPIs de ambas pantallas cuadren). Ver src/lib/pipeline/revisions.ts.
 type QuoteGroup = { main: QuoteRow; older: QuoteRow[]; dupCount: number };
 
-type Tab = "cotizaciones" | "licitaciones";
 
 // La lista de proyectos la necesitan componentes anidados en las dos pestañas;
 // por contexto en vez de enhebrarla por props nivel a nivel.
@@ -227,35 +225,18 @@ export function PotencialesScreen({
   projectOptions?: ProjectOption[];
   initialQuery?: string;
 }) {
-  const [tab, setTab] = useState<Tab>("cotizaciones");
   const [quotes, setQuotes] = useState<QuoteRow[]>(quotesProp);
-  const [tenders, setTenders] = useState<TenderRow[]>(tendersProp);
 
   return (
     <ProjectOptionsCtx.Provider value={projectOptions}>
     <div className="min-h-full bg-slate-50/70">
     <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Cotizaciones y Licitaciones</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Lo que puede convertirse en negocio.
-        </p>
+        <h1 className="text-[21px] font-bold tracking-[-0.03em] text-slate-900">Cotizaciones</h1>
+        <p className="text-xs text-slate-500">Lo que se cotizó y todavía no es negocio</p>
       </header>
 
-      <div className="mb-6 flex gap-1 border-b border-slate-200">
-        <TabButton active={tab === "cotizaciones"} onClick={() => setTab("cotizaciones")} icon={FileText}>
-          Cotizaciones <span className="ml-1 text-xs text-slate-400">{quotes.length}</span>
-        </TabButton>
-        <TabButton active={tab === "licitaciones"} onClick={() => setTab("licitaciones")} icon={Gavel}>
-          Licitaciones <span className="ml-1 text-xs text-slate-400">{tenders.length}</span>
-        </TabButton>
-      </div>
-
-      {tab === "cotizaciones" ? (
-        <CotizacionesTab quotes={quotes} setQuotes={setQuotes} clients={clients} initialQuery={initialQuery} />
-      ) : (
-        <LicitacionesTab tenders={tenders} setTenders={setTenders} clients={clients} />
-      )}
+      <CotizacionesTab quotes={quotes} setQuotes={setQuotes} clients={clients} initialQuery={initialQuery} />
     </div>
     </div>
     </ProjectOptionsCtx.Provider>
@@ -1861,7 +1842,7 @@ function DescartarSeguimientoDialog({
 
 // ════════════════════════════════════ LICITACIONES ════════════════════════════
 
-function LicitacionesTab({
+export function LicitacionesTab({
   tenders,
   setTenders,
   clients,
@@ -3110,31 +3091,6 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  icon: Icon,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ComponentType<{ className?: string }>;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors",
-        active ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700",
-      )}
-    >
-      <Icon className="size-4" />
-      {children}
-    </button>
-  );
-}
 
 function Kpi({
   label,

@@ -62,7 +62,9 @@ export default async function InicioDashboard() {
       .from("tenders")
       .select("status, amount_ref_usd")
       .eq("org_id", orgId)
-      .in("status", ["ganada", "orden_proceder"]) as unknown as Promise<{
+      .in("status", ["ganada", "orden_proceder"])
+      // Archivadas fuera: son procesos que el equipo ocultó, no backlog por entrar.
+      .is("archived_at", null) as unknown as Promise<{
       data: { status: string; amount_ref_usd: number | null }[] | null;
     }>,
   ]);
