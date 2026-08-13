@@ -1,29 +1,20 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
-  AlarmClock,
-  ArrowRight,
-  Building2,
-  CalendarClock,
-  CheckCircle2,
-  ChevronRight,
-  Clock,
   Hammer,
   HeartPulse,
   Landmark,
-  Receipt,
-  TrendingUp,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgContext } from "@/lib/org-context";
-import { pipelineDerived, formatMoney, formatMoneyExact, type PipelineData } from "@/lib/pipeline/types";
+import { pipelineDerived, formatMoney, type PipelineData } from "@/lib/pipeline/types";
 import { getPipelineData } from "@/lib/pipeline/queries";
-import { groupRevisions } from "@/lib/pipeline/revisions";
 import { getMaintenanceSummary, colorForScore, type Maybe } from "@/lib/maintenance/summary";
+import { STATUS_COLOR, STATUS_LABEL_SHORT as STATUS_LABEL } from "@/lib/maintenance/types";
+import { LEAD_STATUS_LABEL, LEAD_STATUS_COLOR, type LeadStatus } from "@/lib/leads/types";
 import { getQboProjects } from "@/app/(app)/proyectos/qbo-actions";
 import type { QboProject } from "@/lib/quickbooks/projects";
-import { tamizScore, BANDA_META } from "@/lib/panamacompra/tamiz";
-import { MonthlyBarChart, RubroDonut, type MonthPoint, type DonutSlice } from "@/components/inicio/charts";
+import { CobroGastoChart, type MesCobroGasto } from "@/components/inicio/charts";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -36,49 +27,10 @@ const RUBRO_LABEL: Record<string, string> = { DC: "Contratos", DM: "Mantenimient
 
 // Sweet spot por defecto del tamiz (el de la página de licitaciones es
 // parametrizable por navegador; acá usamos el estándar DICEC).
-const SWEET_DEFAULT = { min: 20000, max: 250000 };
 
-type ProjectGridItem = {
-  id: string;
-  name: string;
-  status: string;
-  cover_photo_path: string | null;
-  client: Maybe<{ name: string }>;
-  location: Maybe<{ name: string }>;
-  milestones: { status: string }[];
-};
-type ProjectRow = ProjectGridItem & {
-  project_type: string;
-  expected_completion_date: string | null;
-  completed_at: string | null;
-};
 
-type QuoteYearRow = {
-  quote_number: string;
-  sent_date: string | null;
-  amount_usd: number | null;
-  rubro: string | null;
-  status: string;
-  follow_up_date: string | null;
-  client_name: string | null;
-};
 
-type GovUrgente = {
-  id: string;
-  num_proceso: string;
-  titulo: string | null;
-  entidad: string | null;
-  fecha_cierre: string;
-  precio_ref: number | null;
-};
 
-function relTimeEs(ts: number): string {
-  const m = Math.round((Date.now() - ts) / 60000);
-  if (m < 60) return `hace ${Math.max(1, m)} min`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `hace ${h} h`;
-  return `hace ${Math.round(h / 24)} d`;
-}
 
 export default async function InicioDashboard() {
   const supabase = await createClient();
@@ -95,76 +47,28 @@ export default async function InicioDashboard() {
   const focus = org?.focus ?? "mixed";
   const isProjects = focus === "projects";
   const year = new Date().getFullYear();
-  const nowIso = new Date().toISOString();
-  const in7dIso = new Date(Date.now() + 7 * 86400000).toISOString();
 
-  const [{ data: projectsData }, pipeline, maint, { data: quotesYear }, qbo, { data: govData }] = await Promise.all([
-    supabase
-      .from("client_projects")
-      .select(
-        "id, name, project_type, status, cover_photo_path, expected_completion_date, completed_at, client:clients(name), location:client_locations(name), milestones:project_milestones(status)",
-      )
-      .eq("org_id", orgId)
-      .order("updated_at", { ascending: false })
-      .limit(50) as unknown as Promise<{ data: ProjectRow[] | null }>,
+  const [pipeline, maint, qbo, { data: leadsData }, { data: adjudicadas }] = await Promise.all([
     isProjects ? Promise.resolve<PipelineData | null>(null) : getPipelineData(orgId, year),
     isProjects ? Promise.resolve(null) : getMaintenanceSummary(orgId),
-    supabase
-      .from("sales_quotes")
-      .select("quote_number, sent_date, amount_usd, rubro, status, follow_up_date, client_name")
-      .eq("org_id", orgId)
-      .eq("year", year) as unknown as Promise<{ data: QuoteYearRow[] | null }>,
     // Finanzas QBO desde la base (cero llamadas a QuickBooks al abrir).
     getQboProjects().catch(() => ({ ok: false as const, error: "" })),
-    // Licitaciones relevantes que cierran en los próximos 7 días (select angosto:
-    // sin las columnas JSONB pesadas).
+    supabase.from("leads").select("status").eq("org_id", orgId) as unknown as Promise<{
+      data: { status: LeadStatus }[] | null;
+    }>,
+    // Adjudicado: ganadas + orden de proceder. Backlog firmado que todavía NO
+    // entró como cobro, por eso va aparte de los KPIs de QuickBooks.
     supabase
-      .from("gov_tenders")
-      .select("id, num_proceso, titulo, entidad, fecha_cierre, precio_ref")
+      .from("tenders")
+      .select("status, amount_ref_usd")
       .eq("org_id", orgId)
-      .eq("relevante", true)
-      .gte("fecha_cierre", nowIso)
-      .lte("fecha_cierre", in7dIso)
-      .order("fecha_cierre", { ascending: true })
-      .limit(6) as unknown as Promise<{ data: GovUrgente[] | null }>,
+      .in("status", ["ganada", "orden_proceder"]) as unknown as Promise<{
+      data: { status: string; amount_ref_usd: number | null }[] | null;
+    }>,
   ]);
-  const allProjects = (projectsData ?? []) as ProjectRow[];
 
-  // Series de los charts: borradores fuera ANTES de agrupar (un borrador con nº
-  // de revisión no debe esconder la rev publicada), luego solo la vigente de
-  // cada base — misma lógica que la página de Cotizaciones.
-  const vigentesYear = groupRevisions((quotesYear ?? []).filter((q) => q.status !== "borrador")).map((g) => g.main);
-  const months: MonthPoint[] = Array.from({ length: 12 }, (_, m) => ({ month: m, monto: 0, count: 0 }));
-  const rubroCount = new Map<string, number>();
-  for (const q of vigentesYear) {
-    if (q.sent_date) {
-      const m = Number(q.sent_date.slice(5, 7)) - 1;
-      if (m >= 0 && m < 12) {
-        months[m].monto += Number(q.amount_usd) || 0;
-        months[m].count += 1;
-      }
-    }
-    if (q.rubro) rubroCount.set(q.rubro, (rubroCount.get(q.rubro) ?? 0) + 1);
-  }
-  const donutSlices: DonutSlice[] = (["DC", "DM", "DS", "DV"] as const).map((k) => ({
-    key: k,
-    label: RUBRO_LABEL[k],
-    color: DONUT_COLORS[k],
-    value: rubroCount.get(k) ?? 0,
-  }));
-
-  // Seguimientos de cotizaciones enviadas: vencidos o dentro de 7 días.
-  const hoy = nowIso.slice(0, 10);
-  const en7d = in7dIso.slice(0, 10);
-  const followUps = vigentesYear
-    .filter((q) => q.status === "enviada" && q.follow_up_date && q.follow_up_date <= en7d)
-    .sort((a, b) => (a.follow_up_date! < b.follow_up_date! ? -1 : 1))
-    .slice(0, 5);
-
-  // Licitaciones urgentes con score del tamiz (server-side, sweet spot estándar).
-  const govUrgentes = (govData ?? []).map((g) => ({ ...g, tamiz: tamizScore(g.titulo, g.precio_ref, SWEET_DEFAULT) }));
-
-  // Finanzas QBO del año (números ya persistidos por "Actualizar" en Proyectos).
+  // Finanzas QBO del año (los números ya persistidos por "Actualizar" en
+  // Proyectos: abrir Inicio no llama a QuickBooks).
   const qboProjects: QboProject[] = qbo.ok ? qbo.projects : [];
   const qboSyncedAt = qbo.ok ? qbo.syncedAt : null;
   const conNumeros = qboProjects.filter((p) => p.income !== null || p.cost !== null);
@@ -173,433 +77,503 @@ export default async function InicioDashboard() {
   const margenGlobal = ingresos > 0 ? (ingresos - costos) / ingresos : null;
   const porCobrar = qboProjects.filter((p) => p.status === "por_cobrar");
   const porCobrarMonto = porCobrar.reduce((a, p) => a + (p.income ?? 0), 0);
-  const topProyectos = [...conNumeros].sort((a, b) => (b.income ?? 0) - (a.income ?? 0)).slice(0, 5);
-  const maxIncome = Math.max(1, ...topProyectos.map((p) => p.income ?? 0));
-
-  const activeProjects = allProjects.filter((p) => p.status !== "aceptado");
-  const inProgress = allProjects.filter((p) => p.status === "en_progreso");
-  // Proyectos totales del año (QBO, abiertos), no solo los del tracking detallado
-  // (que es opcional). Si no hay data de QBO, caemos a los del tracking.
+  const topProyectos = [...conNumeros].sort((a, b) => (b.income ?? 0) - (a.income ?? 0)).slice(0, 6);
   const qboOpen = qboProjects.filter((p) => !p.closed).length;
-  const proyectosActivos = qboOpen > 0 ? qboOpen : activeProjects.length;
+
+  // Serie mensual del año: se suma el desglose que QuickBooks ya reportó por
+  // proyecto. Los cerrados con números congelados no aportan meses, así que la
+  // serie puede quedar por debajo del total — la tarjeta dice cuántos aportan.
+  const serie: MesCobroGasto[] = Array.from({ length: 12 }, (_, m) => ({ mes: m, cobro: 0, gasto: 0 }));
+  let conDesglose = 0;
+  for (const p of qboProjects) {
+    if (p.meses.length > 0) conDesglose += 1;
+    for (const m of p.meses) {
+      if (Number(m.month.slice(0, 4)) !== year) continue;
+      const i = Number(m.month.slice(5, 7)) - 1;
+      if (i < 0 || i > 11) continue;
+      serie[i].cobro += m.income;
+      serie[i].gasto += m.cost;
+    }
+  }
+  const mesActual = Number(new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }).slice(5, 7)) - 1;
+
+  // Margen por rubro: dónde se factura vs. dónde efectivamente se gana.
+  const porRubro = (["DC", "DM", "DS", "DV"] as const).map((k) => {
+    const ps = qboProjects.filter((p) => p.rubro === k);
+    const cobro = ps.reduce((a, p) => a + (p.income ?? 0), 0);
+    const gasto = ps.reduce((a, p) => a + (p.cost ?? 0), 0);
+    return {
+      key: k,
+      label: RUBRO_LABEL[k],
+      color: DONUT_COLORS[k],
+      count: ps.length,
+      cobro,
+      margen: cobro > 0 ? (cobro - gasto) / cobro : null,
+    };
+  });
+
+  const maxRubro = Math.max(1, ...porRubro.map((r) => r.cobro));
+
+  // Embudo de leads por etapa. El orden es el del recorrido comercial, no el
+  // alfabético: se lee como un embudo o no se lee.
+  const ETAPAS: LeadStatus[] = ["nuevo", "contactado", "en_seguimiento", "cotizado", "ganado"];
+  const leadsVivos = (leadsData ?? []).filter((l) => l.status !== "perdido");
+  const leadsTotal = leadsVivos.length;
+  const embudo = ETAPAS.map((k) => ({
+    key: k,
+    label: LEAD_STATUS_LABEL[k],
+    color: LEAD_STATUS_COLOR[k],
+    n: leadsVivos.filter((l) => l.status === k).length,
+  }));
+
+  const adjudicado = (adjudicadas ?? []).reduce((a, t) => a + (t.amount_ref_usd ?? 0), 0);
+  const nGanadas = (adjudicadas ?? []).filter((t) => t.status === "ganada").length;
+  const nOrden = (adjudicadas ?? []).filter((t) => t.status === "orden_proceder").length;
+
   const d = pipeline ? pipelineDerived(pipeline) : null;
-  const alertas = maint ? maint.globalCounts.atencion + maint.globalCounts.critico : 0;
 
   return (
-    <div className="min-h-full bg-slate-50/70">
-      <div className="max-w-7xl px-4 py-6 md:px-10 md:py-8">
-        <header className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Resumen del negocio</h1>
-          <p className="mt-1 text-sm text-slate-500">Lo importante de hoy, de un vistazo.</p>
-        </header>
+    <div className="min-h-full bg-canvas">
+      {/* Header sticky del handoff: el título viaja con el scroll porque estas
+          pantallas son largas y uno pierde de vista dónde está. */}
+      <header className="sticky top-0 z-20 border-b border-line bg-canvas/90 px-4 py-4 backdrop-blur md:px-8">
+        <h1 className="text-[21px] font-bold tracking-[-0.03em] text-slate-900">Resumen del negocio</h1>
+        <p className="text-xs text-slate-500">
+          Proyectos primero
+          {qboSyncedAt ? ` · QuickBooks actualizado ${haceCuanto(qboSyncedAt)}` : " · QuickBooks todavía sin sincronizar"}
+        </p>
+      </header>
 
-        {/* KPI tiles */}
-        <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {d ? (
-            <>
-              <KpiTile
-                label={`En juego · ${year}`}
-                value={formatMoney(d.enviadaMonto)}
-                sub={
-                  d.licitacionesVivasMonto > 0
-                    ? `${d.enviadaCount} enviadas · ${formatMoney(d.licitacionesVivasMonto)} en licitaciones`
-                    : `${d.enviadaCount} enviadas sin cerrar`
-                }
-                icon={Clock}
-                accent="#F59E0B"
-                href="/potenciales"
-              />
-              <KpiTile
-                label={`Aprobado · ${year}`}
-                value={formatMoney(d.aprobadoMonto)}
-                sub={`${d.aprobadoCount} cotizaciones vigentes`}
-                icon={CheckCircle2}
-                accent="#10B981"
-                href="/potenciales"
-              />
-            </>
-          ) : null}
-          <KpiTile
-            label="Proyectos activos"
-            value={String(proyectosActivos)}
-            sub={
-              porCobrar.length > 0
-                ? `${porCobrar.length} por cobrar · ${formatMoney(porCobrarMonto)}`
-                : qboOpen > 0
-                  ? `${inProgress.length} con tracking detallado`
-                  : `${inProgress.length} en progreso`
-            }
-            icon={Hammer}
-            accent="#2563EB"
-            href="/proyectos"
-          />
-          {maint ? (
-            <KpiTile
-              label="Salud mantenimiento"
-              value={`${maint.globalHealth}%`}
-              sub={alertas > 0 ? `${alertas} alerta${alertas === 1 ? "" : "s"}` : "todo operativo"}
-              icon={HeartPulse}
-              accent={colorForScore(maint.globalHealth)}
-              href="/mantenimiento"
-            />
-          ) : null}
-        </section>
+      <div className="max-w-[1400px] px-4 py-6 md:px-8">
+        <section className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+          {/* Tarjeta héroe: el negocio del año en una sola lectura. */}
+          <div className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+            <div className="flex flex-wrap items-center gap-3 border-b border-line-soft px-5 py-4">
+              <span className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
+                <Hammer className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-[13px] font-bold text-slate-900">Proyectos · {year}</h2>
+                <p className="text-[11px] text-slate-500">
+                  {qboProjects.length} proyectos en el año · {qboOpen} abiertos · {conDesglose} con desglose mensual
+                </p>
+              </div>
+              <Link
+                href="/proyectos"
+                className="shrink-0 whitespace-nowrap text-xs font-semibold text-blue-600 hover:text-blue-700"
+              >
+                Ver proyectos →
+              </Link>
+            </div>
 
-        {/* Hoy: finanzas QBO + lo que vence esta semana */}
-        <section className="mb-6 grid gap-3 lg:grid-cols-3">
-          <QboFinanzas
-            year={year}
-            hayData={conNumeros.length > 0}
-            ingresos={ingresos}
-            costos={costos}
-            margen={margenGlobal}
-            porCobrarCount={porCobrar.length}
-            porCobrarMonto={porCobrarMonto}
-            top={topProyectos}
-            maxIncome={maxIncome}
-            syncedAt={qboSyncedAt}
-          />
-          <div className="space-y-3">
-            <GovUrgentesCard rows={govUrgentes} />
-            {followUps.length > 0 ? <FollowUpsCard rows={followUps} hoy={hoy} /> : null}
+            <div className="grid grid-cols-2 sm:grid-cols-4">
+              <HeroKpi label="Cobro" value={formatMoney(ingresos)} sub="facturado del año" />
+              <HeroKpi label="Gasto" value={formatMoney(costos)} sub="costo registrado" />
+              <HeroKpi
+                label="Margen"
+                value={margenGlobal !== null ? `${Math.round(margenGlobal * 100)}%` : "s/d"}
+                sub={`${formatMoney(ingresos - costos)} utilidad`}
+                tint="bg-[#F8FDFB]"
+                color="#059669"
+              />
+              <HeroKpi
+                label="Por cobrar"
+                value={formatMoney(porCobrarMonto)}
+                sub={`${porCobrar.length} pendiente${porCobrar.length === 1 ? "" : "s"}`}
+                color="#B45309"
+                sinBorde
+              />
+            </div>
+
+            <div className="border-t border-line-soft px-5 py-4">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">Cobro vs. gasto por mes</h3>
+                <div className="flex shrink-0 items-center gap-3 text-[11px] text-slate-500">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="size-2 rounded-full bg-[#1E293B]" /> Cobro
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="size-2 rounded-full bg-[#F43F5E]" /> Gasto
+                  </span>
+                </div>
+              </div>
+              <CobroGastoChart data={serie} hastaMes={mesActual} />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            {/* Margen por rubro: dónde se factura vs. dónde se gana. */}
+            <div className="rounded-card border border-line bg-surface p-5 shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-[13px] font-bold text-slate-900">Margen por rubro</h2>
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">
+                  Cobro · Margen
+                </span>
+              </div>
+              <div className="space-y-2.5">
+                {porRubro.map((r) => (
+                  <div key={r.key}>
+                    <div className="flex items-center justify-between gap-2 text-[12px]">
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                        <span className="size-2 shrink-0 rounded-sm" style={{ backgroundColor: r.color }} />
+                        <span className="truncate font-semibold text-slate-800">{r.label}</span>
+                        <span className="shrink-0 text-slate-400">· {r.count}</span>
+                      </span>
+                      <span className="shrink-0 whitespace-nowrap tabular-nums">
+                        <span className="font-bold text-slate-900">{formatMoney(r.cobro)}</span>
+                        <span className={cn("ml-1 font-semibold", r.margen !== null && r.margen < 0.2 ? "text-amber-600" : "text-emerald-600")}>
+                          · {r.margen !== null ? `${Math.round(r.margen * 100)}%` : "s/d"}
+                        </span>
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${Math.round((r.cobro / maxRubro) * 100)}%`, backgroundColor: r.color }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Adjudicado: firmado pero todavía sin facturar. Va aparte de los
+                KPIs de arriba a propósito — sumarlo al cobro sería mentir. */}
+            <div className="rounded-card border border-line bg-surface p-5 shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+              <div className="mb-3 flex items-center gap-2.5">
+                <span className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
+                  <Landmark className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="text-[13px] font-bold text-slate-900">Adjudicado por entrar</h2>
+                  <p className="text-[11px] text-slate-500">Licitaciones ganadas + orden de proceder</p>
+                </div>
+              </div>
+              <p className="text-[26px] font-bold tracking-[-0.03em] tabular-nums text-slate-900">{formatMoney(adjudicado)}</p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-surface-muted px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">Ganadas</p>
+                  <p className="text-lg font-bold tabular-nums text-emerald-600">{nGanadas}</p>
+                </div>
+                <div className="rounded-lg bg-surface-muted px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">Orden proceder</p>
+                  <p className="text-lg font-bold tabular-nums text-blue-600">{nOrden}</p>
+                </div>
+              </div>
+              <p className="mt-3 text-[11px] text-slate-500">
+                Backlog listo para convertirse en proyecto — no cuenta como cobro todavía.
+              </p>
+            </div>
           </div>
         </section>
 
-        {/* Charts */}
-        {pipeline ? (
-          <section className="mb-6 grid gap-3 lg:grid-cols-3">
-            <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm lg:col-span-2">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-slate-900">
-                  Cotizaciones por mes <span className="font-normal text-slate-400">· {year}</span>
-                </h2>
-                <Link href="/potenciales" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
-                  Ver todas <ArrowRight className="size-3" />
-                </Link>
-              </div>
-              <MonthlyBarChart data={months} year={year} />
+        {/* Los proyectos que explican el año. */}
+        <section className="mb-4 rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-5 py-4">
+            <div className="min-w-0">
+              <h2 className="text-[13px] font-bold text-slate-900">Proyectos que mueven el año</h2>
+              <p className="text-[11px] text-slate-500">Ordenados por cobro · margen calculado con el gasto de QuickBooks</p>
             </div>
-            <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-              <h2 className="mb-3 text-sm font-semibold text-slate-900">
-                Por rubro <span className="font-normal text-slate-400">· {year}</span>
-              </h2>
-              <RubroDonut slices={donutSlices} title={`Distribución por rubro ${year}`} />
+            <Link href="/proyectos" className="shrink-0 whitespace-nowrap text-xs font-semibold text-blue-600 hover:text-blue-700">
+              Ver los {qboProjects.length} →
+            </Link>
+          </div>
+          {topProyectos.length === 0 ? (
+            <p className="px-5 py-10 text-center text-sm text-slate-500">
+              Todavía no hay números de QuickBooks. Entrá a Proyectos y tocá Actualizar.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-[13px]">
+                <thead>
+                  <tr className="border-b border-line-soft text-left text-[10px] uppercase tracking-[0.09em] text-slate-500">
+                    <th className="px-5 py-2.5 font-bold">Proyecto</th>
+                    <th className="px-3 py-2.5 font-bold">Cliente</th>
+                    <th className="px-3 py-2.5 text-right font-bold">Cobro</th>
+                    <th className="px-3 py-2.5 text-right font-bold">Gasto</th>
+                    <th className="px-3 py-2.5 font-bold">Margen</th>
+                    <th className="px-5 py-2.5 font-bold">Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topProyectos.map((p) => {
+                    const m = p.margin;
+                    const sinGasto = (p.cost ?? 0) === 0 && (p.income ?? 0) > 0 && p.status !== "cerrado";
+                    return (
+                      <tr key={p.id} className="border-b border-row last:border-0 hover:bg-row-hover">
+                        <td className="max-w-[260px] px-5 py-3">
+                          <span className="block truncate font-semibold text-slate-900" title={p.name}>
+                            {p.name}
+                          </span>
+                        </td>
+                        <td className="max-w-[160px] px-3 py-3">
+                          <span className="block truncate text-slate-600">{p.clientName || "—"}</span>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-3 text-right font-bold tabular-nums text-slate-900">
+                          {formatMoney(p.income ?? 0)}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums text-slate-600">
+                          {formatMoney(p.cost ?? 0)}
+                        </td>
+                        <td className="px-3 py-3">
+                          {/* Gasto en cero en un proyecto vivo no es 100% de margen:
+                              es gasto sin cargar. Decirlo evita leer una ganancia
+                              que no existe. */}
+                          {sinGasto ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="h-1.5 w-16 rounded-full bg-slate-200" />
+                              <span className="text-[11px] font-semibold text-orange-600">s/d</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                                <span
+                                  className="block h-full rounded-full"
+                                  style={{
+                                    width: `${Math.max(0, Math.min(100, Math.round((m ?? 0) * 100)))}%`,
+                                    backgroundColor: (m ?? 0) >= 0.3 ? "#10B981" : (m ?? 0) >= 0.15 ? "#F59E0B" : "#EF4444",
+                                  }}
+                                />
+                              </span>
+                              <span className="text-[11px] font-bold tabular-nums text-slate-700">
+                                {m !== null ? `${Math.round(m * 100)}%` : "s/d"}
+                              </span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3">
+                          <EstadoChip status={p.status} sinGasto={sinGasto} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* Mantenimiento: tira compacta. Es un pilar del negocio pero no el
+            titular de esta pantalla, así que ocupa una fila y no una sección. */}
+        {maint ? (
+          <section className="mb-4 rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-5 py-4">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                  <HeartPulse className="size-4" />
+                </span>
+                <h2 className="text-[13px] font-bold text-slate-900">
+                  Mantenimiento
+                  <span className="ml-1 font-normal text-slate-500">
+                    · {maint.totalEquipment} equipos en {maint.totalLocations} sucursales
+                  </span>
+                </h2>
+              </div>
+              <Link href="/mantenimiento" className="shrink-0 whitespace-nowrap text-xs font-semibold text-blue-600 hover:text-blue-700">
+                Ir a mantenimiento →
+              </Link>
+            </div>
+            <div className="grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]">
+              <div>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">Distribución de estados</p>
+                  <p className="shrink-0 text-[12px] font-bold tabular-nums" style={{ color: colorForScore(maint.globalHealth) }}>
+                    {maint.globalHealth}% salud global
+                  </p>
+                </div>
+                <div className="flex h-2 overflow-hidden rounded-full bg-slate-100">
+                  {(Object.keys(maint.globalCounts) as (keyof typeof maint.globalCounts)[]).map((k) => {
+                    const n = maint.globalCounts[k];
+                    if (!n) return null;
+                    return (
+                      <span
+                        key={k}
+                        className="h-full"
+                        style={{ width: `${(n / Math.max(1, maint.totalEquipment)) * 100}%`, backgroundColor: STATUS_COLOR[k] }}
+                        title={`${STATUS_LABEL[k]}: ${n}`}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                  {(Object.keys(maint.globalCounts) as (keyof typeof maint.globalCounts)[]).map((k) =>
+                    maint.globalCounts[k] ? (
+                      <span key={k} className="inline-flex items-center gap-1">
+                        <span className="size-2 rounded-sm" style={{ backgroundColor: STATUS_COLOR[k] }} />
+                        {STATUS_LABEL[k]} <span className="font-bold tabular-nums text-slate-700">{maint.globalCounts[k]}</span>
+                      </span>
+                    ) : null,
+                  )}
+                </div>
+              </div>
+              <MiniStat label="Vencidos" value={maint.overdueSchedules.length} tono={maint.overdueSchedules.length > 0 ? "rojo" : undefined} sub={`${maint.thisWeekSchedules.length} esta semana`} />
+              <MiniStat label="Requieren acción" value={maint.globalCounts.atencion + maint.globalCounts.critico} tono="ambar" sub="equipos en aviso" />
+              <MiniStat label="Reportes" value={maint.reports.length} sub={`${maint.draftReportsCount} en borrador`} />
             </div>
           </section>
         ) : null}
 
-        {/* Pilares: Mantenimiento + Clientes */}
-        <section className="grid gap-3 sm:grid-cols-2">
-          {maint ? (
-            <Link
-              href="/mantenimiento"
-              className="group cursor-pointer rounded-2xl border border-slate-100 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
-            >
-              <div className="mb-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="flex size-9 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                    <HeartPulse className="size-4" />
-                  </span>
-                  <h2 className="text-sm font-semibold text-slate-900">Mantenimiento</h2>
+        {/* Potencial: explícitamente en segundo plano. Es plata que TODAVÍA no
+            es plata, y mezclarla con lo facturado es como se infla un año. */}
+        {d ? (
+          <section>
+            <h2 className="mb-2 text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">
+              Potencial · todavía no es negocio
+            </h2>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-card border border-line bg-surface p-5 shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h3 className="text-[13px] font-bold text-slate-900">
+                    Leads <span className="font-normal text-slate-500">· {leadsTotal} activos</span>
+                  </h3>
+                  <Link href="/leads" className="shrink-0 whitespace-nowrap text-xs font-semibold text-blue-600 hover:text-blue-700">
+                    Ver leads →
+                  </Link>
                 </div>
-                <ChevronRight className="size-4 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500" />
+                {leadsTotal === 0 ? (
+                  <p className="py-4 text-center text-[12px] text-slate-500">Sin leads activos.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {embudo.map((e) => (
+                      <div key={e.key} className="flex items-center gap-2">
+                        <span className="w-28 shrink-0 truncate text-[12px] text-slate-600">{e.label}</span>
+                        <span className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                          <span
+                            className="block h-full rounded-full"
+                            style={{ width: `${Math.round((e.n / Math.max(1, leadsTotal)) * 100)}%`, backgroundColor: e.color }}
+                          />
+                        </span>
+                        <span className="w-8 shrink-0 text-right text-[12px] font-bold tabular-nums text-slate-800">{e.n}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <MiniStat label="Equipos" value={maint.totalEquipment} sub={`${maint.totalLocations} sucursales`} />
-                <MiniStat label="Salud" value={`${maint.globalHealth}%`} sub={`${maint.globalCounts.operativo} operativos`} color={colorForScore(maint.globalHealth)} />
-                <MiniStat
-                  label="Alertas"
-                  value={alertas}
-                  sub={maint.globalCounts.critico > 0 ? `${maint.globalCounts.critico} crítico${maint.globalCounts.critico === 1 ? "" : "s"}` : "atención/crítico"}
-                  color={maint.globalCounts.critico > 0 ? "#EF4444" : alertas > 0 ? "#F59E0B" : "#10B981"}
-                />
-                <MiniStat
-                  label="Vencidos"
-                  value={maint.overdueSchedules.length}
-                  sub={`${maint.thisWeekSchedules.length} esta semana`}
-                  color={maint.overdueSchedules.length > 0 ? "#EF4444" : "#10B981"}
-                />
-              </div>
-            </Link>
-          ) : null}
 
-          <Link
-            href="/clientes"
-            className="group cursor-pointer rounded-2xl border border-slate-100 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="flex size-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-                  <Building2 className="size-4" />
-                </span>
-                <h2 className="text-sm font-semibold text-slate-900">Clientes</h2>
+              <div className="rounded-card border border-line bg-surface p-5 shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h3 className="text-[13px] font-bold text-slate-900">
+                    Cotizaciones <span className="font-normal text-slate-500">· {year}</span>
+                  </h3>
+                  <Link href="/potenciales" className="shrink-0 whitespace-nowrap text-xs font-semibold text-blue-600 hover:text-blue-700">
+                    Ver cotizaciones →
+                  </Link>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <MiniStat label="En juego" value={formatMoney(d.enviadaMonto)} sub={`${d.enviadaCount} enviadas`} tono="ambar" />
+                  <MiniStat label="Aprobadas" value={formatMoney(d.aprobadoMonto)} sub={`${d.aprobadoCount} vigentes`} tono="verde" />
+                  <MiniStat
+                    label="Tasa de cierre"
+                    value={d.tasaCierre !== null ? `${Math.round(d.tasaCierre * 100)}%` : "s/d"}
+                    sub="aprobadas / decididas"
+                  />
+                </div>
               </div>
-              <ChevronRight className="size-4 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500" />
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <MiniStat label="Cartera" value={maint ? maint.clients.length : "—"} sub="clientes" />
-              <MiniStat label="Sucursales" value={maint ? maint.totalLocations : "—"} sub="ubicaciones" />
-            </div>
-          </Link>
-        </section>
+          </section>
+        ) : null}
       </div>
     </div>
   );
 }
 
 // ── Finanzas de proyectos (QBO) ───────────────────────────────────────────────
-function margenMeta(m: number | null): { txt: string; cls: string } {
-  if (m === null) return { txt: "—", cls: "text-slate-400" };
-  const pct = Math.round(m * 100);
-  if (pct >= 25) return { txt: `${pct}%`, cls: "text-emerald-700" };
-  if (pct >= 10) return { txt: `${pct}%`, cls: "text-amber-700" };
-  return { txt: `${pct}%`, cls: "text-rose-700" };
-}
-
-function QboFinanzas({
-  year,
-  hayData,
-  ingresos,
-  costos,
-  margen,
-  porCobrarCount,
-  porCobrarMonto,
-  top,
-  maxIncome,
-  syncedAt,
-}: {
-  year: number;
-  hayData: boolean;
-  ingresos: number;
-  costos: number;
-  margen: number | null;
-  porCobrarCount: number;
-  porCobrarMonto: number;
-  top: QboProject[];
-  maxIncome: number;
-  syncedAt: number | null;
-}) {
-  const mg = margenMeta(margen);
-  return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm lg:col-span-2">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-            <TrendingUp className="size-4" />
-          </span>
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900">
-              Finanzas de proyectos <span className="font-normal text-slate-400">· {year}</span>
-            </h2>
-            <p className="text-[11px] text-slate-400">
-              QuickBooks{syncedAt ? ` · actualizado ${relTimeEs(syncedAt)}` : ""}
-            </p>
-          </div>
-        </div>
-        <Link href="/proyectos" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
-          Ver proyectos <ArrowRight className="size-3" />
-        </Link>
-      </div>
-
-      {!hayData ? (
-        <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-          Todavía no hay números de QuickBooks para {year}. Ve a <span className="font-semibold">Proyectos</span> y toca
-          &ldquo;Actualizar&rdquo; para traerlos.
-        </p>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <MiniStat label="Ingresos" value={formatMoney(ingresos)} sub="facturado del año" color="#059669" />
-            <MiniStat label="Costos" value={formatMoney(costos)} sub="gastos registrados" color="#475569" />
-            <MiniStat label="Margen" value={mg.txt} sub={margen !== null ? formatMoney(ingresos - costos) : "sin datos"} color={margen !== null ? (margen >= 0.25 ? "#059669" : margen >= 0.1 ? "#B45309" : "#BE123C") : undefined} />
-            <MiniStat
-              label="Por cobrar"
-              value={porCobrarCount}
-              sub={porCobrarCount > 0 ? `${formatMoney(porCobrarMonto)} pendiente` : "nada pendiente"}
-              color={porCobrarCount > 0 ? "#B45309" : "#10B981"}
-            />
-          </div>
-
-          {top.length > 0 ? (
-            <div className="mt-4">
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                Top proyectos por ingreso
-              </p>
-              <ul className="space-y-2">
-                {top.map((p) => {
-                  const m = margenMeta(p.margin);
-                  const w = Math.max(2, Math.round(((p.income ?? 0) / maxIncome) * 100));
-                  return (
-                    <li key={p.id}>
-                      <div className="flex items-baseline justify-between gap-3">
-                        <p className="min-w-0 truncate text-xs font-medium text-slate-700">
-                          {p.name}
-                          {p.clientName ? <span className="font-normal text-slate-400"> · {p.clientName}</span> : null}
-                        </p>
-                        <p className="shrink-0 text-xs tabular-nums text-slate-500">
-                          <span className={cn("mr-2 font-semibold", m.cls)}>{m.txt}</span>
-                          <span className="font-semibold text-slate-900">{formatMoney(p.income ?? 0)}</span>
-                        </p>
-                      </div>
-                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${w}%` }} />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : null}
-        </>
-      )}
-    </div>
-  );
-}
 
 // ── Licitaciones que cierran esta semana ──────────────────────────────────────
-function GovUrgentesCard({
-  rows,
-}: {
-  rows: (GovUrgente & { tamiz: ReturnType<typeof tamizScore> })[];
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
-            <Landmark className="size-4" />
-          </span>
-          <h2 className="text-sm font-semibold text-slate-900">Licitaciones por cerrar</h2>
-        </div>
-        <Link href="/potenciales" className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700">
-          Ver <ArrowRight className="size-3" />
-        </Link>
-      </div>
-      {rows.length === 0 ? (
-        <p className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-4 text-xs text-slate-500">
-          <CheckCircle2 className="size-4 shrink-0 text-emerald-500" /> Ninguna relevante cierra en los próximos 7 días.
-        </p>
-      ) : (
-        <ul className="space-y-2">
-          {rows.map((g) => {
-            const dias = Math.ceil((+new Date(g.fecha_cierre) - Date.now()) / 86400000);
-            const banda = BANDA_META[g.tamiz.banda];
-            return (
-              <li key={g.id} className="rounded-xl bg-slate-50 p-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span
-                    className={cn(
-                      "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ring-inset",
-                      dias <= 2 ? "bg-red-50 text-red-700 ring-red-600/20" : "bg-amber-50 text-amber-700 ring-amber-600/20",
-                    )}
-                  >
-                    <AlarmClock className="size-3" />
-                    {dias <= 0 ? "cierra hoy" : `en ${dias} d`}
-                  </span>
-                  <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", banda.chip)}>
-                    {g.tamiz.score} · {banda.corto}
-                  </span>
-                </div>
-                <p className="mt-1.5 text-xs font-medium leading-snug text-slate-800 line-clamp-2">{g.titulo ?? g.num_proceso}</p>
-                <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                  <span className="truncate">{g.entidad ?? "—"}</span>
-                  <span className="shrink-0 font-semibold tabular-nums text-slate-700">
-                    {g.precio_ref !== null ? formatMoneyExact(g.precio_ref) : "—"}
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 // ── Seguimientos de cotizaciones enviadas ─────────────────────────────────────
-function FollowUpsCard({ rows, hoy }: { rows: QuoteYearRow[]; hoy: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="flex size-9 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-          <CalendarClock className="size-4" />
-        </span>
-        <h2 className="text-sm font-semibold text-slate-900">Seguimientos</h2>
-      </div>
-      <ul className="space-y-1.5">
-        {rows.map((q) => {
-          const vencido = q.follow_up_date! < hoy;
-          return (
-            <li key={q.quote_number} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-medium text-slate-800">{q.client_name ?? q.quote_number}</p>
-                <p className="text-[11px] tabular-nums text-slate-400">{q.quote_number}</p>
-              </div>
-              <span
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ring-inset",
-                  vencido ? "bg-red-50 text-red-700 ring-red-600/20" : "bg-amber-50 text-amber-700 ring-amber-600/20",
-                )}
-              >
-                <Receipt className="size-3" />
-                {vencido ? "vencido" : q.follow_up_date!.slice(5)}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-      <Link
-        href="/potenciales"
-        className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700"
-      >
-        Ir a cotizaciones <ArrowRight className="size-3" />
-      </Link>
-    </div>
-  );
+// Cuánto hace que se sincronizó QBO, en palabras. El dato importa: un número
+// de hace tres días se lee distinto que uno de hace tres minutos.
+function haceCuanto(ts: number): string {
+  const min = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (min < 1) return "recién";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const d = Math.round(h / 24);
+  return `hace ${d} día${d === 1 ? "" : "s"}`;
 }
 
-function KpiTile({
+// KPI de la tarjeta héroe. El valor usa clamp + nowrap por el checklist del
+// handoff: cuatro montos en fila no se pueden pisar entre sí.
+function HeroKpi({
   label,
   value,
   sub,
-  icon: Icon,
-  accent,
-  href,
+  tint,
+  color,
+  sinBorde,
 }: {
   label: string;
   value: string;
   sub: string;
-  icon: React.ComponentType<{ className?: string }>;
-  accent: string;
-  href: string;
+  tint?: string;
+  color?: string;
+  sinBorde?: boolean;
 }) {
   return (
-    <Link
-      href={href}
-      className="group cursor-pointer rounded-2xl border border-slate-100 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md sm:p-5"
-    >
-      <div className="flex items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${accent}17`, color: accent }}>
-          <Icon className="size-5" />
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium text-slate-500">{label}</p>
-          <p className="mt-0.5 truncate text-xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-2xl">{value}</p>
-        </div>
-      </div>
-      <div className="mt-3 flex items-center justify-between text-[11px]">
-        <span className="truncate text-slate-500">{sub}</span>
-        <span className="ml-2 shrink-0 font-semibold text-blue-600 opacity-0 transition-opacity group-hover:opacity-100">Ver →</span>
-      </div>
-    </Link>
+    <div className={cn("px-5 py-4", !sinBorde && "sm:border-r sm:border-line-soft", tint)}>
+      <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">{label}</p>
+      <p
+        className="mt-0.5 whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"
+        style={{ fontSize: "clamp(20px, 2vw, 28px)", ...(color ? { color } : {}) }}
+      >
+        {value}
+      </p>
+      <p className="mt-0.5 text-[11px] text-slate-500">{sub}</p>
+    </div>
   );
 }
 
-function MiniStat({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
+const ESTADO_CHIP: Record<string, { label: string; cls: string }> = {
+  activo: { label: "En ejecución", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  por_cobrar: { label: "Por cobrar", cls: "bg-amber-50 text-amber-700 ring-amber-600/20" },
+  cerrado: { label: "Cerrado", cls: "bg-slate-100 text-slate-600 ring-slate-200" },
+};
+
+function EstadoChip({ status, sinGasto }: { status: string; sinGasto: boolean }) {
+  // Falta cargar el gasto pesa más que el estado: es lo que hay que ir a hacer.
+  const meta = sinGasto
+    ? { label: "Falta cargar gasto", cls: "bg-orange-50 text-orange-700 ring-orange-600/20" }
+    : ESTADO_CHIP[status] ?? ESTADO_CHIP.activo;
   return (
-    <div className="rounded-xl bg-slate-50 p-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</p>
-      <p className="mt-0.5 text-lg font-bold tabular-nums" style={color ? { color } : undefined}>
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset",
+        meta.cls,
+      )}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {meta.label}
+    </span>
+  );
+}
+
+const TONO: Record<string, string> = {
+  rojo: "text-rose-600",
+  ambar: "text-amber-600",
+  verde: "text-emerald-600",
+};
+
+function MiniStat({
+  label,
+  value,
+  sub,
+  color,
+  tono,
+}: {
+  label: string;
+  value: string | number;
+  sub?: string;
+  color?: string;
+  tono?: "rojo" | "ambar" | "verde";
+}) {
+  return (
+    <div className="rounded-xl bg-surface-muted p-3">
+      <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">{label}</p>
+      <p
+        className={cn("mt-0.5 whitespace-nowrap text-lg font-bold tabular-nums", tono ? TONO[tono] : "text-slate-900")}
+        style={color ? { color } : undefined}
+      >
         {value}
       </p>
       {sub ? <p className="text-[11px] text-slate-500">{sub}</p> : null}
