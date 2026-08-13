@@ -3,8 +3,23 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogOut, Users, Building2, Home, Menu, X, Settings, Hammer, Wrench, TrendingUp, Sparkles } from "lucide-react";
+import {
+  LogOut,
+  Users,
+  Building2,
+  LayoutDashboard,
+  Menu,
+  X,
+  Settings,
+  Hammer,
+  Wrench,
+  TrendingUp,
+  Sparkles,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { NavCounts } from "@/lib/nav-counts";
+
+type CountKey = keyof NavCounts;
 
 type NavItem = {
   href: string;
@@ -12,22 +27,47 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
   exact?: boolean;
   also?: string[];
+  count?: CountKey;
+  alerta?: boolean; // pastilla roja: es un pendiente, no un inventario
 };
 
-const NAV: NavItem[] = [
-  { href: "/inicio", label: "Inicio", icon: Home, exact: true },
-  { href: "/leads", label: "Leads", icon: Sparkles },
-  { href: "/potenciales", label: "Cotizaciones", icon: TrendingUp },
-  { href: "/proyectos", label: "Proyectos", icon: Hammer },
+// Tres grupos, según el handoff: lo que YA es negocio arriba, lo que todavía no
+// lo es en el medio, y los catálogos abajo.
+const GRUPOS: { label: string; items: NavItem[] }[] = [
   {
-    href: "/mantenimiento",
-    label: "Mantenimiento",
-    icon: Wrench,
-    also: ["/reportes", "/cronograma"],
+    label: "Operación",
+    items: [
+      { href: "/inicio", label: "Inicio", icon: LayoutDashboard, exact: true },
+      { href: "/proyectos", label: "Proyectos", icon: Hammer, count: "proyectos" },
+      {
+        href: "/mantenimiento",
+        label: "Mantenimiento",
+        icon: Wrench,
+        also: ["/reportes", "/cronograma"],
+        count: "mantenimiento",
+        alerta: true,
+      },
+    ],
   },
-  { href: "/clientes", label: "Clientes", icon: Building2 },
-  { href: "/personal", label: "Personal", icon: Users },
+  {
+    label: "Potenciales",
+    items: [
+      { href: "/leads", label: "Leads", icon: Sparkles, count: "leads" },
+      { href: "/potenciales", label: "Cotizaciones", icon: TrendingUp, count: "cotizaciones" },
+      // Licitaciones entra cuando exista /licitaciones (hoy viven como pestaña
+      // dentro de Cotizaciones). Un ítem que lleva a un 404 es peor que no tenerlo.
+    ],
+  },
+  {
+    label: "Base",
+    items: [
+      { href: "/clientes", label: "Clientes", icon: Building2, count: "clientes" },
+      { href: "/personal", label: "Personal", icon: Users, count: "personal" },
+    ],
+  },
 ];
+
+const TODOS = GRUPOS.flatMap((g) => g.items);
 
 function isNavActive(item: NavItem, pathname: string): boolean {
   if (item.exact) return pathname === item.href;
@@ -39,9 +79,24 @@ type Props = {
   org: { name: string };
   user: { email: string | null };
   showOrgSwitcher?: boolean;
+  counts?: NavCounts;
 };
 
-export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
+function Pastilla({ n, alerta }: { n: number; alerta?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+        // El rojo dice "esto te está esperando"; el gris es solo cuántos hay.
+        alerta ? "bg-rose-500/15 text-rose-300" : "bg-sidebar-pill text-sidebar-pill-text",
+      )}
+    >
+      {n}
+    </span>
+  );
+}
+
+export function AppSidebar({ org, user, showOrgSwitcher = false, counts }: Props) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -51,71 +106,77 @@ export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
 
   const navContent = (
     <>
-      <div className="px-5 py-5 border-b border-border flex items-center justify-between">
+      <div className="flex items-center justify-between px-5 py-5">
         <div className="min-w-0">
           {showOrgSwitcher ? (
-            <Link
-              href="/select-org"
-              className="group inline-flex items-center gap-1.5"
-              title="Cambiar organización"
-            >
-              <span className="truncate max-w-[150px] text-sm font-bold tracking-tight text-slate-900">
-                {org.name}
-              </span>
-              <span className="text-muted-foreground/70 group-hover:text-foreground">↕</span>
+            <Link href="/select-org" className="group inline-flex items-center gap-1.5" title="Cambiar organización">
+              <span className="max-w-[150px] truncate text-[15px] font-bold tracking-tight text-white">{org.name}</span>
+              <span className="text-slate-500 group-hover:text-slate-300">↕</span>
             </Link>
           ) : (
-            <p className="truncate text-sm font-bold tracking-tight text-slate-900">{org.name}</p>
+            <p className="truncate text-[15px] font-bold tracking-tight text-white">{org.name}</p>
           )}
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Reportme<span className="text-blue-600">.ai</span>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            Reportme<span className="text-[#60A5FA]">.ai</span>
           </p>
         </div>
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="md:hidden -mr-2 flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent"
+          className="-mr-2 flex size-9 items-center justify-center rounded-lg text-slate-400 hover:bg-sidebar-hover hover:text-white md:hidden"
           aria-label="Cerrar menú"
         >
           <X className="size-5" />
         </button>
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-3">
-        <div className="flex flex-col gap-0.5">
-          {NAV.map((item) => {
-            const active = isNavActive(item, pathname);
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setOpen(false)}
-                className={cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                )}
-              >
-                <Icon className="size-4" />
-                {item.label}
-              </Link>
-            );
-          })}
-        </div>
+      <nav className="flex-1 overflow-y-auto px-3 pb-3">
+        {GRUPOS.map((grupo) => (
+          <div key={grupo.label} className="mb-1.5">
+            <p className="px-3 pb-1 pt-3 text-[9px] font-bold uppercase tracking-[0.12em] text-sidebar-label">
+              {grupo.label}
+            </p>
+            <div className="flex flex-col gap-0.5">
+              {grupo.items.map((item) => {
+                const active = isNavActive(item, pathname);
+                const Icon = item.icon;
+                const n = item.count ? counts?.[item.count] ?? null : null;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setOpen(false)}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors",
+                      active
+                        ? "bg-sidebar-active font-semibold text-white shadow-[inset_2px_0_0_#2563EB]"
+                        : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
+                    )}
+                  >
+                    <Icon className="size-4 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                    {n !== null && n > 0 ? <Pastilla n={n} alerta={item.alerta} /> : null}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
-      <div className="p-3 border-t border-border flex flex-col gap-2">
-        <p className="text-xs text-muted-foreground truncate px-3">{user.email}</p>
+      <div className="border-t border-white/5 p-3">
+        <p className="truncate px-3 pb-1.5 text-[11px] text-slate-400" title={user.email ?? undefined}>
+          {user.email}
+        </p>
         <Link
           href="/settings"
           onClick={() => setOpen(false)}
           className={cn(
-            "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors",
             pathname.startsWith("/settings")
-              ? "bg-accent text-accent-foreground"
-              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              ? "bg-sidebar-active font-semibold text-white"
+              : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
           )}
         >
           <Settings className="size-4" />
@@ -124,7 +185,7 @@ export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
         <form action="/logout" method="post">
           <button
             type="submit"
-            className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-300 transition-colors hover:bg-sidebar-hover hover:text-white"
           >
             <LogOut className="size-4" />
             Cerrar sesión
@@ -134,47 +195,45 @@ export function AppSidebar({ org, user, showOrgSwitcher = false }: Props) {
     </>
   );
 
-  const activeItem = NAV.find((n) => isNavActive(n, pathname));
+  const activeItem = TODOS.find((n) => isNavActive(n, pathname));
 
   return (
     <>
-      {/* Mobile top bar */}
-      <header className="md:hidden sticky top-0 z-30 flex items-center gap-3 border-b border-border bg-card/95 px-4 py-3 backdrop-blur">
+      {/* Barra superior móvil */}
+      <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-white/5 bg-sidebar-bg px-4 py-3 md:hidden">
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="-ml-2 flex size-9 items-center justify-center rounded-lg text-foreground hover:bg-accent"
+          className="-ml-2 flex size-9 items-center justify-center rounded-lg text-white hover:bg-sidebar-hover"
           aria-label="Abrir menú"
         >
           <Menu className="size-5" />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold tracking-tight">
+          <p className="text-sm font-semibold tracking-tight text-white">
             {activeItem?.label ?? (
               <>
-                Reportme<span className="text-blue-600">.ai</span>
+                Reportme<span className="text-[#60A5FA]">.ai</span>
               </>
             )}
           </p>
-          <p className="truncate text-[11px] text-muted-foreground">{org.name}</p>
+          <p className="truncate text-[11px] text-slate-400">{org.name}</p>
         </div>
       </header>
 
-      {/* Desktop sidebar */}
-      <aside className="hidden md:flex w-60 shrink-0 border-r border-border bg-card flex-col">
-        {navContent}
-      </aside>
+      {/* Sidebar de escritorio */}
+      <aside className="hidden w-[236px] shrink-0 flex-col bg-sidebar-bg md:flex">{navContent}</aside>
 
-      {/* Mobile drawer */}
+      {/* Drawer móvil */}
       {open ? (
-        <div className="md:hidden fixed inset-0 z-50">
+        <div className="fixed inset-0 z-50 md:hidden">
           <button
             type="button"
             aria-label="Cerrar menú"
             onClick={() => setOpen(false)}
-            className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
           />
-          <aside className="absolute left-0 top-0 bottom-0 flex w-72 max-w-[85vw] flex-col bg-card shadow-xl">
+          <aside className="absolute bottom-0 left-0 top-0 flex w-72 max-w-[85vw] flex-col bg-sidebar-bg shadow-xl">
             {navContent}
           </aside>
         </div>
