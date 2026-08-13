@@ -12,7 +12,6 @@ import {
   Clock,
   AlertTriangle,
   CalendarClock,
-  DollarSign,
   Trash2,
   ArrowUpRight,
   FileText,
@@ -254,24 +253,52 @@ export function LeadsBoard({ members, currentMemberId }: { members: LeadOwner[];
     return m;
   }, [shown]);
 
+  const embudo = useMemo(
+    () =>
+      (LEAD_STATUS_ACTIVAS as LeadStatus[]).map((k) => ({
+        key: k,
+        label: LEAD_STATUS_LABEL[k],
+        color: LEAD_STATUS_COLOR[k],
+        n: leads.filter((l) => l.status === k).length,
+      })),
+    [leads],
+  );
+
+  // Se nombra el cuello de botella solo cuando es evidente (más de la mitad
+  // parado en una etapa). Un insight que aparece siempre deja de leerse.
+  const cuelloDeBotella = useMemo(() => {
+    const total = embudo.reduce((a, e) => a + e.n, 0);
+    if (total < 5) return null;
+    const peor = [...embudo].sort((a, b) => b.n - a.n)[0];
+    const pct = Math.round((peor.n / total) * 100);
+    if (pct < 50) return null;
+    return peor.key === "nuevo"
+      ? `${pct}% de los leads siguen en Nuevo: el cuello de botella es el primer contacto, no el cierre.`
+      : `${pct}% de los leads están parados en "${peor.label}".`;
+  }, [embudo]);
+
   const kpis = useMemo(() => {
     let activos = 0;
     let nuevos = 0;
     let vencidos = 0;
     let pipeline = 0;
     let ganados = 0;
+    let sinEncargado = 0;
     for (const l of leads) {
       const activo = (LEAD_STATUS_ACTIVAS as LeadStatus[]).includes(l.status);
       if (activo) {
         activos++;
         pipeline += l.estimated_value ?? 0;
+        // Sin encargado nadie lo va a llamar. Es el pendiente más barato de
+        // resolver y el que más leads destraba.
+        if (!l.owner_member_id) sinEncargado++;
         const d = diasHasta(l.next_follow_up);
         if (d !== null && d <= 0) vencidos++;
       }
       if (l.status === "nuevo") nuevos++;
       if (l.status === "ganado") ganados++;
     }
-    return { activos, nuevos, vencidos, pipeline, ganados };
+    return { activos, nuevos, vencidos, pipeline, ganados, sinEncargado };
   }, [leads]);
 
   async function moverA(id: string, status: LeadStatus) {
@@ -307,12 +334,40 @@ export function LeadsBoard({ members, currentMemberId }: { members: LeadOwner[];
         </button>
       </div>
 
-      <section className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <section className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Kpi label="Activos" value={String(kpis.activos)} sub="en el pipeline" accent="#6366F1" />
         <Kpi label="Seguimiento vencido" value={String(kpis.vencidos)} sub="hoy o atrasados" accent="#EF4444" />
+        <Kpi label="Sin encargado" value={String(kpis.sinEncargado)} sub="nadie los sigue" accent="#F97316" />
         <Kpi label="Valor en pipeline" value={money(kpis.pipeline)} sub="estimado activo" accent="#F59E0B" />
         <Kpi label="Ganados" value={String(kpis.ganados)} sub="convertidos" accent="#10B981" />
       </section>
+
+      {/* El embudo dice DÓNDE se traba el pipeline. Con casi todo en "Nuevo",
+          el problema no es cerrar: es que nadie hizo el primer contacto. */}
+      {kpis.activos > 0 ? (
+        <section className="mb-5 rounded-card border border-line bg-surface p-5 shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+          <h2 className="mb-3 text-[13px] font-bold text-slate-900">Embudo por etapa</h2>
+          <div className="space-y-2">
+            {embudo.map((e) => (
+              <div key={e.key} className="flex items-center gap-2">
+                <span className="w-32 shrink-0 truncate text-[12px] text-slate-600">{e.label}</span>
+                <span className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                  <span
+                    className="block h-full rounded-full"
+                    style={{ width: `${Math.round((e.n / Math.max(1, kpis.activos)) * 100)}%`, backgroundColor: e.color }}
+                  />
+                </span>
+                <span className="w-10 shrink-0 text-right text-[12px] font-bold tabular-nums text-slate-800">{e.n}</span>
+              </div>
+            ))}
+          </div>
+          {cuelloDeBotella ? (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-inset ring-amber-600/20">
+              {cuelloDeBotella}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="mb-4 flex items-center gap-2">
         <div className="relative min-w-[220px] flex-1 sm:max-w-sm">
