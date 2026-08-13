@@ -56,3 +56,9 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Utilidades para correr la app dentro del contenedor de Claude Code:
+# el harness E2E y el preload que manda el egress por el proxy del entorno.
+# No son código de la app.
+.e2e.mjs
+.proxy-preload.cjs

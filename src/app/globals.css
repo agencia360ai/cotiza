@@ -74,6 +74,25 @@
   --radius-xl: calc(var(--radius) + 4px);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Handoff Dicec — superficies y líneas. `line` y no `border` para no chocar
+     con el token de shadcn que ya usa media app. */
+  --color-canvas: #f5f6f8;
+  --color-surface: #ffffff;
+  --color-surface-muted: #fafbfc;
+  --color-line: #e4e7ec;
+  --color-line-soft: #eff1f4;
+  --color-row: #f4f6f8;
+  --color-row-hover: #fafbfc;
+  --color-sidebar-bg: #0b1120;
+  --color-sidebar-active: #1e293b;
+  --color-sidebar-hover: #111c31;
+  --color-sidebar-label: #475569;
+  --color-sidebar-pill: #1e293b;
+  --color-sidebar-pill-text: #cbd5e1;
+
+  /* Tarjeta del handoff: 14px, más suave que el --radius de shadcn. */
+  --radius-card: 14px;
 }
 
 @layer base {
@@ -83,6 +102,11 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  /* Regla del handoff: TODO número va en tabular-nums, para que las columnas
+     de montos no bailen entre filas. */
+  th, td, .tnum {
+    font-variant-numeric: tabular-nums;
   }
   /* Tailwind v4 dejó los botones con cursor default; restauramos el pointer. */
   button:not(:disabled),

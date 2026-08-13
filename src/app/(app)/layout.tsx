@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgContext, listMemberships } from "@/lib/org-context";
 import { AppSidebar } from "@/components/app-sidebar";
+import { getNavCounts } from "@/lib/nav-counts";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -26,14 +27,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     .single()) as { data: { id: string; name: string } | null };
   if (!org) redirect("/onboarding");
 
+  const counts = await getNavCounts(ctx.orgId);
+
   return (
-    <div className="min-h-screen md:flex">
+    <div className="min-h-screen bg-canvas md:flex">
       <AppSidebar
         org={{ name: org.name }}
         user={{ email: user.email ?? null }}
         showOrgSwitcher={memberships.length > 1}
+        counts={counts}
       />
-      <main className="flex-1 min-w-0">{children}</main>
+      <main className="min-w-0 flex-1">{children}</main>
     </div>
   );
 }
