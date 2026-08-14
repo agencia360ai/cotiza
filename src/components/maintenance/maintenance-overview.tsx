@@ -38,6 +38,8 @@ function initials(name: string): string {
 export async function MaintenanceOverview({ orgId }: { orgId: string }) {
   const m = await getMaintenanceSummary(orgId);
   const { globalCounts, totalEquipment, globalHealth, clientSummaries, reports, schedules } = m;
+  const conEquipos = clientSummaries.filter((c) => c.equipmentCount > 0);
+  const sinEquipos = clientSummaries.length - conEquipos.length;
 
   return (
     <div className="mt-8 space-y-8">
@@ -58,7 +60,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
 
       {/* Distribution + urgent actions */}
       <section className="grid gap-4 lg:grid-cols-3">
-        <div className="rounded-2xl border border-border bg-card p-5 lg:col-span-2">
+        <div className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)] p-5 lg:col-span-2">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-700">Distribución de estados</h2>
             <p className="text-xs text-slate-500">{totalEquipment} equipos en total</p>
@@ -96,7 +98,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
           )}
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-5">
+        <div className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)] p-5">
           <div className="mb-3 flex items-center gap-2">
             <AlertOctagon className="size-4 text-red-600" />
             <h2 className="text-sm font-semibold text-slate-700">Acciones urgentes</h2>
@@ -114,8 +116,13 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
       <section>
         <header className="mb-3 flex items-end justify-between">
           <div>
-            <h2 className="text-lg font-bold tracking-tight text-slate-900">Salud por cliente ({clientSummaries.length})</h2>
-            <p className="text-xs text-slate-500">Ordenados por urgencia (críticos primero)</p>
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">
+              Clientes con mantenimiento ({conEquipos.length} de {clientSummaries.length})
+            </h2>
+            <p className="text-xs text-slate-500">
+              Ordenados por urgencia (críticos primero)
+              {sinEquipos > 0 ? ` · ${sinEquipos} sin equipos registrados, en Clientes` : ""}
+            </p>
           </div>
           <Link href="/clientes" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-700 hover:text-slate-900">
             Ver todos
@@ -123,7 +130,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
           </Link>
         </header>
 
-        {clientSummaries.length === 0 ? (
+        {conEquipos.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border bg-card py-16 text-center">
             <Building2 className="mx-auto mb-2 size-6 text-slate-400" />
             <p className="text-sm font-medium">Sin clientes aún</p>
@@ -133,7 +140,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
             </Link>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-border bg-card">
+          <div className="overflow-hidden rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -148,7 +155,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {clientSummaries.map((c) => (
+                  {conEquipos.map((c) => (
                     <tr key={c.id} className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50/50">
                       <td className="px-4 py-3">
                         <Link href={`/clientes/${c.id}`} className="flex items-center gap-3">
@@ -203,7 +210,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
 
       {/* Recent reports + upcoming */}
       <section className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-border bg-card">
+        <div className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]">
           <header className="flex items-center justify-between border-b border-border px-5 py-3">
             <div className="flex items-center gap-2">
               <ClipboardCheck className="size-4 text-slate-700" />
@@ -238,7 +245,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
           )}
         </div>
 
-        <div className="rounded-2xl border border-border bg-card">
+        <div className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]">
           <header className="flex items-center justify-between border-b border-border px-5 py-3">
             <div className="flex items-center gap-2">
               <Calendar className="size-4 text-slate-700" />
@@ -276,7 +283,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
       </section>
 
       {m.techsCount > 0 ? (
-        <section className="rounded-2xl border border-border bg-card px-5 py-3">
+        <section className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)] px-5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
             <p className="text-slate-700">
               <strong>{m.techsCount}</strong> miembro{m.techsCount === 1 ? "" : "s"} de personal activo
@@ -305,7 +312,7 @@ function KpiCard({
   href?: string;
 }) {
   const inner = (
-    <div className={cn("rounded-2xl border border-border bg-card p-4", href && "transition-colors hover:border-slate-300 hover:bg-slate-50/50")}>
+    <div className={cn("rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)] p-4", href && "transition-colors hover:border-slate-300 hover:bg-slate-50/50")}>
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
         <span className="flex size-7 items-center justify-center rounded-lg" style={{ backgroundColor: `${accent}1f`, color: accent }}>

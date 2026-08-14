@@ -78,13 +78,13 @@ export default async function MantenimientoHubPage() {
   ];
 
   return (
-    <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Mantenimiento</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Todo lo recurrente: reportes, cronograma, estado de equipos y casos.
-        </p>
+    <div className="min-h-full bg-canvas">
+      <header className="sticky top-0 z-20 border-b border-line bg-canvas/90 px-4 py-4 backdrop-blur md:px-8">
+        <h1 className="text-[21px] font-bold tracking-[-0.03em] text-slate-900">Mantenimiento</h1>
+        <p className="text-xs text-slate-500">Todo lo recurrente: reportes, cronograma, estado de equipos y casos</p>
       </header>
+
+      <div className="max-w-[1400px] px-4 py-6 md:px-8">
 
       <div className="grid gap-4 sm:grid-cols-2">
         {cards.map((c) => {
@@ -93,7 +93,7 @@ export default async function MantenimientoHubPage() {
             <Link
               key={c.label}
               href={c.href}
-              className="group flex items-start gap-4 rounded-2xl border border-border bg-card p-5 transition-colors hover:border-slate-300 hover:bg-slate-50/50"
+              className="group flex items-start gap-4 rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)] p-5 transition-colors hover:border-slate-300 hover:bg-slate-50/50"
             >
               <span
                 className="flex size-11 shrink-0 items-center justify-center rounded-xl"
@@ -117,6 +117,7 @@ export default async function MantenimientoHubPage() {
       </div>
 
       {orgId ? <MaintenanceOverview orgId={orgId} /> : null}
+      </div>
     </div>
   );
 }
