@@ -35,21 +35,21 @@ export default async function TechniciansPage() {
   const techs = data ?? [];
 
   return (
-    <div className="px-4 py-6 md:px-10 md:py-8 max-w-5xl">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Personal</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Cada miembro tiene un link único persistente para acceder a su portal
-          </p>
+    <div className="min-h-full bg-canvas">
+      <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-line bg-canvas/90 px-4 py-4 backdrop-blur md:px-8">
+        <div className="min-w-0">
+          <h1 className="text-[21px] font-bold tracking-[-0.03em] text-slate-900">Personal</h1>
+          <p className="text-xs text-slate-500">Cada miembro tiene un link único para entrar a su portal</p>
         </div>
         <Link
           href="/personal/asistencia"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
         >
           <Clock className="size-4 text-slate-700" /> Asistencia
         </Link>
       </header>
+
+      <div className="max-w-[1400px] px-4 py-6 md:px-8">
 
       <NewTechnicianForm />
 
@@ -64,6 +64,7 @@ export default async function TechniciansPage() {
         ) : (
           <TechniciansList technicians={techs} />
         )}
+      </div>
       </div>
     </div>
   );
