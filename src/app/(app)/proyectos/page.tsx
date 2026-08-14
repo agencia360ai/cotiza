@@ -16,13 +16,16 @@ export default async function ProjectsListPage() {
   if (!orgId) redirect("/onboarding");
 
   return (
-    <div className="min-h-full bg-slate-50/70">
-      <div className="px-4 py-6 md:px-10 md:py-8 max-w-6xl">
-        <header className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight">Proyectos</h1>
-          <p className="text-sm text-muted-foreground mt-1">Cobro, gasto y margen de cada proyecto, con los números de QuickBooks</p>
-        </header>
+    <div className="min-h-full bg-canvas">
+      <header className="sticky top-0 z-20 border-b border-line bg-canvas/90 px-4 py-4 backdrop-blur md:px-8">
+        <h1 className="text-[21px] font-bold tracking-[-0.03em] text-slate-900">Proyectos</h1>
+        <p className="text-xs text-slate-500">Cobro, gasto y margen de cada proyecto, con los números de QuickBooks</p>
+      </header>
 
+      {/* Sin tope de ancho, a diferencia del resto: son 11 columnas y cualquier
+          cap las corta antes de que la pantalla se acabe. Acá el ancho de más
+          se usa en mostrar datos, no en márgenes. */}
+      <div className="px-4 py-6 md:px-8">
         <QboProjectsBoard />
       </div>
     </div>

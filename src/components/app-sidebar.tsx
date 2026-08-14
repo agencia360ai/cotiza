@@ -15,6 +15,7 @@ import {
   Wrench,
   TrendingUp,
   Sparkles,
+  Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NavCounts } from "@/lib/nav-counts";
@@ -54,8 +55,7 @@ const GRUPOS: { label: string; items: NavItem[] }[] = [
     items: [
       { href: "/leads", label: "Leads", icon: Sparkles, count: "leads" },
       { href: "/potenciales", label: "Cotizaciones", icon: TrendingUp, count: "cotizaciones" },
-      // Licitaciones entra cuando exista /licitaciones (hoy viven como pestaña
-      // dentro de Cotizaciones). Un ítem que lleva a un 404 es peor que no tenerlo.
+      { href: "/licitaciones", label: "Licitaciones", icon: Landmark, count: "licitaciones" },
     ],
   },
   {

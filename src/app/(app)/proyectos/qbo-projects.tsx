@@ -565,6 +565,25 @@ export function QboProjectsBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sorted, quotes, statusOv, datesOv]);
 
+  // Degradado en el borde derecho mientras quede tabla por ver. En macOS la
+  // barra de scroll está oculta, así que sin esto la tabla se lee como cortada
+  // y nadie descubre que hay columnas más allá.
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [hayMas, setHayMas] = useState(false);
+  const medirScroll = (el: HTMLDivElement | null) => {
+    if (!el) return;
+    setHayMas(el.scrollWidth - el.clientWidth - el.scrollLeft > 4);
+  };
+  const onScrollTabla = (e: React.UIEvent<HTMLDivElement>) => medirScroll(e.currentTarget);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    medirScroll(el);
+    if (!el) return;
+    const ro = new ResizeObserver(() => medirScroll(el));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [sorted.length]);
+
   const hasProjects = projects.length > 0;
 
   return (
@@ -860,21 +879,22 @@ export function QboProjectsBoard() {
           </p>
         ) : (
           <>
-            <div className="overflow-x-auto rounded-b-2xl">
-              <table className="w-full min-w-[1080px] text-[13px]">
+            <div className="relative">
+              <div ref={scrollerRef} onScroll={onScrollTabla} className="overflow-x-auto rounded-b-2xl">
+                <table className="w-full min-w-[1080px] text-[13px]">
                 <thead>
                   <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
-                    <th className="hidden w-9 px-3 py-2.5 sm:table-cell"></th>
+                    <th className="hidden w-9 px-3 py-2.5 2xl:table-cell"></th>
                     <SortTh label="Proyecto" k="nombre" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
                     <SortTh label="Cliente" k="cliente" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} className="hidden lg:table-cell" />
                     <SortTh label="Cotización" k="cotizacion" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden md:table-cell" />
                     <SortTh label={rangeActive ? "En rango" : "Cobro"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Gasto" k="gasto" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Margen" k="margen" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
-                    <SortTh label="Inicio" k="inicio" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden lg:table-cell" />
+                    <SortTh label="Inicio" k="inicio" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden 2xl:table-cell" />
                     <SortTh label="Fin" k="fin" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden lg:table-cell" />
                     <SortTh label="Estado" k="estado" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
-                    <th className="px-3 py-2.5"></th>
+                    <th className="hidden px-3 py-2.5 2xl:table-cell"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -899,8 +919,15 @@ export function QboProjectsBoard() {
                       }}
                     />
                   ))}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
+              {hayMas ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-white to-transparent"
+                />
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-soft bg-surface-muted px-4 py-2.5 text-[11px] text-slate-500">
               <span>
@@ -1539,17 +1566,18 @@ function ProjectRow({
   const fuente = e.eff?.fuente ?? "sin";
   const cobro = e.enRango ?? p.income ?? 0;
   const gasto = e.gastoRango ?? p.cost ?? 0;
+  const celdaInicio = "hidden whitespace-nowrap px-3 py-2.5 2xl:table-cell";
   const celdaFecha = "hidden whitespace-nowrap px-3 py-2.5 lg:table-cell";
   return (
     <>
       <tr className={cn("border-b border-slate-50 last:border-0 hover:bg-slate-50/60", cerrado && "opacity-60")}>
-        <td className="hidden px-3 py-2.5 sm:table-cell">
+        <td className="hidden px-3 py-2.5 2xl:table-cell">
           <span className={cn("flex size-8 items-center justify-center rounded-xl", meta.chip)} title={meta.label}>
             <RubroIcon className="size-4" />
           </span>
         </td>
 
-        <td className="max-w-[150px] px-3 py-2.5 sm:max-w-[260px] xl:max-w-[320px]">
+        <td className="max-w-[150px] px-3 py-2.5 sm:max-w-[220px] xl:max-w-[260px]">
           <div className="truncate font-semibold text-slate-900" title={p.fullName}>
             {p.name}
           </div>
@@ -1560,7 +1588,7 @@ function ProjectRow({
           </div>
         </td>
 
-        <td className="hidden max-w-[170px] px-3 py-2.5 lg:table-cell">
+        <td className="hidden max-w-[140px] px-3 py-2.5 lg:table-cell">
           <span className="block truncate text-slate-600" title={p.clientName}>
             {p.clientName || "—"}
           </span>
@@ -1594,7 +1622,7 @@ function ProjectRow({
                 {quotes ? (
                   <>
                     {quotes.count}
-                    <span className="font-normal text-violet-500">· {bal(quotes.amount)}</span>
+                    <span className="font-normal text-violet-500">· {balCompact(quotes.amount)}</span>
                   </>
                 ) : (
                   "Vincular cotización"
@@ -1672,7 +1700,7 @@ function ProjectRow({
 
         {/* Fechas: clic en cualquiera abre el editor, igual que el chip anterior.
             El ámbar marca "asumida", que es la única que puede estar lejos. */}
-        <td className={celdaFecha}>
+        <td className={celdaInicio}>
           <button
             type="button"
             onClick={onToggleEdit}
@@ -1717,7 +1745,7 @@ function ProjectRow({
             link lleva a Cotizaciones filtrado por el correlativo en vez de
             abrir una sola. Sin match, queda el número editable a mano. */}
 
-        <td className="px-3 py-2.5 text-right">
+        <td className="hidden px-3 py-2.5 text-right 2xl:table-cell">
           <button
             type="button"
             onClick={onToggleEdit}

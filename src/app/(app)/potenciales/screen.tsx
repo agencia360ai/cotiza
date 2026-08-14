@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   AlarmClock,
-  FileText,
   Gavel,
   Plus,
   Search,
@@ -34,6 +33,7 @@ import {
   ArchiveRestore,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MonthlyBarChart, RubroDonut, type MonthPoint, type DonutSlice } from "@/components/inicio/charts";
 import {
   RUBROS,
   QUOTE_STATUS_LABEL,
@@ -207,7 +207,6 @@ function waLink(phone: string | null): string | null {
 // los KPIs de ambas pantallas cuadren). Ver src/lib/pipeline/revisions.ts.
 type QuoteGroup = { main: QuoteRow; older: QuoteRow[]; dupCount: number };
 
-type Tab = "cotizaciones" | "licitaciones";
 
 // La lista de proyectos la necesitan componentes anidados en las dos pestañas;
 // por contexto en vez de enhebrarla por props nivel a nivel.
@@ -216,46 +215,27 @@ const useProjectOptions = () => React.useContext(ProjectOptionsCtx);
 
 export function PotencialesScreen({
   quotes: quotesProp,
-  tenders: tendersProp,
   clients,
   projectOptions = [],
   initialQuery = "",
 }: {
   quotes: QuoteRow[];
-  tenders: TenderRow[];
   clients: ClientOpt[];
   projectOptions?: ProjectOption[];
   initialQuery?: string;
 }) {
-  const [tab, setTab] = useState<Tab>("cotizaciones");
   const [quotes, setQuotes] = useState<QuoteRow[]>(quotesProp);
-  const [tenders, setTenders] = useState<TenderRow[]>(tendersProp);
 
   return (
     <ProjectOptionsCtx.Provider value={projectOptions}>
     <div className="min-h-full bg-slate-50/70">
-    <div className="px-4 py-6 md:px-10 md:py-8 max-w-7xl">
+    <div className="max-w-[1400px] px-4 py-6 md:px-8">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Cotizaciones y Licitaciones</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Lo que puede convertirse en negocio.
-        </p>
+        <h1 className="text-[21px] font-bold tracking-[-0.03em] text-slate-900">Cotizaciones</h1>
+        <p className="text-xs text-slate-500">Lo que se cotizó y todavía no es negocio</p>
       </header>
 
-      <div className="mb-6 flex gap-1 border-b border-slate-200">
-        <TabButton active={tab === "cotizaciones"} onClick={() => setTab("cotizaciones")} icon={FileText}>
-          Cotizaciones <span className="ml-1 text-xs text-slate-400">{quotes.length}</span>
-        </TabButton>
-        <TabButton active={tab === "licitaciones"} onClick={() => setTab("licitaciones")} icon={Gavel}>
-          Licitaciones <span className="ml-1 text-xs text-slate-400">{tenders.length}</span>
-        </TabButton>
-      </div>
-
-      {tab === "cotizaciones" ? (
-        <CotizacionesTab quotes={quotes} setQuotes={setQuotes} clients={clients} initialQuery={initialQuery} />
-      ) : (
-        <LicitacionesTab tenders={tenders} setTenders={setTenders} clients={clients} />
-      )}
+      <CotizacionesTab quotes={quotes} setQuotes={setQuotes} clients={clients} initialQuery={initialQuery} />
     </div>
     </div>
     </ProjectOptionsCtx.Provider>
@@ -345,6 +325,41 @@ function CotizacionesTab({
     return arr;
   }, [filtered, sort]);
 
+  const [verGraficas, setVerGraficas] = useState(false);
+  useEffect(() => {
+    setVerGraficas(localStorage.getItem("cotiza:verGraficas") === "1");
+  }, []);
+  function toggleGraficas() {
+    setVerGraficas((v) => {
+      localStorage.setItem("cotiza:verGraficas", v ? "0" : "1");
+      return !v;
+    });
+  }
+
+  // Series del año para las gráficas: solo lo vigente (sin borradores y sin
+  // revisiones viejas), igual que los KPIs de arriba.
+  const series = useMemo(() => {
+    const meses: MonthPoint[] = Array.from({ length: 12 }, (_, m) => ({ month: m, monto: 0, count: 0 }));
+    const porRubro = new Map<string, number>();
+    for (const { main: x } of filtered) {
+      if (x.sent_date) {
+        const m = Number(x.sent_date.slice(5, 7)) - 1;
+        if (m >= 0 && m < 12) {
+          meses[m].monto += x.amount_usd ?? 0;
+          meses[m].count += 1;
+        }
+      }
+      if (x.rubro) porRubro.set(x.rubro, (porRubro.get(x.rubro) ?? 0) + 1);
+    }
+    const slices: DonutSlice[] = (["DC", "DM", "DS", "DV"] as const).map((k) => ({
+      key: k,
+      label: RUBROS[k].label,
+      color: RUBROS[k].color,
+      value: porRubro.get(k) ?? 0,
+    }));
+    return { meses, slices };
+  }, [filtered]);
+
   const kpis = useMemo(() => {
     let enviadaMonto = 0;
     let aprobadaCount = 0;
@@ -410,149 +425,21 @@ function CotizacionesTab({
 
   return (
     <>
-      <section className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Kpi label="En juego" value={formatMoneyExact(kpis.enviadaMonto)} sub="enviadas sin cerrar" icon={Clock} accent="#F59E0B" />
         <Kpi label="Aprobadas" value={String(kpis.aprobadaCount)} sub={formatMoneyExact(kpis.aprobadaMonto)} icon={CheckCircle2} accent="#10B981" />
         <Kpi label="Por cobrar" value={String(kpis.porCobrar)} sub="aprobadas sin pago" icon={DollarSign} accent="#2563EB" />
         <Kpi label="Tasa de cierre" value={`${kpis.cierre}%`} sub={`${kpis.rechazadaCount} rechazadas`} icon={TrendingUp} accent="#6366F1" />
+        {/* Seguimiento es el único KPI accionable de la fila: no describe el
+            año, dice a cuántos clientes hay que escribirles hoy. */}
+        <Kpi
+          label="Seguimiento"
+          value={String(seguimiento.pend.length)}
+          sub={seguimiento.pend.length > 0 ? "enviadas sin respuesta" : "nada pendiente"}
+          icon={AlarmClock}
+          accent={seguimiento.pend.length > 0 ? "#B45309" : "#64748B"}
+        />
       </section>
-
-      {/* Seguimiento pendiente: enviadas viejas que piden acción */}
-      {seguimiento.pend.length > 0 || seguimiento.descartadas.length > 0 ? (
-        <section className="mb-4 rounded-2xl border border-amber-200/70 bg-amber-50/50 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span className="flex size-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-                <AlarmClock className="size-4" />
-              </span>
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">
-                  Seguimiento pendiente
-                  {seguimiento.pend.length > 0 ? (
-                    <span className="ml-2 rounded-full bg-amber-600 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums">
-                      {seguimiento.pend.length}
-                    </span>
-                  ) : null}
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Enviadas hace más de {STALE_DAYS} días sin respuesta — dales seguimiento o descártalas con un motivo.
-                </p>
-              </div>
-            </div>
-            {seguimiento.descartadas.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => setShowDescartadas((v) => !v)}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-700"
-              >
-                {showDescartadas ? "Ocultar descartadas" : `Descartadas (${seguimiento.descartadas.length})`}
-              </button>
-            ) : null}
-          </div>
-
-          {seguimiento.pend.length > 0 ? (
-            <ul
-              className={cn(
-                "mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3",
-                // Expandida: scroll interno para que 40 tarjetas no se coman la página.
-                verTodasSeg && "max-h-[26rem] overflow-y-auto pr-1",
-              )}
-            >
-              {(verTodasSeg ? seguimiento.pend : seguimiento.pend.slice(0, 6)).map(({ q: x, days }) => (
-                <li
-                  key={x.id}
-                  className="flex items-center justify-between gap-2 rounded-xl border border-amber-100 bg-white px-3 py-2.5 shadow-sm"
-                >
-                  <button type="button" onClick={() => setEditing(x)} className="min-w-0 flex-1 cursor-pointer text-left">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold tabular-nums text-slate-700">{x.quote_number}</span>
-                      <AgingChip days={days} compact />
-                    </div>
-                    <p className="mt-0.5 truncate text-xs text-slate-600">
-                      {x.client_std_name ?? x.client_name ?? "—"}
-                      <span className="ml-1.5 font-semibold text-slate-800">
-                        {x.amount_usd !== null ? formatMoneyExact(x.amount_usd) : ""}
-                      </span>
-                    </p>
-                  </button>
-                  <div className="flex shrink-0 items-center gap-0.5">
-                    {waLink(x.contact_phone) ? (
-                      <a
-                        href={waLink(x.contact_phone)!}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex size-7 items-center justify-center rounded-md text-emerald-600 hover:bg-emerald-50"
-                        title="Dar seguimiento por WhatsApp"
-                      >
-                        <MessageCircle className="size-4" />
-                      </a>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => setDismissing(x)}
-                      className="flex size-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                      title="Descartar del seguimiento (con motivo)"
-                    >
-                      <X className="size-4" />
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2 text-xs text-slate-500">Nada pendiente — todas las enviadas viejas están descartadas o resueltas.</p>
-          )}
-          {seguimiento.pend.length > 6 ? (
-            <button
-              type="button"
-              onClick={() => setVerTodasSeg((v) => !v)}
-              className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20 transition-colors hover:bg-amber-100"
-            >
-              {verTodasSeg ? (
-                <>Ver menos</>
-              ) : (
-                <>
-                  Ver las {seguimiento.pend.length}
-                  <ChevronDown className="size-3.5" />
-                </>
-              )}
-            </button>
-          ) : null}
-
-          {showDescartadas && seguimiento.descartadas.length > 0 ? (
-            <ul className="mt-3 space-y-1.5 border-t border-amber-100 pt-3">
-              {seguimiento.descartadas.map((x) => (
-                <li key={x.id} className="flex items-center justify-between gap-2 rounded-lg bg-white/70 px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold tabular-nums text-slate-500">
-                      {x.quote_number} <span className="font-normal">· {x.client_std_name ?? x.client_name ?? "—"}</span>
-                    </p>
-                    <p className="truncate text-[11px] italic text-slate-400">
-                      {x.seguimiento_descartado_motivo || "sin motivo"}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const r = await restoreSeguimiento(x.id);
-                        if (!("error" in r)) {
-                          applyLocal({ ...x, seguimiento_descartado_at: null, seguimiento_descartado_motivo: null });
-                        }
-                      } catch {
-                        /* reintenta con otro click */
-                      }
-                    }}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                  >
-                    <Undo2 className="size-3.5" /> Restaurar
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
 
       {/* Filtros */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -959,6 +846,172 @@ function CotizacionesTab({
           onUpdated={(row) => setQuotes((prev) => prev.map((x) => (x.id === row.id ? row : x)))}
         />
       ) : null}
+
+      {/* Gráficas: contexto del año, no la tarea del día. Por eso van al final
+          y arrancan ocultas — quien las quiere, las fija y quedan. */}
+      <section className="mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line bg-surface px-4 py-2.5 shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+          <h2 className="text-[13px] font-bold text-slate-900">Gráficas del año</h2>
+          <button
+            type="button"
+            onClick={toggleGraficas}
+            aria-expanded={verGraficas}
+            className="cursor-pointer rounded-lg border border-line px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+          >
+            {verGraficas ? "Ocultar gráficas" : "Mostrar gráficas"}
+          </button>
+        </div>
+        {verGraficas ? (
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            <div className="rounded-card border border-line bg-surface p-5 shadow-[0_1px_2px_rgba(15,23,42,.04)] lg:col-span-2">
+              <h3 className="mb-3 text-[13px] font-bold text-slate-900">Enviado por mes</h3>
+              <MonthlyBarChart data={series.meses} year={year === "all" ? new Date().getFullYear() : year} />
+            </div>
+            <div className="rounded-card border border-line bg-surface p-5 shadow-[0_1px_2px_rgba(15,23,42,.04)]">
+              <h3 className="mb-3 text-[13px] font-bold text-slate-900">Por rubro</h3>
+              <RubroDonut slices={series.slices} title="Distribución por rubro" />
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      {/* Seguimiento pendiente: enviadas viejas que piden acción */}
+      {seguimiento.pend.length > 0 || seguimiento.descartadas.length > 0 ? (
+        <section className="mb-4 rounded-2xl border border-amber-200/70 bg-amber-50/50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="flex size-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                <AlarmClock className="size-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Seguimiento pendiente
+                  {seguimiento.pend.length > 0 ? (
+                    <span className="ml-2 rounded-full bg-amber-600 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums">
+                      {seguimiento.pend.length}
+                    </span>
+                  ) : null}
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Enviadas hace más de {STALE_DAYS} días sin respuesta — dales seguimiento o descártalas con un motivo.
+                </p>
+              </div>
+            </div>
+            {seguimiento.descartadas.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowDescartadas((v) => !v)}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+              >
+                {showDescartadas ? "Ocultar descartadas" : `Descartadas (${seguimiento.descartadas.length})`}
+              </button>
+            ) : null}
+          </div>
+
+          {seguimiento.pend.length > 0 ? (
+            <ul
+              className={cn(
+                "mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3",
+                // Expandida: scroll interno para que 40 tarjetas no se coman la página.
+                verTodasSeg && "max-h-[26rem] overflow-y-auto pr-1",
+              )}
+            >
+              {(verTodasSeg ? seguimiento.pend : seguimiento.pend.slice(0, 6)).map(({ q: x, days }) => (
+                <li
+                  key={x.id}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-amber-100 bg-white px-3 py-2.5 shadow-sm"
+                >
+                  <button type="button" onClick={() => setEditing(x)} className="min-w-0 flex-1 cursor-pointer text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold tabular-nums text-slate-700">{x.quote_number}</span>
+                      <AgingChip days={days} compact />
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-slate-600">
+                      {x.client_std_name ?? x.client_name ?? "—"}
+                      <span className="ml-1.5 font-semibold text-slate-800">
+                        {x.amount_usd !== null ? formatMoneyExact(x.amount_usd) : ""}
+                      </span>
+                    </p>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {waLink(x.contact_phone) ? (
+                      <a
+                        href={waLink(x.contact_phone)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex size-7 items-center justify-center rounded-md text-emerald-600 hover:bg-emerald-50"
+                        title="Dar seguimiento por WhatsApp"
+                      >
+                        <MessageCircle className="size-4" />
+                      </a>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setDismissing(x)}
+                      className="flex size-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      title="Descartar del seguimiento (con motivo)"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">Nada pendiente — todas las enviadas viejas están descartadas o resueltas.</p>
+          )}
+          {seguimiento.pend.length > 6 ? (
+            <button
+              type="button"
+              onClick={() => setVerTodasSeg((v) => !v)}
+              className="mt-2 inline-flex cursor-pointer items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20 transition-colors hover:bg-amber-100"
+            >
+              {verTodasSeg ? (
+                <>Ver menos</>
+              ) : (
+                <>
+                  Ver las {seguimiento.pend.length}
+                  <ChevronDown className="size-3.5" />
+                </>
+              )}
+            </button>
+          ) : null}
+
+          {showDescartadas && seguimiento.descartadas.length > 0 ? (
+            <ul className="mt-3 space-y-1.5 border-t border-amber-100 pt-3">
+              {seguimiento.descartadas.map((x) => (
+                <li key={x.id} className="flex items-center justify-between gap-2 rounded-lg bg-white/70 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold tabular-nums text-slate-500">
+                      {x.quote_number} <span className="font-normal">· {x.client_std_name ?? x.client_name ?? "—"}</span>
+                    </p>
+                    <p className="truncate text-[11px] italic text-slate-400">
+                      {x.seguimiento_descartado_motivo || "sin motivo"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const r = await restoreSeguimiento(x.id);
+                        if (!("error" in r)) {
+                          applyLocal({ ...x, seguimiento_descartado_at: null, seguimiento_descartado_motivo: null });
+                        }
+                      } catch {
+                        /* reintenta con otro click */
+                      }
+                    }}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                  >
+                    <Undo2 className="size-3.5" /> Restaurar
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
+
     </>
   );
 }
@@ -1861,7 +1914,7 @@ function DescartarSeguimientoDialog({
 
 // ════════════════════════════════════ LICITACIONES ════════════════════════════
 
-function LicitacionesTab({
+export function LicitacionesTab({
   tenders,
   setTenders,
   clients,
@@ -3110,31 +3163,6 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  icon: Icon,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ComponentType<{ className?: string }>;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors",
-        active ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700",
-      )}
-    >
-      <Icon className="size-4" />
-      {children}
-    </button>
-  );
-}
 
 function Kpi({
   label,
