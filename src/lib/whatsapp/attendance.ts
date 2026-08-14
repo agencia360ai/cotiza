@@ -300,6 +300,19 @@ async function handle(admin: Admin, msg: IncomingMessage, phoneNumberId: string)
     console.warn(`[asistencia] phone_number_id sin org: ${phoneNumberId}`);
     return;
   }
+
+  // La PROGRAMACIÓN se atiende ANTES de exigir que el remitente sea técnico.
+  // La manda administración —Paola, Joann—, que está en Miembros pero no en
+  // Técnicos porque no marca asistencia propia. Con el orden invertido el bot
+  // respondía "este número no está registrado" sin llegar a leer el mensaje, y
+  // la autorización correcta (miembros + roster) quedaba inalcanzable dentro
+  // de aplicarPrograma, que es quien la aplica.
+  if (msg.type === "text" && msg.text && /@\s*\+?\d/.test(msg.text)) {
+    await aplicarPrograma(admin, s, msg);
+    return;
+  }
+
+  // Lo demás —ubicaciones y ayuda— sí es cosa de técnicos.
   const tech = await resolverTecnico(admin, s.org_id, msg.from);
   if (!tech) {
     await sendText(msg.from, "Este número no está registrado en DICEC. Habla con tu supervisor.");
@@ -307,12 +320,6 @@ async function handle(admin: Admin, msg: IncomingMessage, phoneNumberId: string)
   }
   if (msg.type === "location" && msg.location) {
     await marcar(admin, s, tech, msg);
-    return;
-  }
-  // Texto con menciones = PROGRAMACIÓN del día. Marca la asistencia de OTROS,
-  // así que solo desde un número autorizado (0040).
-  if (msg.type === "text" && msg.text && /@\s*\+?\d/.test(msg.text)) {
-    await aplicarPrograma(admin, s, msg);
     return;
   }
   await ayuda(admin, s, tech, msg.from);
