@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { Copy, RefreshCw, Trash2, UserPlus, Check, Power, ExternalLink, Pencil } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -24,6 +24,19 @@ function relativeFromNow(iso: string | null): string {
   if (days < 7) return `hace ${days}d`;
   if (days < 30) return `hace ${Math.floor(days / 7)} sem`;
   return `hace ${Math.floor(days / 30)} mes`;
+}
+
+// "hace 3d" depende de CUÁNDO se calcula: el servidor lo hace al renderizar y
+// el navegador al hidratar, y si entre esos dos instantes se cruza un límite
+// —de "hoy" a "hace 1d"— React ve textos distintos y descarta todo el árbol.
+// Se pinta vacío en el servidor y se llena al montar: el dato es relativo al
+// reloj de quien mira, no al del servidor.
+function UltimaActividad({ iso }: { iso: string | null }) {
+  const [txt, setTxt] = useState<string | null>(null);
+  useEffect(() => {
+    setTxt(relativeFromNow(iso));
+  }, [iso]);
+  return <span suppressHydrationWarning>{txt ?? "—"}</span>;
 }
 
 export function NewTechnicianForm() {
@@ -123,7 +136,11 @@ function TechRow({ tech }: { tech: Tech }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const link = typeof window !== "undefined" ? `${window.location.origin}/t/${tech.access_token}` : `/t/${tech.access_token}`;
+  const ruta = `/t/${tech.access_token}`;
+  const [link, setLink] = useState(ruta);
+  useEffect(() => {
+    setLink(`${window.location.origin}${ruta}`);
+  }, [ruta]);
 
   function copy() {
     if (typeof window === "undefined") return;
@@ -193,7 +210,7 @@ function TechRow({ tech }: { tech: Tech }) {
               {!tech.phone && !tech.email ? <span>Sin contacto</span> : null}
             </div>
             <p className="mt-0.5 text-[11px] text-slate-400">
-              Última actividad: {relativeFromNow(tech.last_used_at)}
+              Última actividad: <UltimaActividad iso={tech.last_used_at} />
             </p>
           </div>
         </div>
@@ -258,7 +275,7 @@ function TechRow({ tech }: { tech: Tech }) {
       </div>
 
       <div className="mt-3 truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600">
-        {link}
+        <span suppressHydrationWarning>{link}</span>
       </div>
 
       {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
