@@ -22,9 +22,10 @@ export default async function ProjectsListPage() {
         <p className="text-xs text-slate-500">Cobro, gasto y margen de cada proyecto, con los números de QuickBooks</p>
       </header>
 
-      {/* 1400px como Inicio: la tabla pide 1080 de ancho mínimo y con max-w-6xl
-          (1152) las últimas columnas quedaban cortadas contra el borde. */}
-      <div className="max-w-[1400px] px-4 py-6 md:px-8">
+      {/* Sin tope de ancho, a diferencia del resto: son 11 columnas y cualquier
+          cap las corta antes de que la pantalla se acabe. Acá el ancho de más
+          se usa en mostrar datos, no en márgenes. */}
+      <div className="px-4 py-6 md:px-8">
         <QboProjectsBoard />
       </div>
     </div>
