@@ -64,7 +64,25 @@ export async function revisarParticipadas(): Promise<ResultadoRevision> {
 
   // Los eventos y la foto los escribe el admin client: son datos del sistema,
   // no del usuario, y no deben depender de qué puede escribir quien mira.
-  const admin = createAdminClient() as unknown as {
+  //
+  // createAdminClient TIRA si falta la service role key, y ese throw salía como
+  // un 500 con la pantalla rota. Cualquier fallo acá tiene que volver como
+  // mensaje: el equipo necesita saber POR QUÉ no se revisó.
+  let adminRaw;
+  try {
+    adminRaw = createAdminClient();
+  } catch (e) {
+    return {
+      ok: false,
+      error:
+        e instanceof Error && /SERVICE_ROLE/i.test(e.message)
+          ? "Falta configurar SUPABASE_SERVICE_ROLE_KEY en el entorno — sin ella no se puede guardar la revisión."
+          : e instanceof Error
+            ? e.message
+            : "No se pudo preparar la revisión",
+    };
+  }
+  const admin = adminRaw as unknown as {
     from: (t: string) => {
       insert: (rows: Record<string, unknown>[]) => Promise<{ error: { message: string } | null }>;
       update: (p: Record<string, unknown>) => { eq: (c: string, v: string) => Promise<{ error: { message: string } | null }> };
@@ -74,6 +92,8 @@ export async function revisarParticipadas(): Promise<ResultadoRevision> {
   const ahora = new Date().toISOString();
   const fallidas: { acto: string; motivo: string }[] = [];
   let conCambios = 0;
+
+  try {
 
   // En serie a propósito: el portal es lento y frágil, y son pocas. Golpearlo
   // en paralelo con una sesión compartida es la forma de que corte la sesión.
@@ -118,6 +138,11 @@ export async function revisarParticipadas(): Promise<ResultadoRevision> {
     if (up.error && !faltaMigracion(up.error.message)) {
       return { ok: false, error: `No se pudo guardar la revisión: ${up.error.message}` };
     }
+  }
+
+  } catch (e) {
+    // El portal es lento y frágil; un timeout no puede tumbar la pantalla.
+    return { ok: false, error: e instanceof Error ? e.message : "Se cortó la revisión — reintenta" };
   }
 
   revalidatePath("/licitaciones");
