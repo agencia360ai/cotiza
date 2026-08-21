@@ -14,7 +14,8 @@ export type QboProject = {
   rubro: string | null; // DC | DM | DS | DV
   year: number | null;
   clientName: string;
-  income: number | null;
+  income: number | null; // FACTURADO — el total del proyecto según QuickBooks
+  paid: number | null;   // COBRADO de verdad. null = no se pudo determinar
   cost: number | null;
   margin: number | null; // 0..1
   closed: boolean; // derivado: status === 'cerrado' → no se re-consulta a QBO
@@ -83,6 +84,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         year: ry?.year ?? null,
         clientName: parent?.displayName ?? "",
         income: null,
+        paid: null,
         cost: null,
         margin: null,
         closed: false,

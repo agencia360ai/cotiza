@@ -167,7 +167,7 @@ function rangeFor(key: RangeKey, customFrom: string, customTo: string): DateRang
   }
 }
 
-type SortKey = "nombre" | "cliente" | "cobro" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
+type SortKey = "nombre" | "cliente" | "cobro" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
 
 // Proyección de un proyecto dentro del rango activo.
 //
@@ -441,6 +441,8 @@ export function QboProjectsBoard() {
           return e.p.clientName.toLowerCase();
         case "cobro":
           return e.enRango ?? e.p.income;
+        case "cobrado":
+          return e.p.paid;
         case "gasto":
           return e.gastoRango ?? e.p.cost;
         case "margen":
@@ -521,9 +523,17 @@ export function QboProjectsBoard() {
     let cobro = 0;
     let gasto = 0;
     let prorrateados = 0;
+    // El cobrado solo suma donde HAY dato. Si ningún proyecto lo tiene, el KPI
+    // dice "s/d" en vez de un cero que se leería como "no cobramos nada".
+    let cobrado = 0;
+    let conCobrado = 0;
     for (const e of sorted) {
       cobro += e.enRango ?? 0;
       gasto += e.gastoRango ?? 0;
+      if (e.p.paid !== null) {
+        cobrado += e.p.paid;
+        conCobrado++;
+      }
       if (!e.real && e.fraction < 1) prorrateados++;
     }
     // Por cobrar y abiertos son del proyecto ENTERO, no de la porción en rango:
@@ -543,6 +553,7 @@ export function QboProjectsBoard() {
       cobro,
       gasto,
       prorrateados,
+      cobrado: conCobrado > 0 ? cobrado : null,
       porCobrar,
       nPorCobrar,
       abiertos,
@@ -627,8 +638,17 @@ export function QboProjectsBoard() {
       {/* Los cinco números que resumen la vista. Responden al rango y a los
           filtros activos: es el estado de LO QUE SE ESTÁ MIRANDO. */}
       {hasProjects ? (
-        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
-          <KpiProyecto label={rangeActive ? "Cobro en rango" : "Cobro"} value={bal(vista.cobro)} />
+        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+          <KpiProyecto label={rangeActive ? "Total en rango" : "Total facturado"} value={bal(vista.cobro)} />
+          {/* Lo que efectivamente entró. Se separa del total porque facturar no
+              es cobrar, y en una empresa que vive del flujo esa es la diferencia
+              que importa. "s/d" cuando QuickBooks no dio el pendiente. */}
+          <KpiProyecto
+            label="Cobrado"
+            value={vista.cobrado !== null ? bal(vista.cobrado) : "s/d"}
+            sub={vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% del total` : "sin dato de QBO"}
+            color="#047857"
+          />
           <KpiProyecto label="Gasto" value={bal(vista.gasto)} color="#BE123C" />
           <KpiProyecto
             label="Margen"
@@ -888,7 +908,8 @@ export function QboProjectsBoard() {
                     <SortTh label="Proyecto" k="nombre" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
                     <SortTh label="Cliente" k="cliente" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} className="hidden lg:table-cell" />
                     <SortTh label="Cotización" k="cotizacion" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden md:table-cell" />
-                    <SortTh label={rangeActive ? "En rango" : "Cobro"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    <SortTh label={rangeActive ? "En rango" : "Total"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    <SortTh label="Cobrado" k="cobrado" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="hidden text-right xl:table-cell" />
                     <SortTh label="Gasto" k="gasto" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Margen" k="margen" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Inicio" k="inicio" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden 2xl:table-cell" />
@@ -962,9 +983,11 @@ export function QboProjectsBoard() {
 // ── Cobro vs gasto por mes ───────────────────────────────────────────────────
 // Mismas specs que los charts del Inicio: SVG puro, grid recesivo, marcas con
 // tope redondeado ancladas a la base, tooltip por mes y texto en tokens de
-// texto (nunca del color de la serie). El gasto va DENTRO de la barra de cobro
-// en vez de al lado: lo que importa leer de un vistazo es cuánto del cobro se
-// fue en gasto, y dos barras pegadas obligan a compararlas a ojo.
+// texto (nunca del color de la serie). Cobro y gasto van LADO A LADO, igual que
+// en Inicio: las dos series arrancan de la misma base y se comparan por altura
+// sin que una tape a la otra. Antes el gasto iba dentro de la barra de cobro y
+// en los meses de gasto alto casi la llenaba, haciendo ver poco margen donde
+// había, y encima cada pantalla dibujaba lo mismo distinto.
 type PuntoMes = { month: string; cobro: number; gasto: number };
 
 function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: boolean }) {
@@ -977,7 +1000,10 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
   const max = Math.max(1, ...data.map((d) => d.cobro), ...data.map((d) => d.gasto));
   const innerW = W - PAD_L * 2;
   const slot = innerW / data.length;
-  const barW = Math.min(30, slot * 0.6);
+  // Dos barras por mes: cada una toma poco menos de la mitad del espacio útil,
+  // y el gap las separa lo justo para leerlas como un par y no como dos cosas.
+  const barW = Math.max(4, Math.min(13, slot * 0.32));
+  const gap = Math.max(2, barW * 0.25);
   const y = (v: number) => H - PAD_B - (v / max) * (H - PAD_B - PAD_T);
   const maxIdx = data.reduce((mi, d, i) => (d.cobro > data[mi].cobro ? i : mi), 0);
   const totalCobro = data.reduce((a, d) => a + d.cobro, 0);
@@ -997,14 +1023,14 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
   return (
     <div className="mb-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h3 className="text-sm font-semibold text-slate-900">Cobro y gasto por mes</h3>
+        <h3 className="text-sm font-semibold text-slate-900">Facturado y gasto por mes</h3>
         <div className="flex items-center gap-3 text-[11px]">
           <span className="inline-flex items-center gap-1.5 text-slate-500">
-            <span className="size-2 rounded-full bg-slate-800" /> Cobro
+            <span className="size-2 rounded-full bg-[#1E293B]" /> Facturado
             <span className="font-semibold tabular-nums text-slate-900">{balCompact(totalCobro)}</span>
           </span>
           <span className="inline-flex items-center gap-1.5 text-slate-500">
-            <span className="size-2 rounded-full bg-rose-400" /> Gasto
+            <span className="size-2 rounded-full bg-[#F43F5E]" /> Gasto
             <span className="font-semibold tabular-nums text-rose-600">{balCompact(totalGasto)}</span>
           </span>
           {margen !== null ? (
@@ -1025,8 +1051,8 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
           viewBox={`0 0 ${W} ${H}`}
           className="w-full"
           role="img"
-          aria-label={`Cobro y gasto por mes. ${data
-            .map((d) => `${fmtCorta(d.month)}: cobro ${balCompact(d.cobro)}, gasto ${balCompact(d.gasto)}`)
+          aria-label={`Facturado y gasto por mes. ${data
+            .map((d) => `${fmtCorta(d.month)}: facturado ${balCompact(d.cobro)}, gasto ${balCompact(d.gasto)}`)
             .join(". ")}`}
         >
           {[0.25, 0.5, 0.75, 1].map((f) => (
@@ -1036,10 +1062,10 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
 
           {data.map((d, i) => {
             const cx = PAD_L + slot * i + slot / 2;
-            const x = cx - barW / 2;
+            const xCobro = cx - barW - gap / 2;
+            const xGasto = cx + gap / 2;
             const active = hover === i;
             const dim = hover !== null && !active;
-            const gastoW = barW * 0.55;
             return (
               <g key={d.month} opacity={dim ? 0.4 : 1} style={{ transition: "opacity 150ms" }}>
                 <rect
@@ -1052,20 +1078,15 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
                   onMouseLeave={() => setHover(null)}
                 />
                 {d.cobro > 0 ? (
-                  <path d={barra(d.cobro, x, barW)} fill={active ? "#0F172A" : "#334155"} style={{ pointerEvents: "none" }} />
+                  <path d={barra(d.cobro, xCobro, barW)} fill={active ? "#0F172A" : "#1E293B"} style={{ pointerEvents: "none" }} />
                 ) : null}
                 {d.gasto > 0 ? (
-                  <path
-                    d={barra(d.gasto, cx - gastoW / 2, gastoW)}
-                    fill="#FB7185"
-                    opacity={0.92}
-                    style={{ pointerEvents: "none" }}
-                  />
+                  <path d={barra(d.gasto, xGasto, barW)} fill="#F43F5E" style={{ pointerEvents: "none" }} />
                 ) : null}
                 {/* Etiqueta directa solo en el mes más alto: da la escala sin
                     obligar a pasar el mouse ni llenar la gráfica de números. */}
                 {i === maxIdx && d.cobro > 0 && hover === null ? (
-                  <text x={cx} y={y(d.cobro) - 5} textAnchor="middle" className="fill-slate-600" fontSize="10" fontWeight="600">
+                  <text x={cx - barW / 2 - gap / 4} y={y(d.cobro) - 5} textAnchor="middle" className="fill-slate-600" fontSize="10" fontWeight="600">
                     {balCompact(d.cobro)}
                   </text>
                 ) : null}
@@ -1083,7 +1104,7 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
             className="pointer-events-none absolute -top-1 z-10 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] leading-relaxed text-white shadow-lg"
             style={{ left: `${((PAD_L + slot * hover + slot / 2) / W) * 100}%`, transform: "translateX(-50%)" }}
           >
-            <span className="font-semibold">{fmtCorta(data[hover].month)}</span> · cobro {balCompact(data[hover].cobro)} · gasto{" "}
+            <span className="font-semibold">{fmtCorta(data[hover].month)}</span> · facturado {balCompact(data[hover].cobro)} · gasto{" "}
             {balCompact(data[hover].gasto)}
           </div>
         ) : null}
@@ -1663,6 +1684,20 @@ function ProjectRow({
           )}
         </td>
 
+        {/* Cobrado: lo que entró de verdad. En gris cuando falta el dato, para
+            no confundir "no sé" con "no cobraron". */}
+        <td className="hidden whitespace-nowrap px-3 py-2.5 text-right xl:table-cell">
+          {!conDatos ? (
+            <span className="text-slate-300">—</span>
+          ) : p.paid === null ? (
+            <span className="text-[11px] italic text-slate-400" title="QuickBooks no reportó el saldo pendiente de este proyecto">
+              s/d
+            </span>
+          ) : (
+            <span className="font-medium tabular-nums text-emerald-700">{bal(p.paid)}</span>
+          )}
+        </td>
+
         <td className="whitespace-nowrap px-3 py-2.5 text-right">
           {conDatos ? (
             <span className="font-medium tabular-nums text-rose-600" title={prorrateado ? "Prorrateado por días: el rango corta meses sin desglose en QuickBooks" : undefined}>
@@ -1763,14 +1798,14 @@ function ProjectRow({
       </tr>
       {editing ? (
         <tr className="border-b border-slate-50">
-          <td colSpan={11} className="px-3 pb-3">
+          <td colSpan={12} className="px-3 pb-3">
             <DatesEditor initial={dates} onSave={onSaveDates} onCancel={onToggleEdit} />
           </td>
         </tr>
       ) : null}
       {pickingQuotes && codigo ? (
         <tr className="border-b border-slate-50">
-          <td colSpan={11} className="px-3 pb-3">
+          <td colSpan={12} className="px-3 pb-3">
             <CotizacionesPicker codigo={codigo} onClose={onTogglePickQuotes} onChanged={onQuotesChanged} />
           </td>
         </tr>
