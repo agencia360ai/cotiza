@@ -167,7 +167,7 @@ function rangeFor(key: RangeKey, customFrom: string, customTo: string): DateRang
   }
 }
 
-type SortKey = "nombre" | "cliente" | "cobro" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
+type SortKey = "nombre" | "cliente" | "cobro" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
 
 // Proyección de un proyecto dentro del rango activo.
 //
@@ -441,6 +441,8 @@ export function QboProjectsBoard() {
           return e.p.clientName.toLowerCase();
         case "cobro":
           return e.enRango ?? e.p.income;
+        case "cobrado":
+          return e.p.paid;
         case "gasto":
           return e.gastoRango ?? e.p.cost;
         case "margen":
@@ -521,9 +523,17 @@ export function QboProjectsBoard() {
     let cobro = 0;
     let gasto = 0;
     let prorrateados = 0;
+    // El cobrado solo suma donde HAY dato. Si ningún proyecto lo tiene, el KPI
+    // dice "s/d" en vez de un cero que se leería como "no cobramos nada".
+    let cobrado = 0;
+    let conCobrado = 0;
     for (const e of sorted) {
       cobro += e.enRango ?? 0;
       gasto += e.gastoRango ?? 0;
+      if (e.p.paid !== null) {
+        cobrado += e.p.paid;
+        conCobrado++;
+      }
       if (!e.real && e.fraction < 1) prorrateados++;
     }
     // Por cobrar y abiertos son del proyecto ENTERO, no de la porción en rango:
@@ -543,6 +553,7 @@ export function QboProjectsBoard() {
       cobro,
       gasto,
       prorrateados,
+      cobrado: conCobrado > 0 ? cobrado : null,
       porCobrar,
       nPorCobrar,
       abiertos,
@@ -628,7 +639,16 @@ export function QboProjectsBoard() {
           filtros activos: es el estado de LO QUE SE ESTÁ MIRANDO. */}
       {hasProjects ? (
         <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
-          <KpiProyecto label={rangeActive ? "Cobro en rango" : "Cobro"} value={bal(vista.cobro)} />
+          <KpiProyecto label={rangeActive ? "Total en rango" : "Total facturado"} value={bal(vista.cobro)} />
+          {/* Lo que efectivamente entró. Se separa del total porque facturar no
+              es cobrar, y en una empresa que vive del flujo esa es la diferencia
+              que importa. "s/d" cuando QuickBooks no dio el pendiente. */}
+          <KpiProyecto
+            label="Cobrado"
+            value={vista.cobrado !== null ? bal(vista.cobrado) : "s/d"}
+            sub={vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% del total` : "sin dato de QBO"}
+            color="#047857"
+          />
           <KpiProyecto label="Gasto" value={bal(vista.gasto)} color="#BE123C" />
           <KpiProyecto
             label="Margen"
@@ -888,7 +908,8 @@ export function QboProjectsBoard() {
                     <SortTh label="Proyecto" k="nombre" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
                     <SortTh label="Cliente" k="cliente" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} className="hidden lg:table-cell" />
                     <SortTh label="Cotización" k="cotizacion" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden md:table-cell" />
-                    <SortTh label={rangeActive ? "En rango" : "Cobro"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    <SortTh label={rangeActive ? "En rango" : "Total"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    <SortTh label="Cobrado" k="cobrado" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="hidden text-right xl:table-cell" />
                     <SortTh label="Gasto" k="gasto" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Margen" k="margen" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Inicio" k="inicio" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden 2xl:table-cell" />
@@ -1663,6 +1684,20 @@ function ProjectRow({
           )}
         </td>
 
+        {/* Cobrado: lo que entró de verdad. En gris cuando falta el dato, para
+            no confundir "no sé" con "no cobraron". */}
+        <td className="hidden whitespace-nowrap px-3 py-2.5 text-right xl:table-cell">
+          {!conDatos ? (
+            <span className="text-slate-300">—</span>
+          ) : p.paid === null ? (
+            <span className="text-[11px] italic text-slate-400" title="QuickBooks no reportó el saldo pendiente de este proyecto">
+              s/d
+            </span>
+          ) : (
+            <span className="font-medium tabular-nums text-emerald-700">{bal(p.paid)}</span>
+          )}
+        </td>
+
         <td className="whitespace-nowrap px-3 py-2.5 text-right">
           {conDatos ? (
             <span className="font-medium tabular-nums text-rose-600" title={prorrateado ? "Prorrateado por días: el rango corta meses sin desglose en QuickBooks" : undefined}>
@@ -1763,14 +1798,14 @@ function ProjectRow({
       </tr>
       {editing ? (
         <tr className="border-b border-slate-50">
-          <td colSpan={11} className="px-3 pb-3">
+          <td colSpan={12} className="px-3 pb-3">
             <DatesEditor initial={dates} onSave={onSaveDates} onCancel={onToggleEdit} />
           </td>
         </tr>
       ) : null}
       {pickingQuotes && codigo ? (
         <tr className="border-b border-slate-50">
-          <td colSpan={11} className="px-3 pb-3">
+          <td colSpan={12} className="px-3 pb-3">
             <CotizacionesPicker codigo={codigo} onClose={onTogglePickQuotes} onChanged={onQuotesChanged} />
           </td>
         </tr>

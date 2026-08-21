@@ -13,6 +13,7 @@ import {
   type PnlDiagnostico,
 } from "@/lib/quickbooks/projects";
 import { ventanaDeMeses, type MonthPnl } from "@/lib/quickbooks/parse";
+import { fetchSaldosPendientes, calcularCobrado } from "@/lib/quickbooks/cobrado";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 
 export type QboProjectsResult =
@@ -57,6 +58,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
     client_name: string | null;
     closed: boolean;
     income: number | null;
+    paid?: number | null;
     cost: number | null;
     synced_at: string | null;
     progress?: number | null;
@@ -83,8 +85,10 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
     return { data: all, error: null };
   };
   const BASE_COLS = "qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at";
-  const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number`;
-  let res = await run(`${COLS_0037}, qbo_created_at, first_txn_date, last_txn_date`);
+  const COLS_0048 = `${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number, paid`;
+const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number`;
+  let res = await run(`${COLS_0048}, qbo_created_at, first_txn_date, last_txn_date`);
+  if (isMissingColumn(res.error)) res = await run(`${COLS_0037}, qbo_created_at, first_txn_date, last_txn_date`); // 0048 pendiente
   if (isMissingColumn(res.error)) res = await run(COLS_0037); // 0045 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total`); // 0037 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date`); // 0023 pendiente
@@ -99,6 +103,9 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
   const projects: QboProject[] = rows
     .map((r) => {
       const income = r.income === null ? null : Number(r.income);
+      // 0048 pendiente: sin la columna, `paid` viene undefined y queda en null
+      // — la UI muestra "s/d", que es la verdad, en vez de un cero inventado.
+      const paid = r.paid === null || r.paid === undefined ? null : Number(r.paid);
       const cost = r.cost === null ? null : Number(r.cost);
       if (r.synced_at) syncedAt = Math.max(syncedAt ?? 0, new Date(r.synced_at).getTime());
       return {
@@ -111,6 +118,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
         year: r.year,
         clientName: r.client_name ?? "",
         income,
+        paid,
         cost,
         margin: marginOf(income, cost),
         closed: r.closed,
@@ -277,6 +285,20 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     /* sin financials: la lista igual se guarda */
   }
 
+  // Cobrado. Va DESPUÉS del P&L porque necesita lo facturado para restarle el
+  // pendiente. Un solo reporte con todos los clientes: no se consulta por
+  // proyecto. Si el gateway no lo expone, `paid` queda null y la UI dice "s/d"
+  // — el resto de la sincronización no se pierde por esto.
+  try {
+    const abiertos = list.filter((p) => !p.closed);
+    const { porProyecto } = await fetchSaldosPendientes(abiertos.map((p) => p.id));
+    if (porProyecto.size > 0) {
+      for (const p of abiertos) p.paid = calcularCobrado(p.income, porProyecto.get(p.id));
+    }
+  } catch {
+    /* sin cobrado: los demás números siguen valiendo */
+  }
+
   // Persistir TODO (lista + financials). `closed` no va en el payload → se
   // preserva en updates y arranca en false para los nuevos.
   const nowIso = new Date().toISOString();
@@ -292,11 +314,17 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     cost: p.cost,
     synced_at: nowIso,
   }));
+  // `paid` va aparte: sin la 0048 la columna no existe y el upsert entero
+  // fallaría, perdiendo también los números que sí se pudieron traer.
+  const conPaid = list.map((p, i) => ({ ...rows[i], paid: p.paid }));
   const fechas = list.map((p, i) => ({ ...rows[i], qbo_created_at: p.qboCreatedAt, first_txn_date: p.firstTxnDate, last_txn_date: p.lastTxnDate }));
   if (rows.length) {
     // Con las fechas de 0045 si la migración corrió; sin ellas si no (el resto
     // de la sincronización no se pierde por una columna que todavía no existe).
-    let { error: upErr } = await supabase.from("qbo_project_state").upsert(fechas, { onConflict: "org_id,qb_job_id" });
+    const fechasConPaid = list.map((p, i) => ({ ...fechas[i], paid: p.paid }));
+    let { error: upErr } = await supabase.from("qbo_project_state").upsert(fechasConPaid, { onConflict: "org_id,qb_job_id" });
+    if (isMissingColumn(upErr)) upErr = (await supabase.from("qbo_project_state").upsert(fechas, { onConflict: "org_id,qb_job_id" })).error; // 0048 pendiente
+    if (isMissingColumn(upErr)) upErr = (await supabase.from("qbo_project_state").upsert(conPaid, { onConflict: "org_id,qb_job_id" })).error; // 0045 pendiente
     if (isMissingColumn(upErr)) {
       ({ error: upErr } = await supabase.from("qbo_project_state").upsert(rows, { onConflict: "org_id,qb_job_id" }));
     }
