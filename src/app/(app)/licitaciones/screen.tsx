@@ -5,6 +5,7 @@ import { Landmark } from "lucide-react";
 import { LicitacionesTab } from "../potenciales/screen";
 import { formatMoney, type TenderRow, type TenderStatus } from "@/lib/pipeline/types";
 import { cn } from "@/lib/utils";
+import { VigilanciaPanel, type Vigilada } from "./vigilancia-panel";
 
 type ClientOpt = { id: string; name: string; locations: { id: string; name: string }[] };
 
@@ -17,7 +18,15 @@ const ADJUDICADO: TenderStatus[] = ["ganada", "orden_proceder"];
 const PRESENTADO: TenderStatus[] = ["presentada", "por_partir", "en_revision", "ganada", "orden_proceder", "por_cobrar", "cobrado", "no_ganada"];
 const EN_EVALUACION: TenderStatus[] = ["presentada", "por_partir", "en_revision"];
 
-export function LicitacionesScreen({ tenders, clients }: { tenders: TenderRow[]; clients: ClientOpt[] }) {
+export function LicitacionesScreen({
+  tenders,
+  clients,
+  vigiladas = [],
+}: {
+  tenders: TenderRow[];
+  clients: ClientOpt[];
+  vigiladas?: Vigilada[];
+}) {
   const [rows, setRows] = useState<TenderRow[]>(tenders);
 
   const kpis = useMemo(() => {
@@ -66,6 +75,8 @@ export function LicitacionesScreen({ tenders, clients }: { tenders: TenderRow[];
       </header>
 
       <div className="max-w-[1400px] px-4 py-6 md:px-8">
+        {vigiladas.length > 0 ? <VigilanciaPanel vigiladas={vigiladas} /> : null}
+
         <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
           <Kpi label="Presentado" value={formatMoney(kpis.presentado)} sub={`${kpis.nPresentado} procesos`} />
           <Kpi
