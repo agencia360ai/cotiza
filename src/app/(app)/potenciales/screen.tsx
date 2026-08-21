@@ -1918,10 +1918,14 @@ export function LicitacionesTab({
   tenders,
   setTenders,
   clients,
+  vigilancia,
 }: {
   tenders: TenderRow[];
   setTenders: React.Dispatch<React.SetStateAction<TenderRow[]>>;
   clients: ClientOpt[];
+  // Se recibe ya construido desde /licitaciones: este archivo no debe saber
+  // nada de la vigilancia, solo dónde va.
+  vigilancia?: React.ReactNode;
 }) {
   const [vista, setVista] = useState<"mias" | "gobierno">("mias");
   const [estatus, setEstatus] = useState<TenderStatus | "all">("all");
@@ -2147,6 +2151,8 @@ export function LicitacionesTab({
           ))}
         </div>
       </section>
+
+      {vigilancia}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Dropdown

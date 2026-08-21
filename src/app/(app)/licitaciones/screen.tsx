@@ -75,8 +75,6 @@ export function LicitacionesScreen({
       </header>
 
       <div className="max-w-[1400px] px-4 py-6 md:px-8">
-        {vigiladas.length > 0 ? <VigilanciaPanel vigiladas={vigiladas} /> : null}
-
         <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
           <Kpi label="Presentado" value={formatMoney(kpis.presentado)} sub={`${kpis.nPresentado} procesos`} />
           <Kpi
@@ -96,7 +94,12 @@ export function LicitacionesScreen({
           />
         </div>
 
-        <LicitacionesTab tenders={rows} setTenders={setRows} clients={clients} />
+        <LicitacionesTab
+          tenders={rows}
+          setTenders={setRows}
+          clients={clients}
+          vigilancia={vigiladas.length > 0 ? <VigilanciaPanel vigiladas={vigiladas} /> : null}
+        />
       </div>
     </div>
   );

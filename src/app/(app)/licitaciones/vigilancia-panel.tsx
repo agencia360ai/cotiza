@@ -37,7 +37,8 @@ function hace(iso: string | null): string {
  * deja de leerse, y este tiene que funcionar el día que sí importa.
  */
 export function VigilanciaPanel({ vigiladas }: { vigiladas: Vigilada[] }) {
-  const [filas, setFilas] = useState(vigiladas);
+  const [vistosLocal, setVistosLocal] = useState<Record<string, boolean>>({});
+  const filas = vigiladas.map((v) => (vistosLocal[v.id] ? { ...v, vistoAt: v.vistoAt ?? new Date().toISOString() } : v));
   const [pendiente, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [resumen, setResumen] = useState<string | null>(null);
@@ -67,12 +68,15 @@ export function VigilanciaPanel({ vigiladas }: { vigiladas: Vigilada[] }) {
   function marcarVisto(id: string) {
     // Optimista: el acuse es un gesto de lectura, no un dato que haya que
     // esperar. Si falla se repone y se avisa.
-    const antes = filas;
-    setFilas((prev) => prev.map((v) => (v.id === id ? { ...v, vistoAt: new Date().toISOString() } : v)));
+    setVistosLocal((prev) => ({ ...prev, [id]: true }));
     startTransition(async () => {
       const r = await marcarCambioVisto(id);
       if (!r.ok) {
-        setFilas(antes);
+        setVistosLocal((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
         setError(r.error);
       }
     });
