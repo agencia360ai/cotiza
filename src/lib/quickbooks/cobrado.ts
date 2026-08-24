@@ -1,5 +1,6 @@
 import "server-only";
 import { listQboTools, withQboSession } from "./mcp";
+import { cosechar } from "./cobrado-core";
 
 // Cuánto se COBRÓ de verdad, por proyecto.
 //
@@ -26,45 +27,6 @@ const VACIO: SaldosPendientes = { porProyecto: new Map(), fuente: null };
 // sería una llamada por proyecto y no vale la pena.
 const RE_AGED = /aged.*receivab|receivab.*aging|cuentas.*cobrar/i;
 const RE_BALANCE = /customer.*balance|balance.*customer/i;
-
-// Recorre el JSON del reporte juntando (idCliente, saldo), pero SOLO para ids
-// que son proyectos conocidos. Sin ese filtro, un walk genérico levanta
-// cualquier objeto con `id` y `total` —una línea de factura, un subtotal— y
-// termina inventando un cobrado. Ante la duda es mejor no saber que mentir.
-function cosechar(node: unknown, out: Map<string, number>, conocidos: Set<string>, depth = 0): void {
-  if (!node || depth > 8) return;
-  if (Array.isArray(node)) {
-    for (const n of node) cosechar(n, out, conocidos, depth + 1);
-    return;
-  }
-  if (typeof node !== "object") return;
-  const o = node as Record<string, unknown>;
-
-  // Una fila del reporte trae el id del cliente y su total. Los nombres varían
-  // entre gateways, así que se prueban los habituales en vez de casarse con uno.
-  const id =
-    (typeof o.customer_id === "string" && o.customer_id) ||
-    (typeof o.customerId === "string" && o.customerId) ||
-    (typeof o.id === "string" && o.id) ||
-    null;
-  const total =
-    typeof o.balance === "number"
-      ? o.balance
-      : typeof o.total === "number"
-        ? o.total
-        : typeof o.amount === "number"
-          ? o.amount
-          : typeof o.Balance === "number"
-            ? o.Balance
-            : null;
-  if (id && conocidos.has(id) && total !== null && Number.isFinite(total)) {
-    // Un cliente puede aparecer en varias filas (una por tramo de antigüedad):
-    // el pendiente es la suma, no la última.
-    out.set(id, (out.get(id) ?? 0) + total);
-  }
-
-  for (const v of Object.values(o)) cosechar(v, out, conocidos, depth + 1);
-}
 
 /**
  * Saldos pendientes por proyecto. Devuelve el mapa vacío —no lanza— cuando el
