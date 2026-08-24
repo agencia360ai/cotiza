@@ -22,7 +22,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, getQuotesPorProyecto, listCotizacionesAsignables, asignarCotizaciones, type QboProjectsResult, type QuotesPorProyecto, type CotizacionAsignable } from "./qbo-actions";
+import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, getQuotesPorProyecto, listCotizacionesAsignables, asignarCotizaciones, diagnosticarCobradoAction, type QboProjectsResult, type QuotesPorProyecto, type CotizacionAsignable } from "./qbo-actions";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
 import type { QboProject, ProjectBizStatus, PnlDiagnostico } from "@/lib/quickbooks/projects";
@@ -646,8 +646,11 @@ export function QboProjectsBoard() {
           <KpiProyecto
             label="Cobrado"
             value={vista.cobrado !== null ? bal(vista.cobrado) : "s/d"}
-            sub={vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% del total` : "sin dato de QBO"}
+            sub={vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% del total` : undefined}
             color="#047857"
+            // Sin dato hay que poder ver POR QUÉ: el reporte puede no existir,
+            // no traer filas, o traer ids que no son los de estos proyectos.
+            extra={vista.cobrado === null ? <PorQueSinCobrado /> : null}
           />
           <KpiProyecto label="Gasto" value={bal(vista.gasto)} color="#BE123C" />
           <KpiProyecto
@@ -1122,12 +1125,14 @@ function KpiProyecto({
   sub,
   color,
   tint,
+  extra,
 }: {
   label: string;
   value: string;
   sub?: string;
   color?: string;
   tint?: string;
+  extra?: React.ReactNode;
 }) {
   return (
     <div className={cn("rounded-card border border-line bg-surface px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,.04)]", tint)}>
@@ -1139,7 +1144,69 @@ function KpiProyecto({
         {value}
       </p>
       {sub ? <p className="text-[11px] text-slate-500">{sub}</p> : null}
+      {extra}
     </div>
+  );
+}
+
+// Diagnóstico del cobrado. Lo mismo que PorQueSinDatos hace con el P&L: cuando
+// el número no está, el camino para averiguarlo tiene que estar al lado del
+// hueco, no en la cabeza de quien programó.
+function PorQueSinCobrado() {
+  const [abierto, setAbierto] = useState(false);
+  const [cargando, setCargando] = useState(false);
+  const [txt, setTxt] = useState<string | null>(null);
+
+  async function ver() {
+    setAbierto(true);
+    if (txt || cargando) return;
+    setCargando(true);
+    const r = await diagnosticarCobradoAction();
+    setCargando(false);
+    if (!r.ok) {
+      setTxt(r.error);
+      return;
+    }
+    const d = r.data;
+    setTxt(
+      [
+        `Herramienta: ${d.herramienta ?? "ninguna"}`,
+        d.variante ? `Variante: ${d.variante}` : null,
+        `IDs en el reporte: ${d.totalIdsReporte} · coinciden con proyectos: ${d.idsQueMatchean}`,
+        d.idsEnReporte.length ? `Primeros: ${d.idsEnReporte.join(", ")}` : null,
+        "",
+        d.muestraCruda,
+      ]
+        .filter((x) => x !== null)
+        .join("\n"),
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={ver}
+        className="mt-0.5 cursor-pointer text-[11px] text-slate-400 underline decoration-dotted hover:text-slate-600"
+      >
+        sin dato de QBO · por qué
+      </button>
+      {abierto ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={() => setAbierto(false)}>
+          <div className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">Por qué no hay cobrado</h3>
+              <button type="button" onClick={() => setAbierto(false)} className="cursor-pointer rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100">
+                Cerrar
+              </button>
+            </div>
+            <pre className="whitespace-pre-wrap break-all rounded-lg bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">
+              {cargando ? "Consultando QuickBooks…" : txt}
+            </pre>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

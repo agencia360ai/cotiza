@@ -13,7 +13,7 @@ import {
   type PnlDiagnostico,
 } from "@/lib/quickbooks/projects";
 import { ventanaDeMeses, type MonthPnl } from "@/lib/quickbooks/parse";
-import { fetchSaldosPendientes, calcularCobrado } from "@/lib/quickbooks/cobrado";
+import { fetchSaldosPendientes, calcularCobrado, diagnosticarCobrado, type DiagnosticoCobrado } from "@/lib/quickbooks/cobrado";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 
 export type QboProjectsResult =
@@ -661,4 +661,34 @@ export async function asignarCotizaciones(
     };
   }
   return { ok: true };
+}
+
+/**
+ * Por qué la columna Cobrado sale vacía. Se dispara a mano desde Proyectos:
+ * el reporte puede fallar de tres formas —no existe, no trae filas, o trae
+ * ids que no son los de nuestros proyectos— y desde afuera se ven iguales.
+ */
+export async function diagnosticarCobradoAction(): Promise<
+  { ok: true; data: DiagnosticoCobrado } | { ok: false; error: string }
+> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Sesión expirada" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { ok: false, error: "Sin organización" };
+  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada" };
+
+  const { data } = (await supabase
+    .from("qbo_project_state")
+    .select("qb_job_id")
+    .eq("org_id", orgId)
+    .eq("closed", false)
+    .limit(500)) as { data: { qb_job_id: string }[] | null };
+  const ids = (data ?? []).map((r) => r.qb_job_id);
+
+  try {
+    return { ok: true, data: await diagnosticarCobrado(ids) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "No se pudo diagnosticar" };
+  }
 }
