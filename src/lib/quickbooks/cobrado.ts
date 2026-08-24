@@ -73,4 +73,74 @@ export async function fetchSaldosPendientes(idsDeProyectos: string[]): Promise<S
   }
 }
 
+export type DiagnosticoCobrado = {
+  herramienta: string | null;
+  variante: string | null;
+  idsEnReporte: string[];   // primeros que trajo el reporte
+  totalIdsReporte: number;
+  idsQueMatchean: number;
+  muestraCruda: string;     // recorte del JSON, para ver la forma real
+};
+
+/**
+ * Por qué no hay cobrado. Se llama a mano desde la UI: el reporte puede fallar
+ * de tres formas —no existe la herramienta, no devuelve filas, o devuelve ids
+ * que no son los de nuestros proyectos— y desde afuera las tres se ven igual.
+ */
+export async function diagnosticarCobrado(idsDeProyectos: string[]): Promise<DiagnosticoCobrado> {
+  const base: DiagnosticoCobrado = {
+    herramienta: null,
+    variante: null,
+    idsEnReporte: [],
+    totalIdsReporte: 0,
+    idsQueMatchean: 0,
+    muestraCruda: "",
+  };
+  const tools = await listQboTools();
+  const tool = tools.find((t) => RE_AGED.test(t.name)) ?? tools.find((t) => RE_BALANCE.test(t.name));
+  if (!tool) {
+    base.muestraCruda = `El gateway no expone ningún reporte de cuentas por cobrar. Tiene: ${tools.map((t) => t.name).slice(0, 40).join(", ")}`;
+    return base;
+  }
+  base.herramienta = tool.name;
+  const conocidos = new Set(idsDeProyectos);
+
+  return await withQboSession(async (call) => {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const variantes: [string, Record<string, unknown>][] = [
+      ["params+fecha", { params: { report_date: hoy } }],
+      ["params vacío", { params: {} }],
+    ];
+    for (const [nombre, v] of variantes) {
+      let raw: unknown;
+      try {
+        raw = await call(tool.name, v);
+      } catch (e) {
+        base.muestraCruda = `variante "${nombre}" falló: ${e instanceof Error ? e.message : "error"}`;
+        continue;
+      }
+      base.variante = nombre;
+      // TODOS los ids que aparecen en el JSON, sin filtrar: es lo que revela si
+      // el reporte trae sub-clientes o solo padres.
+      const todos = new Set<string>();
+      const verIds = (n: unknown, d = 0): void => {
+        if (!n || d > 12) return;
+        if (Array.isArray(n)) return n.forEach((x) => verIds(x, d + 1));
+        if (typeof n !== "object") return;
+        const o = n as Record<string, unknown>;
+        if (typeof o.id === "string" && o.id) todos.add(o.id);
+        if (typeof o.customer_id === "string" && o.customer_id) todos.add(o.customer_id);
+        Object.values(o).forEach((x) => verIds(x, d + 1));
+      };
+      verIds(raw);
+      base.totalIdsReporte = todos.size;
+      base.idsEnReporte = [...todos].slice(0, 15);
+      base.idsQueMatchean = [...todos].filter((x) => conocidos.has(x)).length;
+      base.muestraCruda = JSON.stringify(raw).slice(0, 1200);
+      if (todos.size > 0) break;
+    }
+    return base;
+  });
+}
+
 export { calcularCobrado } from "./cobrado-core";
