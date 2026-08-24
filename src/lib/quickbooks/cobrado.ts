@@ -1,6 +1,6 @@
 import "server-only";
 import { listQboTools, withQboSession } from "./mcp";
-import { cosechar } from "./cobrado-core";
+import { cosechar, desenvolver } from "./cobrado-core";
 
 // Cuánto se COBRÓ de verdad, por proyecto.
 //
@@ -63,7 +63,7 @@ export async function fetchSaldosPendientes(idsDeProyectos: string[]): Promise<S
           continue;
         }
         const out = new Map<string, number>();
-        cosechar(raw, out, conocidos);
+        for (const nodo of desenvolver(raw)) cosechar(nodo, out, conocidos);
         if (out.size > 0) return { porProyecto: out, fuente: tool.name };
       }
       return { porProyecto: new Map(), fuente: tool.name };
@@ -132,7 +132,7 @@ export async function diagnosticarCobrado(idsDeProyectos: string[]): Promise<Dia
         if (typeof o.customer_id === "string" && o.customer_id) todos.add(o.customer_id);
         Object.values(o).forEach((x) => verIds(x, d + 1));
       };
-      verIds(raw);
+      for (const nodo of desenvolver(raw)) verIds(nodo);
       base.totalIdsReporte = todos.size;
       base.idsEnReporte = [...todos].slice(0, 15);
       base.idsQueMatchean = [...todos].filter((x) => conocidos.has(x)).length;

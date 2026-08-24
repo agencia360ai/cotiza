@@ -1,3 +1,34 @@
+// El gateway no devuelve el reporte como objeto: lo devuelve SERIALIZADO como
+// string dentro del envoltorio MCP —{ content: [{ type:"text", text:"{...}" }] }—
+// igual que hace con el P&L. Recorrer el objeto sin desenvolverlo encuentra un
+// `text` que es texto plano y nada más: por eso salían 0 ids y "s/d" en los 86
+// proyectos. parse.ts ya resolvía esto para el P&L; este archivo no lo reusó.
+export function desenvolver(raw: unknown): unknown[] {
+  const out: unknown[] = [raw];
+  const textos: string[] = [];
+  const juntar = (n: unknown, d = 0): void => {
+    if (!n || d > 6) return;
+    if (Array.isArray(n)) return n.forEach((x) => juntar(x, d + 1));
+    if (typeof n !== "object") return;
+    const o = n as Record<string, unknown>;
+    if (typeof o.text === "string") textos.push(o.text);
+    Object.values(o).forEach((x) => juntar(x, d + 1));
+  };
+  juntar(raw);
+  for (const t of textos) {
+    // El texto puede traer un prefijo ("Aged Receivables Report:") antes del
+    // JSON, así que se parsea desde la primera llave.
+    const i = t.indexOf("{");
+    if (i < 0) continue;
+    try {
+      out.push(JSON.parse(t.slice(i)));
+    } catch {
+      /* ese bloque no era JSON */
+    }
+  }
+  return out;
+}
+
 // Los reportes de QuickBooks tienen SIEMPRE la misma forma, y no es la de un
 // objeto plano por fila:
 //
