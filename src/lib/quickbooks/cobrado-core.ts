@@ -110,8 +110,20 @@ export function cosechar(node: unknown, out: Map<string, number>, conocidos: Set
  * nada", que es muy distinto de "no sé", y en esta pantalla esa confusión
  * cuesta plata.
  */
-export function calcularCobrado(facturado: number | null, pendiente: number | undefined): number | null {
-  if (facturado === null || pendiente === undefined) return null;
+export function calcularCobrado(
+  facturado: number | null,
+  pendiente: number | undefined,
+  reporteOk = false,
+): number | null {
+  if (facturado === null) return null;
+  // Un cliente SIN saldo pendiente no aparece en el reporte de cuentas por
+  // cobrar. Si el reporte se leyó bien y este proyecto no está, eso no es un
+  // hueco: es el reporte diciendo que no debe nada. Marcarlo "s/d" dejaba 35
+  // proyectos ya cobrados sin número para siempre y subestimaba el flujo.
+  //
+  // `reporteOk` es la salvaguarda: sin una lectura exitosa la ausencia no
+  // significa nada, y ahí sí corresponde no saber.
+  if (pendiente === undefined) return reporteOk ? facturado : null;
   const cobrado = facturado - pendiente;
   // Un pendiente mayor que lo facturado en el rango (anticipo, factura vieja)
   // daría negativo; y uno negativo daría más que el total. Ninguna de las dos
