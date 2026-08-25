@@ -185,6 +185,10 @@ type Enriched = {
   usaContrato: boolean;
   enRango: number | null; // meses del rango, o totalBase × fraction
   gastoRango: number | null;
+  // Lo cobrado que cae en el rango. QuickBooks solo da el saldo pendiente de
+  // HOY, así que `paid` es una foto sin fecha: para recortarlo al rango se
+  // reparte según qué porción de lo FACTURADO cae adentro. Null = sin dato.
+  cobradoRango: number | null;
   meses: MesMonto[]; // desglose del proyecto (vacío si no hay)
 };
 
@@ -324,7 +328,6 @@ export function QboProjectsBoard() {
   // más atrás, esos meses no tienen desglose y sus montos son estimaciones — se
   // avisa en vez de mostrar un número que parece exacto y no lo es.
   const mesesDesde = res?.ok ? res.mesesDesde : null;
-  const cobradoMes = useMemo(() => (res?.ok ? res.cobradoMes : []), [res]);
   const fueraDeCobertura = !!mesesDesde && (!range || range.from < mesesDesde);
 
   // Proyección de cada proyecto dentro del rango. Con desglose mensual de QBO
@@ -345,6 +348,11 @@ export function QboProjectsBoard() {
       const usaContrato = contractTotal !== null;
       const totalBase = contractTotal ?? p.income;
       const round2 = (n: number) => Math.round(n * 100) / 100;
+      // Se prorratea sobre lo FACTURADO, nunca sobre el total de contrato: un
+      // contrato firmado y todavía sin facturar no tiene nada cobrado que
+      // repartir, y usar su monto inflaría la barra verde.
+      const cobradoDe = (share: number): number | null =>
+        p.paid === null ? null : round2(p.paid * Math.min(1, Math.max(0, share)));
 
       // Camino real: sumar los meses del rango. Se usa cuando hay desglose y no
       // hay un total de contrato que mande (un contrato firmado se devenga a lo
@@ -364,6 +372,7 @@ export function QboProjectsBoard() {
           usaContrato,
           enRango: s.income,
           gastoRango: s.cost,
+          cobradoRango: cobradoDe(p.income && p.income > 0 ? s.income / p.income : 1),
           meses,
         };
       }
@@ -386,6 +395,7 @@ export function QboProjectsBoard() {
         usaContrato,
         enRango: totalBase === null ? null : round2(totalBase * fraction),
         gastoRango: p.cost === null ? null : round2(p.cost * fraction),
+        cobradoRango: cobradoDe(fraction),
         meses,
       };
     });
@@ -443,7 +453,7 @@ export function QboProjectsBoard() {
         case "cobro":
           return e.enRango ?? e.p.income;
         case "cobrado":
-          return e.p.paid;
+          return e.cobradoRango;
         case "gasto":
           return e.gastoRango ?? e.p.cost;
         case "margen":
@@ -489,19 +499,34 @@ export function QboProjectsBoard() {
   // reportó en cada uno. Los proyectos sin desglose (cerrados, contratos aún sin
   // facturar) reparten su monto prorrateado entre los meses que cubren, para que
   // la gráfica no se contradiga con el total de la barra de resumen.
+  //
+  // El cobrado sale del MISMO número que muestran la columna y el KPI, repartido
+  // entre los meses igual que lo facturado. Así la barra verde suma exactamente
+  // lo mismo que la columna —dos cifras para lo mismo es peor que una cifra
+  // menos— y la distancia hasta la barra oscura es lo que ese mes sigue sin
+  // cobrarse. Dice "de lo facturado en este mes, cuánto entró", no la fecha en
+  // que entró la plata: QuickBooks solo da el saldo pendiente de hoy.
   const serieMensual = useMemo(() => {
-    const acc = new Map<string, { cobro: number; gasto: number }>();
-    const suma = (mes: string, cobro: number, gasto: number) => {
-      const b = acc.get(mes) ?? { cobro: 0, gasto: 0 };
+    const acc = new Map<string, { cobro: number; gasto: number; cobrado: number; conCobrado: boolean }>();
+    const suma = (mes: string, cobro: number, gasto: number, cobrado: number | null) => {
+      const b = acc.get(mes) ?? { cobro: 0, gasto: 0, cobrado: 0, conCobrado: false };
       b.cobro += cobro;
       b.gasto += gasto;
+      if (cobrado !== null) {
+        b.cobrado += cobrado;
+        b.conCobrado = true;
+      }
       acc.set(mes, b);
     };
     for (const e of sorted) {
+      // El cobrado se reparte en la MISMA proporción que lo facturado, para que
+      // la serie sume el total de la columna por construcción y no por suerte.
+      const porcion = (parte: number): number | null =>
+        e.cobradoRango === null || !e.enRango ? null : (parte / e.enRango) * e.cobradoRango;
       if (e.real) {
         for (const m of e.meses) {
           const f = range ? overlapFraction(m.month, finDeMes(m.month), range) : 1;
-          if (f > 0) suma(m.month, m.income * f, m.cost * f);
+          if (f > 0) suma(m.month, m.income * f, m.cost * f, porcion(m.income * f));
         }
         continue;
       }
@@ -512,19 +537,22 @@ export function QboProjectsBoard() {
       );
       if (cubiertos.length === 0) continue;
       const porMes = 1 / cubiertos.length;
-      for (const mes of cubiertos) suma(mes, (e.enRango ?? 0) * porMes, (e.gastoRango ?? 0) * porMes);
+      for (const mes of cubiertos) {
+        suma(
+          mes,
+          (e.enRango ?? 0) * porMes,
+          (e.gastoRango ?? 0) * porMes,
+          e.cobradoRango === null ? null : e.cobradoRango * porMes,
+        );
+      }
     }
-    // El cobrado viene de la EMPRESA, no de la suma de proyectos: es base caja
-    // y no se puede repartir por proyecto sin inventar. Por eso se cruza por
-    // mes y solo se muestra en los meses que el rango incluye.
-    const porMesCobrado = new Map(cobradoMes.map((m) => [m.month.slice(0, 7), m.cobrado]));
-    const hayCobrado = porMesCobrado.size > 0;
     return Array.from(acc, ([month, v]) => ({
       month,
-      ...v,
-      cobrado: hayCobrado ? porMesCobrado.get(month.slice(0, 7)) ?? 0 : null,
+      cobro: v.cobro,
+      gasto: v.gasto,
+      cobrado: v.conCobrado ? v.cobrado : null,
     })).sort((a, b) => a.month.localeCompare(b.month));
-  }, [sorted, range, cobradoMes]);
+  }, [sorted, range]);
 
   // Totales de la vista actual. `prorrateados` cuenta los que NO tienen desglose
   // mensual de QBO y por lo tanto llevan un monto repartido por días — es el
@@ -540,8 +568,8 @@ export function QboProjectsBoard() {
     for (const e of sorted) {
       cobro += e.enRango ?? 0;
       gasto += e.gastoRango ?? 0;
-      if (e.p.paid !== null) {
-        cobrado += e.p.paid;
+      if (e.cobradoRango !== null) {
+        cobrado += e.cobradoRango;
         conCobrado++;
       }
       if (!e.real && e.fraction < 1) prorrateados++;
@@ -649,7 +677,9 @@ export function QboProjectsBoard() {
           filtros activos: es el estado de LO QUE SE ESTÁ MIRANDO. */}
       {hasProjects ? (
         <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-          <KpiProyecto label={rangeActive ? "Total en rango" : "Total facturado"} value={bal(vista.cobro)} />
+          {/* Los tres KPIs de plata responden todos al rango; decírselo solo a
+              este hacía pensar que los otros dos no. */}
+          <KpiProyecto label="Total facturado" value={bal(vista.cobro)} />
           {/* Lo que efectivamente entró. Se separa del total porque facturar no
               es cobrar, y en una empresa que vive del flujo esa es la diferencia
               que importa. "s/d" cuando QuickBooks no dio el pendiente. */}
@@ -921,7 +951,11 @@ export function QboProjectsBoard() {
                     <SortTh label="Proyecto" k="nombre" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} />
                     <SortTh label="Cliente" k="cliente" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k))} className="hidden lg:table-cell" />
                     <SortTh label="Cotización" k="cotizacion" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} className="hidden md:table-cell" />
-                    <SortTh label={rangeActive ? "En rango" : "Total"} k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
+                    {/* Siempre "Total": nombra lo que hay en la celda —el total
+                        facturado del proyecto—. Que el rango lo recorte ya lo
+                        dice el KPI de arriba, y repetirlo acá hacía leer la
+                        columna como si midiera otra cosa. */}
+                    <SortTh label="Total" k="cobro" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Cobrado" k="cobrado" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="hidden text-right xl:table-cell" />
                     <SortTh label="Gasto" k="gasto" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
                     <SortTh label="Margen" k="margen" sort={sort} onSort={(k) => setSort((v) => toggleSort(v, k, "desc"))} align="right" className="text-right" />
@@ -1042,7 +1076,9 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
   return (
     <div className="mb-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h3 className="text-sm font-semibold text-slate-900">Facturado y gasto por mes</h3>
+        <h3 className="text-sm font-semibold text-slate-900">
+          {hayCobrado ? "Facturado, cobrado y gasto por mes" : "Facturado y gasto por mes"}
+        </h3>
         <div className="flex items-center gap-3 text-[11px]">
           <span className="inline-flex items-center gap-1.5 text-slate-500">
             <span className="size-2 rounded-full bg-[#1E293B]" /> Facturado
@@ -1067,6 +1103,7 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
         {todoReal
           ? "Lo que QuickBooks reporta en cada mes."
           : "Los proyectos sin desglose mensual en QBO reparten su monto entre los meses que cubren."}
+        {hayCobrado ? " Cobrado = de lo facturado ese mes, cuánto ya entró; lo que falta hasta la barra oscura sigue por cobrar." : ""}
       </p>
 
       <div className="relative">
@@ -1076,7 +1113,7 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
           viewBox={`0 0 ${W} ${H}`}
           className="w-full"
           role="img"
-          aria-label={`Facturado y gasto por mes. ${data
+          aria-label={`${hayCobrado ? "Facturado, cobrado y gasto por mes" : "Facturado y gasto por mes"}. ${data
             .map((d) => `${fmtCorta(d.month)}: facturado ${balCompact(d.cobro)}${d.cobrado !== null ? `, cobrado ${balCompact(d.cobrado)}` : ""}, gasto ${balCompact(d.gasto)}`)
             .join(". ")}`}
         >
@@ -1789,12 +1826,17 @@ function ProjectRow({
         <td className="hidden whitespace-nowrap px-3 py-2.5 text-right xl:table-cell">
           {!conDatos ? (
             <span className="text-slate-300">—</span>
-          ) : p.paid === null ? (
+          ) : e.cobradoRango === null ? (
             <span className="text-[11px] italic text-slate-400" title="QuickBooks no reportó el saldo pendiente de este proyecto">
               s/d
             </span>
           ) : (
-            <span className="font-medium tabular-nums text-emerald-700">{bal(p.paid)}</span>
+            <span
+              className="font-medium tabular-nums text-emerald-700"
+              title={parcial && p.paid !== null ? `${bal(p.paid)} cobrados en todo el proyecto` : undefined}
+            >
+              {bal(e.cobradoRango)}
+            </span>
           )}
         </td>
 
