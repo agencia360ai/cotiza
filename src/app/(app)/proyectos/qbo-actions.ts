@@ -13,7 +13,7 @@ import {
   type PnlDiagnostico,
 } from "@/lib/quickbooks/projects";
 import { ventanaDeMeses, type MonthPnl } from "@/lib/quickbooks/parse";
-import { fetchSaldosPendientes, calcularCobrado, fetchCobradoPorMes, diagnosticarCobrado, type DiagnosticoCobrado } from "@/lib/quickbooks/cobrado";
+import { fetchSaldosPendientes, calcularCobrado, diagnosticarCobrado, type DiagnosticoCobrado } from "@/lib/quickbooks/cobrado";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 
 export type QboProjectsResult =
@@ -23,8 +23,6 @@ export type QboProjectsResult =
       financialsOk: boolean;
       year: number;
       syncedAt: number | null;
-      /** Cobrado por mes a nivel empresa (base caja). Vacío si falta la 0049. */
-      cobradoMes: { month: string; cobrado: number }[];
       // Desde cuándo hay desglose mensual real. Antes de esa fecha el board
       // solo puede prorratear, y lo dice en vez de fingir precisión.
       mesesDesde: string | null;
@@ -101,9 +99,6 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
   if (res.error) return { ok: false, error: res.error.message };
   const rows = res.data ?? [];
   const { porProyecto: mesesPorProyecto, desde: mesesDesde } = await loadMeses(supabase, orgId);
-  // Cobrado mensual de la empresa (0049). Si la tabla no existe todavía, la
-  // gráfica dibuja sin esa serie en vez de fallar.
-  const cobradoMes = await loadCobradoMes(supabase, orgId);
   let syncedAt: number | null = null;
   const projects: QboProject[] = rows
     .map((r) => {
@@ -144,7 +139,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
   // "Hay números" = algún income/cost guardado (no el margen: marginOf da null
   // con income 0, y un año legítimamente en cero mostraba el banner de error).
   const financialsOk = projects.some((p) => p.income !== null || p.cost !== null);
-  return { ok: true, projects, financialsOk, year, syncedAt, cobradoMes, mesesDesde };
+  return { ok: true, projects, financialsOk, year, syncedAt, mesesDesde };
 }
 
 // Movimiento mensual de TODOS los proyectos de la org (0045). Vive en su propia
@@ -307,23 +302,6 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     /* sin cobrado: los demás números siguen valiendo */
   }
 
-  // Cobrado mes a mes (base caja, nivel empresa). Una sola llamada. Si falla,
-  // la gráfica pierde una serie y nada más.
-  try {
-    const desdeMes = `${year - 1}-01-01`; // mismo horizonte que la gráfica muestra
-    const meses = await fetchCobradoPorMes(desdeMes, new Date().toISOString().slice(0, 10));
-    if (meses.length > 0) {
-      const filas = meses.map((m) => ({ org_id: orgId, month: m.month, cobrado: m.cobrado, synced_at: new Date().toISOString() }));
-      const { error } = await supabase.from("qbo_cobrado_month").upsert(filas, { onConflict: "org_id,month" });
-      // 0049 pendiente: la gráfica queda sin esa serie, el resto no se pierde.
-      if (error && !isMissingColumn(error) && !/qbo_cobrado_month/i.test(error.message)) {
-        console.warn("[qbo] no se pudo guardar el cobrado mensual:", error.message);
-      }
-    }
-  } catch {
-    /* sin serie mensual de cobrado */
-  }
-
   // Persistir TODO (lista + financials). `closed` no va en el payload → se
   // preserva en updates y arranca en false para los nuevos.
   const nowIso = new Date().toISOString();
@@ -386,7 +364,6 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     financialsOk,
     year,
     syncedAt: Date.now(),
-    cobradoMes: await loadCobradoMes(supabase, orgId),
     mesesDesde,
   };
 }
@@ -719,16 +696,3 @@ export async function diagnosticarCobradoAction(): Promise<
   }
 }
 
-/** Cobrado mensual de la org. Vacío —no lanza— si falta la 0049. */
-async function loadCobradoMes(supabase: DB, orgId: string): Promise<{ month: string; cobrado: number }[]> {
-  const { data, error } = await supabase
-    .from("qbo_cobrado_month")
-    .select("month, cobrado")
-    .eq("org_id", orgId)
-    .order("month");
-  if (error || !data) return [];
-  return (data as { month: string; cobrado: number | string }[]).map((r) => ({
-    month: String(r.month).slice(0, 10),
-    cobrado: Number(r.cobrado) || 0,
-  }));
-}
