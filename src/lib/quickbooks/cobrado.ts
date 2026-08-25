@@ -1,6 +1,10 @@
 import "server-only";
 import { listQboTools, withQboSession } from "./mcp";
 import { cosechar, desenvolver } from "./cobrado-core";
+import { parsePnl } from "./parse";
+
+/** Cuánto entró en un mes, a nivel empresa. */
+export type MesCobrado = { month: string; cobrado: number };
 
 // Cuánto se COBRÓ de verdad, por proyecto.
 //
@@ -141,6 +145,48 @@ export async function diagnosticarCobrado(idsDeProyectos: string[]): Promise<Dia
     }
     return base;
   });
+}
+
+/**
+ * Cobrado mes a mes, a nivel EMPRESA.
+ *
+ * El P&L en base CAJA registra el ingreso cuando entra la plata, no cuando se
+ * factura. Sumado por mes, eso es exactamente "cuánto cobramos en cada mes".
+ *
+ * Una sola llamada, sin aislar por proyecto: la gráfica muestra totales, y
+ * duplicar las ~80 consultas por proyecto —que ya son la parte lenta del
+ * refresh— para un dato agregado no se paga.
+ */
+export async function fetchCobradoPorMes(desde: string, hasta: string): Promise<MesCobrado[]> {
+  let tools;
+  try {
+    tools = await listQboTools();
+  } catch {
+    return [];
+  }
+  const tool = tools.find((t) => /profit.*loss|profit_loss|\bp_l\b|pnl/i.test(t.name));
+  if (!tool) return [];
+
+  try {
+    return await withQboSession(async (call) => {
+      const raw = await call(tool.name, {
+        params: {
+          start_date: desde,
+          end_date: hasta,
+          summarize_column_by: "Month",
+          accounting_method: "Cash",
+        },
+      });
+      // parsePnl ya sabe desenvolver y leer la forma de los reportes: el mismo
+      // reporte, otra base contable. Reusarlo evita repetir el error de leer
+      // mal la estructura, que ya costó dos intentos.
+      const pnl = parsePnl(raw as Parameters<typeof parsePnl>[0]);
+      if (!pnl) return [];
+      return pnl.meses.map((m) => ({ month: m.month, cobrado: m.income }));
+    });
+  } catch {
+    return [];
+  }
 }
 
 export { calcularCobrado } from "./cobrado-core";

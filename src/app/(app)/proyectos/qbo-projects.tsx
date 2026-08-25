@@ -324,6 +324,7 @@ export function QboProjectsBoard() {
   // más atrás, esos meses no tienen desglose y sus montos son estimaciones — se
   // avisa en vez de mostrar un número que parece exacto y no lo es.
   const mesesDesde = res?.ok ? res.mesesDesde : null;
+  const cobradoMes = useMemo(() => (res?.ok ? res.cobradoMes : []), [res]);
   const fueraDeCobertura = !!mesesDesde && (!range || range.from < mesesDesde);
 
   // Proyección de cada proyecto dentro del rango. Con desglose mensual de QBO
@@ -513,8 +514,17 @@ export function QboProjectsBoard() {
       const porMes = 1 / cubiertos.length;
       for (const mes of cubiertos) suma(mes, (e.enRango ?? 0) * porMes, (e.gastoRango ?? 0) * porMes);
     }
-    return Array.from(acc, ([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month));
-  }, [sorted, range]);
+    // El cobrado viene de la EMPRESA, no de la suma de proyectos: es base caja
+    // y no se puede repartir por proyecto sin inventar. Por eso se cruza por
+    // mes y solo se muestra en los meses que el rango incluye.
+    const porMesCobrado = new Map(cobradoMes.map((m) => [m.month.slice(0, 7), m.cobrado]));
+    const hayCobrado = porMesCobrado.size > 0;
+    return Array.from(acc, ([month, v]) => ({
+      month,
+      ...v,
+      cobrado: hayCobrado ? porMesCobrado.get(month.slice(0, 7)) ?? 0 : null,
+    })).sort((a, b) => a.month.localeCompare(b.month));
+  }, [sorted, range, cobradoMes]);
 
   // Totales de la vista actual. `prorrateados` cuenta los que NO tienen desglose
   // mensual de QBO y por lo tanto llevan un monto repartido por días — es el
@@ -991,7 +1001,7 @@ export function QboProjectsBoard() {
 // sin que una tape a la otra. Antes el gasto iba dentro de la barra de cobro y
 // en los meses de gasto alto casi la llenaba, haciendo ver poco margen donde
 // había, y encima cada pantalla dibujaba lo mismo distinto.
-type PuntoMes = { month: string; cobro: number; gasto: number };
+type PuntoMes = { month: string; cobro: number; gasto: number; cobrado: number | null };
 
 function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: boolean }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -1005,12 +1015,18 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
   const slot = innerW / data.length;
   // Dos barras por mes: cada una toma poco menos de la mitad del espacio útil,
   // y el gap las separa lo justo para leerlas como un par y no como dos cosas.
-  const barW = Math.max(4, Math.min(13, slot * 0.32));
-  const gap = Math.max(2, barW * 0.25);
+  // Dos o tres barras por mes según haya serie de cobrado. El ancho se reparte
+  // entre las que haya para que el grupo ocupe siempre lo mismo.
+  const hayCobrado = data.some((d) => d.cobrado !== null);
+  const nBarras = hayCobrado ? 3 : 2;
+  const barW = Math.max(3, Math.min(13, (slot * 0.62) / nBarras));
+  const gap = Math.max(1.5, barW * 0.22);
   const y = (v: number) => H - PAD_B - (v / max) * (H - PAD_B - PAD_T);
   const maxIdx = data.reduce((mi, d, i) => (d.cobro > data[mi].cobro ? i : mi), 0);
   const totalCobro = data.reduce((a, d) => a + d.cobro, 0);
   const totalGasto = data.reduce((a, d) => a + d.gasto, 0);
+  const conCobrado = data.filter((d) => d.cobrado !== null);
+  const totalCobrado = conCobrado.length > 0 ? conCobrado.reduce((a, d) => a + (d.cobrado ?? 0), 0) : null;
   const margen = totalCobro > 0 ? (totalCobro - totalGasto) / totalCobro : null;
 
   // Barra con el tope redondeado. Piso de 3px: un mes de $200 al lado de uno de
@@ -1032,6 +1048,12 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
             <span className="size-2 rounded-full bg-[#1E293B]" /> Facturado
             <span className="font-semibold tabular-nums text-slate-900">{balCompact(totalCobro)}</span>
           </span>
+          {totalCobrado !== null ? (
+            <span className="inline-flex items-center gap-1.5 text-slate-500">
+              <span className="size-2 rounded-full bg-[#059669]" /> Cobrado
+              <span className="font-semibold tabular-nums text-emerald-700">{balCompact(totalCobrado)}</span>
+            </span>
+          ) : null}
           <span className="inline-flex items-center gap-1.5 text-slate-500">
             <span className="size-2 rounded-full bg-[#F43F5E]" /> Gasto
             <span className="font-semibold tabular-nums text-rose-600">{balCompact(totalGasto)}</span>
@@ -1055,7 +1077,7 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
           className="w-full"
           role="img"
           aria-label={`Facturado y gasto por mes. ${data
-            .map((d) => `${fmtCorta(d.month)}: facturado ${balCompact(d.cobro)}, gasto ${balCompact(d.gasto)}`)
+            .map((d) => `${fmtCorta(d.month)}: facturado ${balCompact(d.cobro)}${d.cobrado !== null ? `, cobrado ${balCompact(d.cobrado)}` : ""}, gasto ${balCompact(d.gasto)}`)
             .join(". ")}`}
         >
           {[0.25, 0.5, 0.75, 1].map((f) => (
@@ -1065,8 +1087,12 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
 
           {data.map((d, i) => {
             const cx = PAD_L + slot * i + slot / 2;
-            const xCobro = cx - barW - gap / 2;
-            const xGasto = cx + gap / 2;
+            // Grupo centrado en el mes, sea de dos barras o de tres.
+            const anchoGrupo = nBarras * barW + (nBarras - 1) * gap;
+            const x0 = cx - anchoGrupo / 2;
+            const xCobro = x0;
+            const xCobrado = hayCobrado ? x0 + barW + gap : null;
+            const xGasto = x0 + (nBarras - 1) * (barW + gap);
             const active = hover === i;
             const dim = hover !== null && !active;
             return (
@@ -1082,6 +1108,12 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
                 />
                 {d.cobro > 0 ? (
                   <path d={barra(d.cobro, xCobro, barW)} fill={active ? "#0F172A" : "#1E293B"} style={{ pointerEvents: "none" }} />
+                ) : null}
+                {/* Cobrado: lo que entró ese mes. Verde porque es plata en la
+                    mano, no una promesa — y al lado del facturado la brecha
+                    entre los dos es lo que se está financiando. */}
+                {xCobrado !== null && (d.cobrado ?? 0) > 0 ? (
+                  <path d={barra(d.cobrado ?? 0, xCobrado, barW)} fill="#059669" style={{ pointerEvents: "none" }} />
                 ) : null}
                 {d.gasto > 0 ? (
                   <path d={barra(d.gasto, xGasto, barW)} fill="#F43F5E" style={{ pointerEvents: "none" }} />
@@ -1107,7 +1139,8 @@ function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: bo
             className="pointer-events-none absolute -top-1 z-10 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] leading-relaxed text-white shadow-lg"
             style={{ left: `${((PAD_L + slot * hover + slot / 2) / W) * 100}%`, transform: "translateX(-50%)" }}
           >
-            <span className="font-semibold">{fmtCorta(data[hover].month)}</span> · facturado {balCompact(data[hover].cobro)} · gasto{" "}
+            <span className="font-semibold">{fmtCorta(data[hover].month)}</span> · facturado {balCompact(data[hover].cobro)}
+            {data[hover].cobrado !== null ? ` · cobrado ${balCompact(data[hover].cobrado ?? 0)}` : ""} · gasto{" "}
             {balCompact(data[hover].gasto)}
           </div>
         ) : null}
