@@ -92,21 +92,38 @@ export type FechasInput = {
 const menor = (a: string | null | undefined, b: string | null | undefined) =>
   a && b ? (a < b ? a : b) : (a ?? b ?? null);
 
+export type FechasEfectivas = {
+  start: string;
+  end: string;
+  fuente: FuenteFechas;
+  // Si el DÍA de cada extremo es un dato o un artefacto. `firstTxnDate` y
+  // `lastTxnDate` salen del reporte MENSUAL, así que siempre caen en día 1:
+  // escribir ese día haría pasar por dato lo que es una consecuencia de cómo
+  // se agrupó el reporte. Quien muestra la fecha necesita saber la diferencia.
+  diaStart: boolean;
+  diaEnd: boolean;
+};
+
 /**
  * Fechas efectivas del proyecto, en orden de confianza:
  *   1. manual  — las dos cargadas a mano: es el contrato, gana siempre.
  *   2. qbo     — apertura del proyecto / primer movimiento → último movimiento.
  *   3. asumido — solo inicio ⇒ +12 meses; ni eso ⇒ el año del correlativo.
  */
-export function effectiveDates(p: FechasInput): { start: string; end: string; fuente: FuenteFechas } | null {
+export function effectiveDates(p: FechasInput): FechasEfectivas | null {
   const start = p.startDate ?? menor(p.qboCreatedAt, p.firstTxnDate);
   const end = p.endDate ?? p.lastTxnDate ?? null;
+  // El día del inicio vale si lo escribió alguien o si vino de la fecha de alta
+  // del cliente en QBO, que sí es un timestamp real.
+  const diaStart = !!p.startDate || (!!start && start === p.qboCreatedAt);
 
   if (start && end) {
     return {
       start,
       end: end >= start ? end : start,
       fuente: p.startDate && p.endDate ? "manual" : "qbo",
+      diaStart,
+      diaEnd: !!p.endDate,
     };
   }
   if (start) {
@@ -114,8 +131,10 @@ export function effectiveDates(p: FechasInput): { start: string; end: string; fu
     const d = new Date(start + "T00:00:00Z");
     d.setUTCFullYear(d.getUTCFullYear() + 1);
     d.setUTCDate(d.getUTCDate() - 1);
-    return { start, end: d.toISOString().slice(0, 10), fuente: "asumido" };
+    return { start, end: d.toISOString().slice(0, 10), fuente: "asumido", diaStart, diaEnd: diaStart };
   }
-  if (p.year) return { start: `${p.year}-01-01`, end: `${p.year}-12-31`, fuente: "asumido" };
+  if (p.year) {
+    return { start: `${p.year}-01-01`, end: `${p.year}-12-31`, fuente: "asumido", diaStart: false, diaEnd: false };
+  }
   return null; // sin ninguna pista de fechas
 }
