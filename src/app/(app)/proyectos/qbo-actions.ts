@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
-import { hasQboConfig } from "@/lib/quickbooks/mcp";
+import { hasQboConfig, QboTransportError } from "@/lib/quickbooks/mcp";
 import {
   fetchQboProjectsList,
   fetchProjectFinancials,
@@ -43,6 +43,22 @@ function isMissingColumn(error: { message?: string; code?: string } | null): boo
 
 // Dedupe de "Actualizar" concurrentes (un solo pull a QBO a la vez por org).
 const inflight = new Map<string, Promise<QboProjectsResult>>();
+
+/**
+ * Qué se le dice a quien apretó "Actualizar".
+ *
+ * Los fallos de transporte ya vienen reintentados tres veces: si llegaron acá,
+ * el gateway está caído o dormido, y lo único accionable es volver a intentar
+ * en un rato. El mensaje lo dice, en vez de dejar salir el texto crudo de la
+ * excepción —"The operation was aborted due to timeout"— que no le dice a nadie
+ * qué pasó ni qué hacer.
+ */
+function mensajeDeFallo(e: unknown): string {
+  if (e instanceof QboTransportError) {
+    return `${e.message}. Se reintentó 3 veces; el servicio puede estar arrancando — probá de nuevo en un minuto`;
+  }
+  return e instanceof Error ? e.message : "Error trayendo proyectos de QBO";
+}
 
 // ── Abrir la página: leer SOLO de la base. Cero llamadas a QBO. ───────────────
 // allYears=true (el board con filtro de fechas): trae TODOS los años — un
@@ -423,7 +439,7 @@ export async function getQboProjects(opts?: { force?: boolean; allYears?: boolea
       if (r.ok && opts?.allYears) return loadFromDb(supabase, orgId, year, true);
       return r;
     } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : "Error trayendo proyectos de QBO" };
+      return { ok: false as const, error: mensajeDeFallo(e) };
     } finally {
       inflight.delete(orgId);
     }
