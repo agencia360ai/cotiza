@@ -55,7 +55,7 @@ const inflight = new Map<string, Promise<QboProjectsResult>>();
  */
 function mensajeDeFallo(e: unknown): string {
   if (e instanceof QboTransportError) {
-    return `${e.message}. Se reintentó 3 veces; el servicio puede estar arrancando — probá de nuevo en un minuto`;
+    return `${e.message}. Se intentó 3 veces; el servicio puede estar arrancando — probá de nuevo en un minuto`;
   }
   return e instanceof Error ? e.message : "Error trayendo proyectos de QBO";
 }
