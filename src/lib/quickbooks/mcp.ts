@@ -56,9 +56,11 @@ const CODIGO_HUMANO: Record<string, string> = {
   EAI_AGAIN: "falló el DNS (transitorio)",
 };
 
-function describeFetchError(e: unknown, method: string): string {
+function describeFetchError(e: unknown, method: string, fase: "pedido" | "respuesta" = "pedido"): string {
   if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
-    return `el gateway de QBO no respondió — timeout en ${method}`;
+    return fase === "respuesta"
+      ? `el gateway de QBO empezó a responder pero no terminó a tiempo — ${method}`
+      : `el gateway de QBO no respondió — timeout en ${method}`;
   }
   // undici tira TypeError "fetch failed" con la causa real (ECONNRESET,
   // ENOTFOUND…) escondida en e.cause — o en cause.errors[0] cuando el host
@@ -77,6 +79,13 @@ function describeFetchError(e: unknown, method: string): string {
 
 // Estos status vienen del proxy/infra, no de la lógica de QBO: transitorios.
 const HTTP_TRANSITORIO = new Set([429, 502, 503, 504]);
+
+// El primer intento paga el arranque en frío del e2-micro (conexión hasta 45s
+// + autenticación contra Intuit). Los reintentos no: si no contestó en 60s, no
+// va a necesitar otros 60 — y tres intentos completos se comían el maxDuration
+// de 300s de la server action antes de llegar a consultar un solo proyecto.
+const TOPE_PRIMER_INTENTO = 60_000;
+const TOPE_REINTENTO = 25_000;
 
 // Circuit breaker: cuando el gateway está caído/colgado, un refresh recorre
 // docenas de llamadas y a 3 intentos × 30s cada una revienta el maxDuration de
@@ -112,6 +121,7 @@ async function rpc(
   params: unknown,
   id: number | null,
   sessionId: string | undefined,
+  tope?: number,
 ): Promise<{ res: RpcResponse | null; sessionId: string | undefined }> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -132,8 +142,9 @@ async function rpc(
     body: JSON.stringify(payload),
     dispatcher: qboAgent,
     // Total > connect (45s) para no cortar una conexión fría a mitad; con el
-    // breaker abierto, en cambio, se corta a los 8s para fallar rápido.
-    signal: AbortSignal.timeout(gatewayCaido() ? 8_000 : 60_000),
+    // breaker abierto, en cambio, se corta a los 8s para fallar rápido. Los
+    // reintentos mandan un tope más corto: ver TOPE_REINTENTO.
+    signal: AbortSignal.timeout(gatewayCaido() ? 8_000 : (tope ?? TOPE_PRIMER_INTENTO)),
   }).catch((e) => {
     throw new QboTransportError(describeFetchError(e, method));
   });
@@ -152,7 +163,14 @@ async function rpc(
   if (id === null) return { res: null, sessionId: newSession };
 
   const ct = r.headers.get("content-type") ?? "";
-  const body = await r.text();
+  // Leer el cuerpo también es red: el timeout y el socket siguen vivos después
+  // de que llegan los headers. Sin este catch, un gateway que responde y se
+  // queda a mitad del cuerpo tiraba el TimeoutError crudo de undici —"The
+  // operation was aborted due to timeout"— que no es de transporte para
+  // `withSession`, así que NO se reintentaba y salía tal cual en pantalla.
+  const body = await r.text().catch((e) => {
+    throw new QboTransportError(describeFetchError(e, method, "respuesta"));
+  });
   const res = parseRpcPayload(ct, body);
   if (res.error) throw new Error(`QBO MCP ${method} error ${res.error.code}: ${res.error.message}`);
   return { res, sessionId: newSession };
@@ -160,12 +178,13 @@ async function rpc(
 
 // Handshake MCP: initialize (+ notifications/initialized si el gateway da
 // sesión). Devuelve el Mcp-Session-Id para arrastrarlo en las siguientes llamadas.
-async function handshake(): Promise<string | undefined> {
+async function handshake(tope?: number): Promise<string | undefined> {
   const init = await rpc(
     "initialize",
     { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "cotiza", version: "1.0" } },
     1,
     undefined,
+    tope,
   );
   const session = init.sessionId;
   if (session) await rpc("notifications/initialized", {}, null, session).catch(() => {});
@@ -183,7 +202,7 @@ async function withSession<T>(
   const intentos = 1 + (gatewayCaido() ? 0 : (opts?.retries ?? 2));
   for (let intento = 1; ; intento++) {
     try {
-      const session = await handshake();
+      const session = await handshake(intento === 1 ? undefined : TOPE_REINTENTO);
       const out = await fn(session);
       gatewayCaidoHasta = 0;
       return out;
@@ -227,7 +246,7 @@ export async function withQboSession<T>(
       // Sesión caída a mitad del lote: reconstruir la sesión (para esta y las
       // siguientes) y reintentar UNA vez. Si vuelve a caer, abrir el breaker.
       try {
-        session = await handshake();
+        session = await handshake(TOPE_REINTENTO);
         return await attempt(session, name, args);
       } catch (e2) {
         if (e2 instanceof QboTransportError) gatewayCaidoHasta = Date.now() + 60_000;
