@@ -84,8 +84,12 @@ export type FechasInput = {
   startDate: string | null; // cargadas a mano (contrato firmado)
   endDate: string | null;
   qboCreatedAt?: string | null; // MetaData.CreateTime del customer en QBO
-  firstTxnDate?: string | null; // primer mes con movimiento
-  lastTxnDate?: string | null; // último mes con movimiento
+  firstTxnDate?: string | null; // primer movimiento
+  lastTxnDate?: string | null; // último movimiento
+  // "transaccion" = las dos de arriba traen un día real (TxnDate). Cualquier
+  // otra cosa (incluido null) = vienen del reporte mensual y el día es un 1
+  // puesto por el agrupador, no un dato.
+  txnDatesSource?: "mes" | "transaccion" | null;
   year: number | null; // año del correlativo — último recurso
 };
 
@@ -113,9 +117,13 @@ export type FechasEfectivas = {
 export function effectiveDates(p: FechasInput): FechasEfectivas | null {
   const start = p.startDate ?? menor(p.qboCreatedAt, p.firstTxnDate);
   const end = p.endDate ?? p.lastTxnDate ?? null;
-  // El día del inicio vale si lo escribió alguien o si vino de la fecha de alta
-  // del cliente en QBO, que sí es un timestamp real.
-  const diaStart = !!p.startDate || (!!start && start === p.qboCreatedAt);
+  // Los movimientos traen día propio solo cuando salieron de transacciones; del
+  // reporte mensual salen siempre en día 1, que no es un dato.
+  const txnConDia = p.txnDatesSource === "transaccion";
+  // El día del inicio vale si lo escribió alguien, si vino de la fecha de alta
+  // del cliente en QBO (un timestamp real), o si es un TxnDate.
+  const diaStart =
+    !!p.startDate || (!!start && (start === p.qboCreatedAt || (txnConDia && start === p.firstTxnDate)));
 
   if (start && end) {
     return {
@@ -123,7 +131,7 @@ export function effectiveDates(p: FechasInput): FechasEfectivas | null {
       end: end >= start ? end : start,
       fuente: p.startDate && p.endDate ? "manual" : "qbo",
       diaStart,
-      diaEnd: !!p.endDate,
+      diaEnd: !!p.endDate || (txnConDia && end === p.lastTxnDate),
     };
   }
   if (start) {
