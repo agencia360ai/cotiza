@@ -22,7 +22,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, getQuotesPorProyecto, listCotizacionesAsignables, asignarCotizaciones, diagnosticarCobradoAction, type QboProjectsResult, type QuotesPorProyecto, type CotizacionAsignable } from "./qbo-actions";
+import { getQboProjects, setProjectStatus, setProjectDates, diagnosticarProyecto, setProjectQuoteNo, getQuotesPorProyecto, listCotizacionesAsignables, asignarCotizaciones, diagnosticarCobradoAction, diagnosticarFechasAction, type QboProjectsResult, type QuotesPorProyecto, type CotizacionAsignable } from "./qbo-actions";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 import { toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
 import { useColumnas, ColumnaTh, ColumnasMenu, SORT_DE_COL, type ColKey, type Columnas } from "./columnas";
@@ -358,6 +358,7 @@ export function QboProjectsBoard() {
         qboCreatedAt: p.qboCreatedAt,
         firstTxnDate: p.firstTxnDate,
         lastTxnDate: p.lastTxnDate,
+        txnDatesSource: p.txnDatesSource,
         year: p.year,
       });
       const meses = p.meses ?? [];
@@ -1029,6 +1030,11 @@ export function QboProjectsBoard() {
                   · <span className="font-semibold tabular-nums">{pendientes.sinCotizacion}</span> sin cotización vinculada
                 </span>
               ) : null}
+              {/* Ni una sola fecha con día real: la lectura de transacciones no
+                  está trayendo nada y conviene poder ver por qué. */}
+              {sorted.length > 0 && !sorted.some((e) => e.eff?.diaStart || e.eff?.diaEnd) ? (
+                <span>· <PorQueSinDia /></span>
+              ) : null}
               {pendientes.sinFechaFin > 0 ? (
                 <span className="text-rose-700">
                   · <span className="font-semibold tabular-nums">{pendientes.sinFechaFin}</span> por cobrar sin fecha de fin en QuickBooks
@@ -1286,6 +1292,71 @@ function PorQueSinCobrado() {
           <div className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-900">Por qué no hay cobrado</h3>
+              <button type="button" onClick={() => setAbierto(false)} className="cursor-pointer rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100">
+                Cerrar
+              </button>
+            </div>
+            <pre className="whitespace-pre-wrap break-all rounded-lg bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">
+              {cargando ? "Consultando QuickBooks…" : txt}
+            </pre>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Por qué las fechas no tienen día.
+ *
+ * Aparece solo cuando NINGÚN proyecto de la vista trae día real: ahí no es una
+ * curiosidad, es que la lectura de transacciones no está funcionando, y sin
+ * esto la única forma de saber por qué sería adivinar.
+ */
+function PorQueSinDia() {
+  const [abierto, setAbierto] = useState(false);
+  const [cargando, setCargando] = useState(false);
+  const [txt, setTxt] = useState<string | null>(null);
+
+  async function ver() {
+    setAbierto(true);
+    if (txt || cargando) return;
+    setCargando(true);
+    const r = await diagnosticarFechasAction();
+    setCargando(false);
+    if (!r.ok) {
+      setTxt(r.error);
+      return;
+    }
+    const d = r.data;
+    setTxt(
+      [
+        `Herramientas de transacciones en el gateway: ${d.herramientas.join(", ") || "(ninguna)"}`,
+        "",
+        ...d.probadas.map(
+          (p) =>
+            `${p.tool} ${p.variante} → ${p.error ? `error: ${p.error}` : `fechas de ${p.fechasVistas} clientes, ${p.idsQueMatchean} son proyectos nuestros`}`,
+        ),
+        "",
+        d.muestraCruda,
+      ].join("\n"),
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={ver}
+        className="cursor-pointer text-[11px] text-slate-400 underline decoration-dotted hover:text-slate-600"
+      >
+        fechas sin día · por qué
+      </button>
+      {abierto ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={() => setAbierto(false)}>
+          <div className="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">Por qué las fechas no tienen día</h3>
               <button type="button" onClick={() => setAbierto(false)} className="cursor-pointer rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100">
                 Cerrar
               </button>

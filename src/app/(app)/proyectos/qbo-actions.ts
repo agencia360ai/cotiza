@@ -14,6 +14,7 @@ import {
 } from "@/lib/quickbooks/projects";
 import { ventanaDeMeses, type MonthPnl } from "@/lib/quickbooks/parse";
 import { fetchSaldosPendientes, calcularCobrado, diagnosticarCobrado, type DiagnosticoCobrado } from "@/lib/quickbooks/cobrado";
+import { fetchFechasReales, diagnosticarFechas, type DiagnosticoFechas } from "@/lib/quickbooks/fechas";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 
 export type QboProjectsResult =
@@ -39,6 +40,13 @@ function isMissingColumn(error: { message?: string; code?: string } | null): boo
   // Mismo patrón que pipeline/gov-actions: PostgREST reporta una columna nueva
   // como "could not find … in the schema cache" hasta recargar el schema.
   return /does not exist|could not find|schema cache/i.test(error.message ?? "");
+}
+
+// La columna es texto libre en Postgres; acá se estrecha al par de valores que
+// el código sabe interpretar. Cualquier otra cosa se trata como desconocida, que
+// es lo mismo que "vino del reporte mensual" para efectos de mostrar el día.
+function fuenteDeFechas(v: unknown): "mes" | "transaccion" | null {
+  return v === "transaccion" || v === "mes" ? v : null;
 }
 
 // Dedupe de "Actualizar" concurrentes (un solo pull a QBO a la vez por org).
@@ -86,6 +94,7 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
     qbo_created_at?: string | null;
     first_txn_date?: string | null;
     last_txn_date?: string | null;
+    txn_dates_source?: string | null;
   };
   type Res = { data: Row[] | null; error: ({ message: string; code?: string }) | null };
   const run = async (cols: string): Promise<Res> => {
@@ -103,7 +112,8 @@ async function loadFromDb(supabase: DB, orgId: string, year: number, allYears = 
   const BASE_COLS = "qb_job_id, name, full_name, rubro, year, client_name, closed, income, cost, synced_at";
   const COLS_0048 = `${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number, paid`;
 const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contract_total, quote_number`;
-  let res = await run(`${COLS_0048}, qbo_created_at, first_txn_date, last_txn_date`);
+  let res = await run(`${COLS_0048}, qbo_created_at, first_txn_date, last_txn_date, txn_dates_source`);
+  if (isMissingColumn(res.error)) res = await run(`${COLS_0048}, qbo_created_at, first_txn_date, last_txn_date`); // 0049 pendiente
   if (isMissingColumn(res.error)) res = await run(`${COLS_0037}, qbo_created_at, first_txn_date, last_txn_date`); // 0048 pendiente
   if (isMissingColumn(res.error)) res = await run(COLS_0037); // 0045 pendiente
   if (isMissingColumn(res.error)) res = await run(`${BASE_COLS}, progress, status, start_date, end_date, contract_total`); // 0037 pendiente
@@ -148,6 +158,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
         qboCreatedAt: r.qbo_created_at ?? null,
         firstTxnDate: r.first_txn_date ?? null,
         lastTxnDate: r.last_txn_date ?? null,
+        txnDatesSource: fuenteDeFechas(r.txn_dates_source),
         meses: mesesPorProyecto.get(r.qb_job_id) ?? [],
       };
     })
@@ -210,6 +221,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     quote_number?: string | null;
     first_txn_date?: string | null;
     last_txn_date?: string | null;
+    txn_dates_source?: string | null;
   };
   type StRes = { data: StRow[] | null; error: ({ message: string; code?: string }) | null };
   const readState = async (cols: string): Promise<StRes> => {
@@ -228,7 +240,8 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     return { data: all, error: null };
   };
   const ST_0037 = "qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total, quote_number";
-  let st = await readState(`${ST_0037}, first_txn_date, last_txn_date`);
+  let st = await readState(`${ST_0037}, first_txn_date, last_txn_date, txn_dates_source`);
+  if (isMissingColumn(st.error)) st = await readState(`${ST_0037}, first_txn_date, last_txn_date`); // 0049 pendiente
   if (isMissingColumn(st.error)) st = await readState(ST_0037); // 0045 pendiente
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress, status, start_date, end_date, contract_total");
   if (isMissingColumn(st.error)) st = await readState("qb_job_id, closed, income, cost, progress, status");
@@ -255,6 +268,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       // QBO, así que para ellos ESTE es el único valor que van a tener.
       p.firstTxnDate = s.first_txn_date ?? null;
       p.lastTxnDate = s.last_txn_date ?? null;
+      p.txnDatesSource = fuenteDeFechas(s.txn_dates_source);
     }
   }
 
@@ -282,6 +296,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
           if (v) {
             p.firstTxnDate = v.first;
             p.lastTxnDate = v.last;
+            p.txnDatesSource = "mes"; // lo afina después la lectura de transacciones
           }
         } else if (errored.has(p.id)) {
           // Fallo TRANSITORIO (red/gateway para este proyecto): conservar los
@@ -299,6 +314,27 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     }
   } catch {
     /* sin financials: la lista igual se guarda */
+  }
+
+  // Fechas REALES. El P&L de arriba deja `first/lastTxnDate` en día 1 —es un
+  // reporte mensual—, así que acá se afinan leyendo las transacciones, donde
+  // TxnDate sí es un día de calendario. Cuatro llamadas para toda la ventana,
+  // no una por proyecto: agrupar en memoria es lo que hace que esto quepa.
+  //
+  // Si falla, las fechas por mes que ya están siguen valiendo: esto solo mejora.
+  try {
+    const abiertos = list.filter((p) => !p.closed);
+    const desde = `${year - 2}-01-01`; // cubre contratos arrastrados de años previos
+    const { porProyecto } = await fetchFechasReales(abiertos.map((p) => p.id), desde);
+    for (const p of abiertos) {
+      const r = porProyecto.get(p.id);
+      if (!r) continue;
+      p.firstTxnDate = r.primera;
+      p.lastTxnDate = r.ultima;
+      p.txnDatesSource = "transaccion";
+    }
+  } catch {
+    /* sin fechas reales: quedan las del reporte mensual */
   }
 
   // Cobrado. Va DESPUÉS del P&L porque necesita lo facturado para restarle el
@@ -337,11 +373,16 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // fallaría, perdiendo también los números que sí se pudieron traer.
   const conPaid = list.map((p, i) => ({ ...rows[i], paid: p.paid }));
   const fechas = list.map((p, i) => ({ ...rows[i], qbo_created_at: p.qboCreatedAt, first_txn_date: p.firstTxnDate, last_txn_date: p.lastTxnDate }));
+  // La 0049 puede no haber corrido: si la columna no existe se cae al upsert de
+  // arriba, que guarda las fechas igual (solo se pierde saber si traen día).
+  const conFuente = list.map((p, i) => ({ ...fechas[i], txn_dates_source: p.txnDatesSource }));
   if (rows.length) {
     // Con las fechas de 0045 si la migración corrió; sin ellas si no (el resto
     // de la sincronización no se pierde por una columna que todavía no existe).
+    const todo = list.map((p, i) => ({ ...conFuente[i], paid: p.paid }));
+    let { error: upErr } = await supabase.from("qbo_project_state").upsert(todo, { onConflict: "org_id,qb_job_id" });
     const fechasConPaid = list.map((p, i) => ({ ...fechas[i], paid: p.paid }));
-    let { error: upErr } = await supabase.from("qbo_project_state").upsert(fechasConPaid, { onConflict: "org_id,qb_job_id" });
+    if (isMissingColumn(upErr)) upErr = (await supabase.from("qbo_project_state").upsert(fechasConPaid, { onConflict: "org_id,qb_job_id" })).error; // 0049 pendiente
     if (isMissingColumn(upErr)) upErr = (await supabase.from("qbo_project_state").upsert(fechas, { onConflict: "org_id,qb_job_id" })).error; // 0048 pendiente
     if (isMissingColumn(upErr)) upErr = (await supabase.from("qbo_project_state").upsert(conPaid, { onConflict: "org_id,qb_job_id" })).error; // 0045 pendiente
     if (isMissingColumn(upErr)) {
@@ -707,6 +748,40 @@ export async function diagnosticarCobradoAction(): Promise<
 
   try {
     return { ok: true, data: await diagnosticarCobrado(ids) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "No se pudo diagnosticar" };
+  }
+}
+
+/**
+ * Por qué las fechas siguen sin día.
+ *
+ * Mismo motivo que el diagnóstico del cobrado: la lectura de transacciones
+ * puede fallar de cuatro formas distintas y desde afuera las cuatro se ven
+ * igual ("sigue diciendo jul 2026"). Adivinar cuál es ya costó dos intentos
+ * cuando pasó con el cobrado; esto lo muestra en vez de suponerlo.
+ */
+export async function diagnosticarFechasAction(): Promise<
+  { ok: true; data: DiagnosticoFechas } | { ok: false; error: string }
+> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Sesión expirada" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { ok: false, error: "Sin organización" };
+  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada" };
+
+  const { data } = (await supabase
+    .from("qbo_project_state")
+    .select("qb_job_id")
+    .eq("org_id", orgId)
+    .eq("closed", false)
+    .limit(500)) as { data: { qb_job_id: string }[] | null };
+  const ids = (data ?? []).map((r) => r.qb_job_id);
+
+  try {
+    const desde = `${new Date().getUTCFullYear() - 2}-01-01`;
+    return { ok: true, data: await diagnosticarFechas(ids, desde) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "No se pudo diagnosticar" };
   }

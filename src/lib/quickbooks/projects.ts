@@ -27,8 +27,11 @@ export type QboProject = {
   quoteNumber: string | null; // cotización de origen ("COT DC 26-141") — 0037
   // Fechas REALES de QuickBooks (0045). No las pone nadie a mano.
   qboCreatedAt: string | null; // MetaData.CreateTime del customer
-  firstTxnDate: string | null; // primer mes con movimiento en el P&L
-  lastTxnDate: string | null; // último mes con movimiento
+  firstTxnDate: string | null; // primer movimiento (mes del P&L, o TxnDate real)
+  lastTxnDate: string | null; // último movimiento
+  // De dónde salieron las dos de arriba. "mes" = del reporte mensual, así que
+  // el día cae siempre en 1 y no significa nada. "transaccion" = TxnDate real.
+  txnDatesSource: "mes" | "transaccion" | null;
   meses: MonthPnl[]; // movimiento mes a mes (vacío = sin data mensual todavía)
 };
 
@@ -72,8 +75,9 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
       const parent = p.parentId ? byId.get(p.parentId) : null;
       return {
         qboCreatedAt: p.createdAt,
-        firstTxnDate: null, // lo llena el P&L mensual
+        firstTxnDate: null, // lo llena el P&L mensual y luego lo afina fechas.ts
         lastTxnDate: null,
+        txnDatesSource: null,
         meses: [] as MonthPnl[],
         id: p.id,
         name: leafName(p.fullyQualifiedName, p.displayName),
