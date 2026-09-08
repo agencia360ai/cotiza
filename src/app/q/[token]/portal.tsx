@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { CotizadorDialog, type CotizadorApi } from "@/app/(app)/potenciales/cotizador";
-import { portalGenerate, portalSave, portalPublish } from "./actions";
+import { portalGenerate, portalRefine, portalSave, portalPublish } from "./actions";
 
 export function PortalCotizador({ token, orgName }: { token: string; orgName: string }) {
   const [doneCount, setDoneCount] = useState(0);
@@ -14,6 +14,7 @@ export function PortalCotizador({ token, orgName }: { token: string; orgName: st
       // OJO: pasar TAMBIÉN los adjuntos — perderlos rompía el flujo "solo
       // archivo" e ignoraba en silencio lo adjuntado en "texto + archivo".
       generate: (brief, adjuntos) => portalGenerate(token, brief, adjuntos),
+      refine: (actual, instruccion, adjuntos) => portalRefine(token, actual, instruccion, adjuntos),
       save: (input) => portalSave(token, input),
       publish: (id) => portalPublish(token, id),
     }),

@@ -58,15 +58,36 @@ export type QuoteAdjunto =
   | { kind: "pdf"; name: string; data: string }
   | { kind: "text"; name: string; text: string };
 
-type Bloque =
+export type Bloque =
   | { type: "image"; source: { type: "base64"; media_type: QuoteImage["mime"]; data: string } }
   | { type: "document"; source: { type: "base64"; media_type: "application/pdf"; data: string }; title?: string }
   | { type: "text"; text: string };
 
+/** Imágenes y PDF como bloques de contenido. El texto va aparte, en el prompt. */
+export function bloquesDeAdjuntos(adjuntos: QuoteAdjunto[]): Bloque[] {
+  const out: Bloque[] = [];
+  for (const a of adjuntos) {
+    if (a.kind === "image") {
+      out.push({ type: "image", source: { type: "base64", media_type: a.mime, data: a.data } });
+    } else if (a.kind === "pdf") {
+      out.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data }, title: a.name });
+    }
+  }
+  return out;
+}
+
+/** Los adjuntos de texto, delimitados por nombre para saber qué vino de dónde. */
+export function textoDeAdjuntos(adjuntos: QuoteAdjunto[]): string {
+  return adjuntos
+    .filter((a): a is Extract<QuoteAdjunto, { kind: "text" }> => a.kind === "text")
+    .map((a) => `--- ${a.name} ---\n${a.text}`)
+    .join("\n\n");
+}
+
 // Qué se le dice a la IA que tiene delante. Sin esto, un PDF de especificación
 // y una foto de notas manuscritas se leen igual, y no son lo mismo: del primero
 // hay que sacar alcance y cantidades, del segundo también los precios a mano.
-function comoLeerLosAdjuntos(adjuntos: QuoteAdjunto[]): string {
+export function comoLeerLosAdjuntos(adjuntos: QuoteAdjunto[]): string {
   if (adjuntos.length === 0) return "";
   const tipos = new Set(adjuntos.map((a) => a.kind));
   const partes = [
@@ -89,22 +110,8 @@ export async function generateQuote(
   adjuntos: QuoteAdjunto[] = [],
 ): Promise<GeneratedQuote> {
   const list = clientNames.slice(0, 250).join("\n");
-  const content: Bloque[] = [];
-
-  for (const a of adjuntos) {
-    if (a.kind === "image") {
-      content.push({ type: "image", source: { type: "base64", media_type: a.mime, data: a.data } });
-    } else if (a.kind === "pdf") {
-      content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data }, title: a.name });
-    }
-  }
-
-  // Los de texto van dentro del prompt, delimitados y con su nombre, para que
-  // se distinga qué vino de qué archivo.
-  const textos = adjuntos
-    .filter((a): a is Extract<QuoteAdjunto, { kind: "text" }> => a.kind === "text")
-    .map((a) => `--- ${a.name} ---\n${a.text}`)
-    .join("\n\n");
+  const content = bloquesDeAdjuntos(adjuntos);
+  const textos = textoDeAdjuntos(adjuntos);
 
   content.push({
     type: "text",

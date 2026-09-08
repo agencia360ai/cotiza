@@ -17,6 +17,7 @@ import {
   type Db,
 } from "@/lib/quotes/store";
 import type { QuoteAdjunto } from "@/lib/ai/generate-quote";
+import { refinarBorrador, type BorradorAjustable, type AjusteAplicado } from "@/lib/quotes/refinar";
 import type { LetterData } from "@/lib/quotes/letter";
 import type { QuoteRow, Rubro } from "@/lib/pipeline/types";
 
@@ -55,6 +56,28 @@ export async function generateQuoteDraft(brief: string, adjuntos: QuoteAdjunto[]
     return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim(), adjuntos) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
+  }
+}
+
+/**
+ * Ajustar el borrador EN PANTALLA, antes de guardarlo.
+ *
+ * No toca la base: recibe lo que se está viendo y devuelve lo ajustado. Así el
+ * ajuste se puede deshacer sin dejar rastro, y probar tres redacciones antes de
+ * guardar cuesta lo mismo que probar una.
+ */
+export async function refineQuoteDraft(
+  actual: BorradorAjustable,
+  instruccion: string,
+  adjuntos: QuoteAdjunto[] = [],
+): Promise<Result<AjusteAplicado>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  if (!instruccion.trim() && adjuntos.length === 0) return { error: "Decime qué querés cambiar" };
+  try {
+    return { ok: true, data: await refinarBorrador(c.supabase, c.orgId, actual, instruccion.trim(), adjuntos) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Error ajustando la cotización" };
   }
 }
 
