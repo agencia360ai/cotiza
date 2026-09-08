@@ -208,6 +208,7 @@ function useDictado(onTexto: (t: string) => void) {
 
 const EJEMPLOS_AJUSTE = [
   "Separá el mantenimiento mensual de los add-ons de una sola vez",
+  "Acortá las descripciones para que quepa en una página",
   "Pasalo a rubro DC y ajustá la descripción corta",
   "Subí todos los precios 8% y redondeá a múltiplos de 5",
   "Donde dice Precio poné Tarifa mensual",
