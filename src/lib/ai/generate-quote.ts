@@ -45,31 +45,96 @@ Reglas:
 
 export type QuoteImage = { data: string; mime: "image/jpeg" | "image/png" | "image/webp" };
 
-export async function generateQuote(brief: string, clientNames: string[], image?: QuoteImage | null): Promise<GeneratedQuote> {
-  const list = clientNames.slice(0, 250).join("\n");
-  const content: Array<
-    | { type: "image"; source: { type: "base64"; media_type: QuoteImage["mime"]; data: string } }
-    | { type: "text"; text: string }
-  > = [];
-  if (image) {
-    content.push({ type: "image", source: { type: "base64", media_type: image.mime, data: image.data } });
+/**
+ * Lo que el ingeniero adjunta al cotizar.
+ *
+ * Tres formas porque la API las trata distinto: una imagen va como bloque
+ * `image`, un PDF como bloque `document` (Claude lo lee entero, texto y
+ * páginas escaneadas), y un archivo de texto se pega en el prompt — mandarlo
+ * como documento no aporta nada y gasta tokens de más.
+ */
+export type QuoteAdjunto =
+  | { kind: "image"; name: string; data: string; mime: QuoteImage["mime"] }
+  | { kind: "pdf"; name: string; data: string }
+  | { kind: "text"; name: string; text: string };
+
+type Bloque =
+  | { type: "image"; source: { type: "base64"; media_type: QuoteImage["mime"]; data: string } }
+  | { type: "document"; source: { type: "base64"; media_type: "application/pdf"; data: string }; title?: string }
+  | { type: "text"; text: string };
+
+// Qué se le dice a la IA que tiene delante. Sin esto, un PDF de especificación
+// y una foto de notas manuscritas se leen igual, y no son lo mismo: del primero
+// hay que sacar alcance y cantidades, del segundo también los precios a mano.
+function comoLeerLosAdjuntos(adjuntos: QuoteAdjunto[]): string {
+  if (adjuntos.length === 0) return "";
+  const tipos = new Set(adjuntos.map((a) => a.kind));
+  const partes = [
+    `Hay ${adjuntos.length} archivo(s) adjunto(s): ${adjuntos.map((a) => a.name).join(", ")}.`,
+    "Extraé de ahí equipo, alcance, cantidades y precios que aparezcan.",
+  ];
+  if (tipos.has("image")) {
+    partes.push("Las fotos pueden ser notas manuscritas, placas de equipo o una cotización previa en papel.");
   }
+  if (tipos.has("pdf")) {
+    partes.push("Los PDF pueden ser especificaciones, pliegos o cotizaciones anteriores; respetá sus cantidades y descripciones técnicas.");
+  }
+  partes.push("El texto del pedido complementa o CORRIGE lo que digan los archivos: si se contradicen, gana el texto.");
+  return partes.join(" ") + "\n\n";
+}
+
+export async function generateQuote(
+  brief: string,
+  clientNames: string[],
+  adjuntos: QuoteAdjunto[] = [],
+): Promise<GeneratedQuote> {
+  const list = clientNames.slice(0, 250).join("\n");
+  const content: Bloque[] = [];
+
+  for (const a of adjuntos) {
+    if (a.kind === "image") {
+      content.push({ type: "image", source: { type: "base64", media_type: a.mime, data: a.data } });
+    } else if (a.kind === "pdf") {
+      content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: a.data }, title: a.name });
+    }
+  }
+
+  // Los de texto van dentro del prompt, delimitados y con su nombre, para que
+  // se distinga qué vino de qué archivo.
+  const textos = adjuntos
+    .filter((a): a is Extract<QuoteAdjunto, { kind: "text" }> => a.kind === "text")
+    .map((a) => `--- ${a.name} ---\n${a.text}`)
+    .join("\n\n");
+
   content.push({
     type: "text",
     text:
-      `LISTA DE CLIENTES:\n${list}\n\nPEDIDO:\n${brief || "(sin texto — usá la foto)"}\n\n` +
-      (image
-        ? "Hay una FOTO adjunta (notas manuscritas, placa de equipo, instalación, cotización previa...): extraé de ahí equipo, alcance, cantidades y precios que se vean. El texto complementa o corrige lo de la foto.\n\n"
-        : "") +
+      `LISTA DE CLIENTES:\n${list}\n\nPEDIDO:\n${brief || "(sin texto — usá los archivos adjuntos)"}\n\n` +
+      (textos ? `ARCHIVOS DE TEXTO ADJUNTOS:\n${textos}\n\n` : "") +
+      comoLeerLosAdjuntos(adjuntos) +
       "Generá la cotización.",
   });
+
   const response = await anthropic.messages.parse({
     model: pickModel("default"),
-    max_tokens: 2000,
+    // 2000 alcanzaba para un pedido de una línea, pero no para lo que la gente
+    // pega de verdad: un pliego con veinte renglones y una lista larga de
+    // exclusiones. Al cortarse a mitad del JSON el error que salía era
+    // "Unterminated string in JSON at position 5968", que no le dice a nadie
+    // que el problema fue el largo. El resto de los generadores del proyecto
+    // usan 16000 por lo mismo.
+    max_tokens: 16000,
     system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content }],
     output_config: { format: zodOutputFormat(schema) },
   });
+  // Si aun así se corta, decirlo en castellano: el error crudo del parser
+  // manda a buscar un bug de formato donde lo que hubo fue un texto muy largo.
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      "La cotización salió más larga de lo que entra en una respuesta. Acortá el pedido (o partilo en dos cotizaciones) y volvé a intentar.",
+    );
+  }
   if (!response.parsed_output) throw new Error("La IA no pudo generar la cotización");
   return response.parsed_output as GeneratedQuote;
 }

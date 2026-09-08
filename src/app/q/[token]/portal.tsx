@@ -11,9 +11,9 @@ export function PortalCotizador({ token, orgName }: { token: string; orgName: st
 
   const api: CotizadorApi = useMemo(
     () => ({
-      // OJO: pasar TAMBIÉN la foto — perderla rompía el flujo "solo foto" y
-      // silenciosamente ignoraba la imagen en "brief + foto".
-      generate: (brief, image) => portalGenerate(token, brief, image),
+      // OJO: pasar TAMBIÉN los adjuntos — perderlos rompía el flujo "solo
+      // archivo" e ignoraba en silencio lo adjuntado en "texto + archivo".
+      generate: (brief, adjuntos) => portalGenerate(token, brief, adjuntos),
       save: (input) => portalSave(token, input),
       publish: (id) => portalPublish(token, id),
     }),

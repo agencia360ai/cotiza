@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { generateQuote, type GeneratedQuote, type QuoteImage } from "@/lib/ai/generate-quote";
+import { generateQuote, type GeneratedQuote, type QuoteAdjunto } from "@/lib/ai/generate-quote";
 import { matchClientByName } from "@/lib/clients/match";
 import { hasDropboxConfig, listFolder, uploadFile, getSharedLink } from "@/lib/dropbox/client";
 import { quotesFolder } from "@/lib/dropbox/folders";
@@ -71,11 +71,11 @@ export type DraftBundle = {
   matchedClientName: string | null;
 };
 
-export async function buildQuoteDraft(db: Db, orgId: string, brief: string, image?: QuoteImage | null): Promise<DraftBundle> {
+export async function buildQuoteDraft(db: Db, orgId: string, brief: string, adjuntos: QuoteAdjunto[] = []): Promise<DraftBundle> {
   const { data: clients } = (await db.from("clients").select("name").eq("org_id", orgId).order("name")) as {
     data: { name: string }[] | null;
   };
-  const generated = await generateQuote(brief, (clients ?? []).map((r) => r.name), image);
+  const generated = await generateQuote(brief, (clients ?? []).map((r) => r.name), adjuntos);
   const [suggestedNumber, matched] = await Promise.all([
     nextQuoteNumber(db, orgId),
     matchClientByName(asMatchDb(db), orgId, generated.client_name),

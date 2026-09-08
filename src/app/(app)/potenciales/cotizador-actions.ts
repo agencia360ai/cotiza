@@ -16,7 +16,7 @@ import {
   type PublishOut,
   type Db,
 } from "@/lib/quotes/store";
-import type { QuoteImage } from "@/lib/ai/generate-quote";
+import type { QuoteAdjunto } from "@/lib/ai/generate-quote";
 import type { LetterData } from "@/lib/quotes/letter";
 import type { QuoteRow, Rubro } from "@/lib/pipeline/types";
 
@@ -47,12 +47,12 @@ async function requireAdminRole(c: { supabase: Awaited<ReturnType<typeof createC
 export type CotizadorDraft = DraftBundle;
 export type SaveCotizacionInput = SaveQuoteInput;
 
-export async function generateQuoteDraft(brief: string, image?: QuoteImage | null): Promise<Result<CotizadorDraft>> {
+export async function generateQuoteDraft(brief: string, adjuntos: QuoteAdjunto[] = []): Promise<Result<CotizadorDraft>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!brief.trim() && !image) return { error: "Cuéntame qué hay que cotizar (o sube una foto)" };
+  if (!brief.trim() && adjuntos.length === 0) return { error: "Cuéntame qué hay que cotizar (o adjuntá un archivo)" };
   try {
-    return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim(), image ?? null) };
+    return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim(), adjuntos) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
   }
