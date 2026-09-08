@@ -158,6 +158,10 @@ export function CartaEditor({
   const [pub, setPub] = useState<{ url: string | null; waText: string; aviso: string | null } | null>(null);
   const [publicando, setPublicando] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
+  // Cuántas páginas ocupa la carta. Se mide del alto real de la hoja, no se
+  // estima: es el dato que decide si vale la pena acortar antes de mandarla, y
+  // hasta ahora había que imprimir para enterarse.
+  const [paginas, setPaginas] = useState(1);
 
   const T = resolveTextos({ ...letter, textos }, { quoteNumber });
   const { subtotal, itbms, total } = letterTotals(letter);
@@ -250,10 +254,65 @@ export function CartaEditor({
     window.addEventListener("pointerup", soltar);
   }
 
+  // Paginar la vista como pagina el PDF.
+  //
+  // La hoja es un solo bloque que crece con el contenido, así que al repetir el
+  // membrete por página el texto caía DEBAJO del logo de la página 2. Acá se
+  // hace lo mismo que `ensure()` en el PDF: el bloque que no entra completo en
+  // lo que queda de página se baja al área de contenido de la siguiente.
+  useEffect(() => {
+    const el = sheetRef.current;
+    // Por atributo y no por firstElementChild: las marcas de corte son hermanas
+    // del cuerpo y aparecen ANTES, así que al re-paginar se estaría midiendo una
+    // línea punteada en vez del texto de la carta.
+    const cuerpo = el?.querySelector<HTMLElement>("[data-cuerpo]") ?? undefined;
+    if (!el || !cuerpo) return;
+
+    let corriendo = false;
+    const acomodar = () => {
+      if (corriendo) return; // mover bloques cambia el tamaño: una pasada sola
+      corriendo = true;
+      const IN = 96;
+      const PAGINA = 11 * IN;
+      const ARRIBA = 1.55 * IN; // banda del encabezado del membrete
+      const ABAJO = 1.1 * IN; // banda del pie
+      const bloques = Array.from(cuerpo.children) as HTMLElement[];
+
+      for (const b of bloques) b.style.marginTop = "";
+      const base = el.getBoundingClientRect().top;
+
+      for (const b of bloques) {
+        const r = b.getBoundingClientRect();
+        const y0 = r.top - base;
+        const y1 = r.bottom - base;
+        const pagina = Math.floor(y0 / PAGINA);
+        const finUtil = pagina * PAGINA + (PAGINA - ABAJO);
+        // Entra completo: se queda donde está. Un bloque más alto que una página
+        // (una lista de condiciones larguísima) tampoco se mueve — moverlo no lo
+        // haría entrar y dejaría una página en blanco.
+        if (y1 <= finUtil || r.height > PAGINA - ARRIBA - ABAJO) continue;
+        const destino = (pagina + 1) * PAGINA + ARRIBA;
+        const actual = parseFloat(getComputedStyle(b).marginTop) || 0;
+        b.style.marginTop = `${actual + (destino - y0)}px`;
+      }
+
+      setPaginas(Math.max(1, Math.ceil(el.getBoundingClientRect().height / PAGINA - 0.02)));
+      corriendo = false;
+    };
+
+    acomodar();
+    const ro = new ResizeObserver(() => requestAnimationFrame(acomodar));
+    ro.observe(cuerpo);
+    return () => ro.disconnect();
+  }, [letter, textos, cliente]);
+
   return (
     <>
       <style>{`
         @page { size: letter; margin: 0; }
+        /* Dónde puede cortar la hoja. Sin esto el navegador parte donde le
+           toca: un renglón a la mitad, o el total solo en la última página. */
+        .sheet tr, .sheet .no-cortar { break-inside: avoid; page-break-inside: avoid; }
         @media print {
           .no-print { display: none !important; }
           .sheet { box-shadow: none !important; margin: 0 !important; width: 8.5in !important; min-height: 11in !important; }
@@ -262,6 +321,15 @@ export function CartaEditor({
       `}</style>
 
       <div className="no-print mx-auto mb-4 flex max-w-[8.5in] flex-wrap items-center justify-between gap-2">
+        {paginas > 1 ? (
+          <span
+            className="order-last w-full rounded-lg bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 ring-1 ring-inset ring-amber-600/20"
+            title="Las líneas punteadas sobre la hoja marcan dónde corta cada página"
+          >
+            Esta carta ocupa <b>{paginas} páginas</b>. Si querés que entre en una, pedile al cotizador que acorte las
+            descripciones o las condiciones — los cortes están marcados sobre la hoja.
+          </span>
+        ) : null}
         <Link
           href="/potenciales"
           className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
@@ -364,11 +432,33 @@ export function CartaEditor({
         className="sheet relative mx-auto w-[8.5in] min-h-[11in] bg-white text-[13px] leading-relaxed text-slate-900 shadow-xl"
         style={{
           backgroundImage: "url(/dicec-membrete.png)",
-          backgroundSize: "100% 100%",
-          backgroundRepeat: "no-repeat",
+          // 11in de alto, NO 100%: con "100% 100%" el membrete se estiraba para
+          // llenar la hoja, y como la hoja crece con el contenido, una carta
+          // larga deformaba el logo y corría el arte del encabezado por encima
+          // del texto. A 8.5in de ancho por 11in de alto la imagen queda en su
+          // proporción exacta (2550×3300 = 8.5×11 a 300 dpi).
+          backgroundSize: "100% 11in",
+          // Y se repite por página, igual que hace el PDF: si el contenido pasa
+          // a una segunda hoja, esa hoja también lleva membrete.
+          backgroundRepeat: "repeat-y",
         }}
       >
-        <div className="px-[1in] pb-[1.1in] pt-[1.55in]">
+        {/* Dónde corta cada página. Solo en pantalla: en el papel el corte ES el
+            borde, marcarlo ahí sería dibujar una línea de más. */}
+        {Array.from({ length: paginas - 1 }, (_, i) => (
+          <div
+            key={i}
+            aria-hidden
+            className="no-print pointer-events-none absolute inset-x-0 border-t border-dashed border-rose-300"
+            style={{ top: `${(i + 1) * 11}in` }}
+          >
+            <span className="absolute right-1 -translate-y-full rounded-t bg-rose-300 px-1.5 text-[9px] font-semibold text-white">
+              página {i + 2}
+            </span>
+          </div>
+        ))}
+
+        <div data-cuerpo className="px-[1in] pb-[1.1in] pt-[1.55in]">
           <div className="text-right">{fechaLarga(letter.fecha)}</div>
 
           <div className="mt-6 font-semibold">
@@ -420,7 +510,7 @@ export function CartaEditor({
             </tbody>
           </table>
 
-          <div className="ml-auto mt-3 w-[3.2in] text-[12.5px]">
+          <div className="no-cortar ml-auto mt-3 w-[3.2in] text-[12.5px]">
             <div className="flex justify-between py-0.5">
               <Editable value={T.lbl_subtotal} onChange={(v) => setT("lbl_subtotal", v)} edit={edit} />
               <span className="tabular-nums">B/. {fmtBal(subtotal)}</span>
@@ -437,7 +527,7 @@ export function CartaEditor({
             </div>
           </div>
 
-          <p className="mt-6">
+          <p className="no-cortar mt-6">
             <Editable value={T.oferta} onChange={(v) => setT("oferta", v)} edit={edit} />{" "}
             <i className="font-semibold">B/. {fmtBal(total)}</i>
           </p>
@@ -470,7 +560,7 @@ export function CartaEditor({
           ) : null}
 
           {letter.elaborado ? (
-            <div className="mt-14">
+            <div className="no-cortar mt-14">
               <div className="w-[2.6in] border-t border-slate-800 pt-1">
                 {letter.elaborado}
                 <br />

@@ -41,6 +41,7 @@ Convertís una descripción breve (una línea) en una cotización formal complet
 
 Reglas:
 - Redactá los renglones como en una carta formal panameña de HVAC: equipo con marca/capacidad si se da, alcance del trabajo (suministro, instalación, mano de obra, materiales).
+- NO repitas el mismo alcance en cada renglón. Si varios equipos comparten el mismo trabajo (el caso típico de un mantenimiento preventivo), describí ese alcance UNA vez en las condiciones y dejá cada renglón en equipo + capacidad + tarifa. Repetir el mismo párrafo seis veces convierte una carta de una página en cuatro, y el cliente deja de leerla.
 - Precios en Balboas (B/.), SIN ITBMS (el 7% se suma aparte salvo que digan lo contrario).
 - Si el usuario da precio(s), respetalos EXACTAMENTE. Si dice "X más ITBMS", X es el precio sin ITBMS. Si dice "ITBMS incluido", calculá el precio base = X / 1.07.
 - Si NO da precio, estimá un precio razonable de mercado panameño para ese trabajo y dejalo evidente en la descripción corta que es estimado.

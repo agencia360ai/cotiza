@@ -64,6 +64,7 @@ Sobre los renglones:
 - Un contrato mensual con cargos por evento se arma así: lo recurrente con aparte=false, y el reemplazo de filtros / la recarga de refrigerante / cualquier add-on con aparte=true. Meterlos en el total haría que el cliente lea como cuota fija algo que puede no pasar nunca.
 - Si te piden "que X quede fuera del total" o "que se cobre solo cuando se pida", eso es aparte=true — no una condición al pie.
 - Conservá el "aparte" que ya tenía cada renglón salvo que el pedido hable de eso.
+- Si te piden acortar o "que quepa en una página": el alcance repetido en cada renglón es lo que sobra. Va UNA vez en las condiciones, y cada renglón queda en equipo + capacidad + tarifa. No borres renglones ni cambies precios para acortar.
 - Precios en Balboas (B/.), SIN ITBMS.
 - Si te dan un precio, respetalo exacto. Si el pedido implica recalcular (ej. "subí todo 10%"), calculá bien.
 

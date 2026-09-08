@@ -174,24 +174,31 @@ export async function renderQuotePdf(input: {
   const size = 9.8;
   const lh = size * 1.4;
 
-  // encabezado
-  ensure(ctx, lh + 8);
   const thPrecio = clean(T.th_precio);
   const thTotal = clean(T.th_total);
-  ctx.page.drawText(clean(T.th_cant), { x: xCant, y: ctx.y - size, size, font: bold, color: INK });
-  ctx.page.drawText(clean(T.th_desc), { x: xDesc, y: ctx.y - size, size, font: bold, color: INK });
-  ctx.page.drawText(thPrecio, { x: xPrecioR - bold.widthOfTextAtSize(thPrecio, size), y: ctx.y - size, size, font: bold, color: INK });
-  ctx.page.drawText(thTotal, { x: xTotalR - bold.widthOfTextAtSize(thTotal, size), y: ctx.y - size, size, font: bold, color: INK });
-  ctx.y -= lh + 2;
-  ctx.page.drawLine({ start: { x: MX, y: ctx.y }, end: { x: PAGE_W - MX, y: ctx.y }, thickness: 1.1, color: INK });
-  ctx.y -= 6;
+  const encabezadoTabla = () => {
+    ctx.page.drawText(clean(T.th_cant), { x: xCant, y: ctx.y - size, size, font: bold, color: INK });
+    ctx.page.drawText(clean(T.th_desc), { x: xDesc, y: ctx.y - size, size, font: bold, color: INK });
+    ctx.page.drawText(thPrecio, { x: xPrecioR - bold.widthOfTextAtSize(thPrecio, size), y: ctx.y - size, size, font: bold, color: INK });
+    ctx.page.drawText(thTotal, { x: xTotalR - bold.widthOfTextAtSize(thTotal, size), y: ctx.y - size, size, font: bold, color: INK });
+    ctx.y -= lh + 2;
+    ctx.page.drawLine({ start: { x: MX, y: ctx.y }, end: { x: PAGE_W - MX, y: ctx.y }, thickness: 1.1, color: INK });
+    ctx.y -= 6;
+  };
+
+  ensure(ctx, lh + 8);
+  encabezadoTabla();
 
   const { enTotal, aparte } = partirItems(letter.items);
 
   const fila = (it: LetterItem) => {
     const descLines = wrap(it.desc, font, size, DESC_W);
     const rowH = descLines.length * lh + 6;
+    const antes = ctx.page;
     ensure(ctx, rowH);
+    // Si el renglón se fue a la página siguiente, la tabla sigue allá: sin
+    // repetir el encabezado, la página 2 son montos sin decir de qué columna.
+    if (ctx.page !== antes) encabezadoTabla();
     const rowTop = ctx.y;
     ctx.page.drawText(String(it.cant), { x: xCant, y: rowTop - size, size, font, color: INK });
     let yy = rowTop;
@@ -217,7 +224,10 @@ export async function renderQuotePdf(input: {
   totRows.push([clean(T.lbl_total), `B/. ${fmtBal(total)}`, true]);
   const boxW = 200;
   const boxX = PAGE_W - MX - boxW;
-  ensure(ctx, totRows.length * lh + 12);
+  // Se reserva el bloque de totales MÁS la línea de oferta: separarlos deja una
+  // página que termina en "Subtotal" y otra que empieza con el total, y el
+  // número que el cliente aprueba tiene que leerse junto a lo que lo compone.
+  ensure(ctx, totRows.length * lh + 12 + 26);
   for (const [label, val, strong] of totRows) {
     const f = strong ? bold : font;
     if (strong) {
