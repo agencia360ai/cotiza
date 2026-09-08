@@ -19,11 +19,13 @@ import {
   Camera,
   Paperclip,
   FileText,
+  Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { letterTotals, fmtBal, type LetterData, type LetterItem } from "@/lib/quotes/letter";
 import {
   generateQuoteDraft,
+  refineQuoteDraft,
   saveGeneratedQuote,
   updateGeneratedQuote,
   publishQuote,
@@ -33,12 +35,14 @@ import {
 } from "./cotizador-actions";
 import type { QuoteImage, QuoteAdjunto } from "@/lib/ai/generate-quote";
 import type { PublishOut } from "@/lib/quotes/store";
+import type { BorradorAjustable, AjusteAplicado } from "@/lib/quotes/refinar-core";
 import type { QuoteRow } from "@/lib/pipeline/types";
 import { RUBROS, type Rubro } from "@/lib/pipeline/types";
 
 type ApiResult<T> = { error: string } | { ok: true; data: T };
 export type CotizadorApi = {
   generate: (brief: string, adjuntos?: QuoteAdjunto[]) => Promise<ApiResult<CotizadorDraft>>;
+  refine: (actual: BorradorAjustable, instruccion: string, adjuntos?: QuoteAdjunto[]) => Promise<ApiResult<AjusteAplicado>>;
   save: (input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
   publish: (quoteId: string) => Promise<ApiResult<PublishOut>>;
   update?: (quoteId: string, input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
@@ -46,6 +50,7 @@ export type CotizadorApi = {
 
 const APP_API: CotizadorApi = {
   generate: generateQuoteDraft,
+  refine: refineQuoteDraft,
   save: saveGeneratedQuote,
   publish: publishQuote,
   update: updateGeneratedQuote,
@@ -131,6 +136,263 @@ async function leerAdjunto(file: File): Promise<Adjunto> {
   throw new Error("formato no soportado (imagen, PDF, Word, Excel o texto)");
 }
 
+// Dictado por voz. Vive suelto porque lo usan el brief y el ajuste, y montar
+// dos reconocedores a la vez hace que se pisen los resultados.
+function useDictado(onTexto: (t: string) => void) {
+  const [escuchando, setEscuchando] = useState(false);
+  const [soportado, setSoportado] = useState(true);
+  const ref = useRef<{ start: () => void; stop: () => void } | null>(null);
+  const cb = useRef(onTexto);
+  // En un efecto, no en el render: el reconocedor se monta una sola vez y
+  // necesita el callback de AHORA, pero escribir un ref durante el render es
+  // un efecto secundario y React lo marca como tal.
+  useEffect(() => {
+    cb.current = onTexto;
+  });
+
+  useEffect(() => {
+    type SR = new () => {
+      continuous: boolean;
+      interimResults: boolean;
+      lang: string;
+      onresult: ((e: { resultIndex: number; results: ArrayLike<{ isFinal?: boolean; 0: { transcript: string } }> }) => void) | null;
+      onend: (() => void) | null;
+      onerror: ((e: unknown) => void) | null;
+      start: () => void;
+      stop: () => void;
+    };
+    const win = window as unknown as { SpeechRecognition?: SR; webkitSpeechRecognition?: SR };
+    const Ctor = win.SpeechRecognition ?? win.webkitSpeechRecognition;
+    if (!Ctor) {
+      setSoportado(false);
+      return;
+    }
+    const rec = new Ctor();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = "es-PA";
+    rec.onresult = (e) => {
+      let chunk = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i] as { isFinal?: boolean; 0: { transcript: string } };
+        if (r.isFinal === false) continue;
+        chunk += r[0].transcript;
+      }
+      if (chunk) cb.current(chunk.trim());
+    };
+    rec.onend = () => setEscuchando(false);
+    rec.onerror = () => setEscuchando(false);
+    ref.current = rec;
+    return () => {
+      try {
+        rec.stop();
+      } catch {}
+    };
+  }, []);
+
+  return {
+    soportado,
+    escuchando,
+    alternar: () => {
+      const rec = ref.current;
+      if (!rec) return;
+      if (escuchando) rec.stop();
+      else {
+        rec.start();
+        setEscuchando(true);
+      }
+    },
+  };
+}
+
+const EJEMPLOS_AJUSTE = [
+  "Separá el mantenimiento mensual de los add-ons de una sola vez",
+  "Pasalo a rubro DC y ajustá la descripción corta",
+  "Subí todos los precios 8% y redondeá a múltiplos de 5",
+  "Donde dice Precio poné Tarifa mensual",
+];
+
+/**
+ * Ajustar el borrador hablándole en castellano, antes de guardar.
+ *
+ * Está arriba del formulario y no abajo porque es la forma RÁPIDA de cambiar
+ * cosas: mover seis renglones a mano es lo que se hace cuando el pedido es muy
+ * puntual, no lo primero que uno intenta.
+ */
+function AjustarConIA({
+  pendiente,
+  resumen,
+  hayDeshacer,
+  onDeshacer,
+  onAjustar,
+}: {
+  pendiente: boolean;
+  resumen: string | null;
+  hayDeshacer: boolean;
+  onDeshacer: () => void;
+  onAjustar: (instruccion: string, adjuntos: QuoteAdjunto[]) => Promise<boolean>;
+}) {
+  const [texto, setTexto] = useState("");
+  const [archivos, setArchivos] = useState<Adjunto[]>([]);
+  const [problema, setProblema] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const voz = useDictado((t) => setTexto((p) => (p ? p + " " : "") + t));
+
+  async function sumar(files: FileList | null) {
+    if (!files?.length) return;
+    setProblema(null);
+    const nuevos: Adjunto[] = [];
+    const malos: string[] = [];
+    for (const f of Array.from(files).slice(0, MAX_ADJUNTOS - archivos.length)) {
+      try {
+        nuevos.push(await leerAdjunto(f));
+      } catch (e) {
+        malos.push(`${f.name}: ${e instanceof Error ? e.message : "no se pudo leer"}`);
+      }
+    }
+    if ([...archivos, ...nuevos].reduce((a, x) => a + x.bytes, 0) > MAX_BYTES) {
+      setProblema(`Los archivos pasan los ${MAX_BYTES / 1e6} MB`);
+      return;
+    }
+    if (nuevos.length) setArchivos((p) => [...p, ...nuevos]);
+    if (malos.length) setProblema(malos.join(" · "));
+  }
+
+  async function enviar() {
+    if (!texto.trim() && archivos.length === 0) return;
+    const ok = await onAjustar(texto.trim(), archivos.map((a) => a.a));
+    // Solo se limpia si funcionó: tras un error el pedido sigue ahí para
+    // corregirlo, en vez de obligar a reescribirlo entero.
+    if (ok) {
+      setTexto("");
+      setArchivos([]);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-violet-800">
+          <Sparkles className="size-3.5" /> Ajustar con IA
+        </span>
+        {hayDeshacer ? (
+          <button
+            type="button"
+            onClick={onDeshacer}
+            disabled={pendiente}
+            className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
+          >
+            <Undo2 className="size-3.5" /> Deshacer
+          </button>
+        ) : null}
+      </div>
+
+      <textarea
+        rows={2}
+        value={texto}
+        onChange={(e) => setTexto(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter manda; Shift+Enter hace salto. Es un pedido corto, no un
+          // documento: pedir un clic para cada ajuste corta el ida y vuelta.
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void enviar();
+          }
+        }}
+        disabled={pendiente}
+        placeholder={`Decí qué cambiar. Ej: "${EJEMPLOS_AJUSTE[0]}"`}
+        className="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm focus:border-violet-400 focus:outline-none disabled:opacity-60"
+      />
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {voz.soportado ? (
+          <button
+            type="button"
+            onClick={voz.alternar}
+            disabled={pendiente}
+            className={cn(
+              "inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors",
+              voz.escuchando ? "bg-red-500 text-white ring-4 ring-red-500/20" : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+            )}
+          >
+            <Mic className="size-3.5" />
+            {voz.escuchando ? "Escuchando…" : "Voz"}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={pendiente || archivos.length >= MAX_ADJUNTOS}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          <Paperclip className="size-3.5" /> Foto o archivo
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept="image/*,application/pdf,.pdf,.docx,.xlsx,text/plain,.txt,.csv,.md,.json"
+          className="hidden"
+          onChange={(e) => {
+            void sumar(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => void enviar()}
+          disabled={pendiente || (!texto.trim() && archivos.length === 0)}
+          className="ml-auto inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+        >
+          {pendiente ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+          {pendiente ? "Ajustando…" : "Ajustar"}
+        </button>
+      </div>
+
+      {archivos.length > 0 ? (
+        <ul className="mt-2 flex flex-wrap gap-1.5">
+          {archivos.map((ad, i) => (
+            <li key={`${ad.a.name}-${i}`} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1">
+              <FileText className="size-3 text-slate-400" />
+              <span className="max-w-[140px] truncate text-[11px] text-slate-700">{ad.a.name}</span>
+              <button
+                type="button"
+                onClick={() => setArchivos((p) => p.filter((_, j) => j !== i))}
+                aria-label={`Quitar ${ad.a.name}`}
+                className="cursor-pointer text-slate-400 hover:text-slate-700"
+              >
+                <X className="size-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {problema ? <p className="mt-2 text-[11px] text-red-600">{problema}</p> : null}
+
+      {resumen ? (
+        <p className="mt-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px] text-slate-600 ring-1 ring-inset ring-violet-200">
+          <span className="font-semibold text-violet-700">Se ajustó:</span> {resumen}
+        </p>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {EJEMPLOS_AJUSTE.slice(1).map((ej) => (
+            <button
+              key={ej}
+              type="button"
+              onClick={() => setTexto(ej)}
+              disabled={pendiente}
+              className="cursor-pointer rounded-full bg-white px-2 py-1 text-[10px] text-slate-500 ring-1 ring-inset ring-slate-200 hover:text-slate-800 disabled:opacity-50"
+            >
+              {ej}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const inputCls =
   "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none disabled:bg-slate-50";
 
@@ -178,9 +440,13 @@ export function CotizadorDialog({
   });
   const [savedRow, setSavedRow] = useState<QuoteRow | null>(null);
   const [adjuntos, setAdjuntos] = useState<Adjunto[]>([]);
-  const [listening, setListening] = useState(false);
-  const [voiceSupported, setVoiceSupported] = useState(true);
-  const recRef = useRef<{ start: () => void; stop: () => void } | null>(null);
+  // Ajuste con IA sobre el borrador en pantalla. El historial es lo que hace
+  // que probar sea barato: si el ajuste sale mal se vuelve atrás sin perder
+  // nada, así que se puede pedir un cambio arriesgado sin miedo.
+  const [ajustando, setAjustando] = useState(false);
+  const [ultimoAjuste, setUltimoAjuste] = useState<string | null>(null);
+  const [historial, setHistorial] = useState<BorradorAjustable[]>([]);
+  const voz = useDictado((t) => setBrief((prev) => (prev ? prev + " " : "") + t));
   const fotoRef = useRef<HTMLInputElement | null>(null);
   const archivoRef = useRef<HTMLInputElement | null>(null);
 
@@ -195,57 +461,6 @@ export function CotizadorDialog({
     setLetter(initial.letter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Dictado de voz (mismo patrón que las capturas de reportes: es-PA, continuo).
-  useEffect(() => {
-    type SR = new () => {
-      continuous: boolean;
-      interimResults: boolean;
-      lang: string;
-      onresult: ((e: { resultIndex: number; results: ArrayLike<{ isFinal?: boolean; 0: { transcript: string } }> }) => void) | null;
-      onend: (() => void) | null;
-      onerror: ((e: unknown) => void) | null;
-      start: () => void;
-      stop: () => void;
-    };
-    const win = window as unknown as { SpeechRecognition?: SR; webkitSpeechRecognition?: SR };
-    const Ctor = win.SpeechRecognition ?? win.webkitSpeechRecognition;
-    if (!Ctor) {
-      setVoiceSupported(false);
-      return;
-    }
-    const rec = new Ctor();
-    rec.continuous = true;
-    rec.interimResults = false;
-    rec.lang = "es-PA";
-    rec.onresult = (e) => {
-      let chunk = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i] as { isFinal?: boolean; 0: { transcript: string } };
-        if (r.isFinal === false) continue;
-        chunk += r[0].transcript;
-      }
-      if (chunk) setBrief((prev) => (prev ? prev + " " : "") + chunk.trim());
-    };
-    rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
-    recRef.current = rec;
-    return () => {
-      try {
-        rec.stop();
-      } catch {}
-    };
-  }, []);
-
-  function toggleVoice() {
-    const rec = recRef.current;
-    if (!rec) return;
-    if (listening) rec.stop();
-    else {
-      rec.start();
-      setListening(true);
-    }
-  }
 
   async function agregarArchivos(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -319,6 +534,45 @@ export function CotizadorDialog({
       elaborado: letter.elaborado,
     });
     setPhase("review");
+  }
+
+  function borradorActual(): BorradorAjustable {
+    return { numero, cliente, rubro, descripcionCorta: descCorta, letter };
+  }
+
+  function aplicar(b: BorradorAjustable) {
+    setNumero(b.numero);
+    setCliente(b.cliente);
+    setRubro(b.rubro);
+    setDescCorta(b.descripcionCorta);
+    setLetter(b.letter);
+  }
+
+  async function ajustarConIA(instruccion: string, extra: QuoteAdjunto[]) {
+    setAjustando(true);
+    setError(null);
+    const previo = borradorActual();
+    const r = await api.refine(previo, instruccion, extra);
+    setAjustando(false);
+    if ("error" in r) {
+      setError(r.error);
+      return false;
+    }
+    setHistorial((h) => [...h, previo]);
+    aplicar(r.data);
+    setUltimoAjuste(r.data.resumen);
+    return true;
+  }
+
+  function deshacer() {
+    setHistorial((h) => {
+      const previo = h[h.length - 1];
+      if (previo) {
+        aplicar(previo);
+        setUltimoAjuste(null);
+      }
+      return h.slice(0, -1);
+    });
   }
 
   async function guardar() {
@@ -402,20 +656,20 @@ export function CotizadorDialog({
 
               {/* Voz + foto — cotizar on the go */}
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {voiceSupported ? (
+                {voz.soportado ? (
                   <button
                     type="button"
-                    onClick={toggleVoice}
+                    onClick={voz.alternar}
                     disabled={phase === "generating"}
                     className={cn(
                       "inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors",
-                      listening
+                      voz.escuchando
                         ? "bg-red-500 text-white ring-4 ring-red-500/20"
                         : "border border-slate-200 text-slate-700 hover:bg-slate-50",
                     )}
                   >
                     <Mic className="size-4" />
-                    {listening ? "Escuchando… toca para parar" : "Dictar por voz"}
+                    {voz.escuchando ? "Escuchando… toca para parar" : "Dictar por voz"}
                   </button>
                 ) : null}
                 {/* La cámara va aparte del selector de archivos: en el celular
@@ -601,6 +855,13 @@ export function CotizadorDialog({
             </div>
           ) : (
             <div className="space-y-3">
+              <AjustarConIA
+                pendiente={ajustando}
+                resumen={ultimoAjuste}
+                hayDeshacer={historial.length > 0}
+                onDeshacer={deshacer}
+                onAjustar={ajustarConIA}
+              />
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <label className="col-span-1 block">
                   <span className="text-xs font-semibold text-slate-500">Número</span>

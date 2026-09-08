@@ -11,6 +11,7 @@ import {
   type Db,
 } from "@/lib/quotes/store";
 import type { QuoteAdjunto } from "@/lib/ai/generate-quote";
+import { refinarBorrador, type BorradorAjustable, type AjusteAplicado } from "@/lib/quotes/refinar";
 import type { QuoteRow } from "@/lib/pipeline/types";
 
 type Result<T> = { error: string } | { ok: true; data: T };
@@ -39,6 +40,22 @@ export async function portalGenerate(token: string, brief: string, adjuntos: Quo
     return { ok: true, data: await buildQuoteDraft(c.db, c.orgId, brief.trim(), adjuntos) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
+  }
+}
+
+export async function portalRefine(
+  token: string,
+  actual: BorradorAjustable,
+  instruccion: string,
+  adjuntos: QuoteAdjunto[] = [],
+): Promise<Result<AjusteAplicado>> {
+  const c = await orgFromToken(token);
+  if (!c.ok) return { error: c.error };
+  if (!instruccion.trim() && adjuntos.length === 0) return { error: "Decime qué querés cambiar" };
+  try {
+    return { ok: true, data: await refinarBorrador(c.db, c.orgId, actual, instruccion.trim(), adjuntos) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Error ajustando la cotización" };
   }
 }
 
