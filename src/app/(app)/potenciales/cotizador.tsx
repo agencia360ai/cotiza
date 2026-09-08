@@ -17,6 +17,8 @@ import {
   AlertTriangle,
   Mic,
   Camera,
+  Paperclip,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { letterTotals, fmtBal, type LetterData, type LetterItem } from "@/lib/quotes/letter";
@@ -29,14 +31,14 @@ import {
   type SaveCotizacionInput,
   type QuoteLetterBundle,
 } from "./cotizador-actions";
-import type { QuoteImage } from "@/lib/ai/generate-quote";
+import type { QuoteImage, QuoteAdjunto } from "@/lib/ai/generate-quote";
 import type { PublishOut } from "@/lib/quotes/store";
 import type { QuoteRow } from "@/lib/pipeline/types";
 import { RUBROS, type Rubro } from "@/lib/pipeline/types";
 
 type ApiResult<T> = { error: string } | { ok: true; data: T };
 export type CotizadorApi = {
-  generate: (brief: string, image?: QuoteImage | null) => Promise<ApiResult<CotizadorDraft>>;
+  generate: (brief: string, adjuntos?: QuoteAdjunto[]) => Promise<ApiResult<CotizadorDraft>>;
   save: (input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
   publish: (quoteId: string) => Promise<ApiResult<PublishOut>>;
   update?: (quoteId: string, input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
@@ -69,6 +71,50 @@ async function downscaleImage(file: File, maxDim = 1600): Promise<{ img: QuoteIm
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// Un adjunto listo para mandar, más lo que la UI necesita para mostrarlo.
+type Adjunto = { a: QuoteAdjunto; preview: string | null; bytes: number };
+
+const MAX_ADJUNTOS = 5;
+// El límite del server action es 8 MB y base64 infla ~33%, así que el tope de
+// bytes reales tiene que quedar bien por debajo o el envío falla sin mensaje.
+const MAX_BYTES = 5_000_000;
+
+// Los que Claude lee como texto plano. Word y Excel NO están: la API no los
+// acepta y no hay parser en el proyecto, así que se rechazan diciéndolo en vez
+// de mandarlos y que la cotización salga vacía.
+const TEXTO = /^(text\/|application\/(json|csv))/i;
+
+function base64De(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  // De a pedazos: `String.fromCharCode(...bytes)` con un PDF de megas revienta
+  // el stack por cantidad de argumentos.
+  for (let i = 0; i < bytes.length; i += 8192) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  return btoa(bin);
+}
+
+async function leerAdjunto(file: File): Promise<Adjunto> {
+  if (file.type.startsWith("image/")) {
+    const { img, preview } = await downscaleImage(file);
+    // El peso que importa es el del JPEG achicado, no el del original.
+    return { a: { kind: "image", name: file.name, data: img.data, mime: img.mime }, preview, bytes: img.data.length * 0.75 };
+  }
+  if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+    const data = base64De(await file.arrayBuffer());
+    return { a: { kind: "pdf", name: file.name, data }, preview: null, bytes: file.size };
+  }
+  if (TEXTO.test(file.type) || /\.(txt|csv|md|json)$/i.test(file.name)) {
+    const text = await file.text();
+    return { a: { kind: "text", name: file.name, text }, preview: null, bytes: file.size };
+  }
+  if (/\.(docx?|xlsx?|pptx?)$/i.test(file.name)) {
+    throw new Error("Word y Excel todavía no — exportalo a PDF");
+  }
+  throw new Error("formato no soportado (imagen, PDF o texto)");
 }
 
 const inputCls =
@@ -117,11 +163,12 @@ export function CotizadorDialog({
     elaborado: null,
   });
   const [savedRow, setSavedRow] = useState<QuoteRow | null>(null);
-  const [image, setImage] = useState<{ img: QuoteImage; preview: string } | null>(null);
+  const [adjuntos, setAdjuntos] = useState<Adjunto[]>([]);
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(true);
   const recRef = useRef<{ start: () => void; stop: () => void } | null>(null);
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const fotoRef = useRef<HTMLInputElement | null>(null);
+  const archivoRef = useRef<HTMLInputElement | null>(null);
 
   // Sembrar desde un borrador existente (modo edición).
   useEffect(() => {
@@ -186,13 +233,35 @@ export function CotizadorDialog({
     }
   }
 
-  async function pickPhoto(file: File | null) {
-    if (!file) return;
-    try {
-      setImage(await downscaleImage(file));
-    } catch {
-      setError("No se pudo leer la foto");
+  async function agregarArchivos(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setError(null);
+    const nuevos: Adjunto[] = [];
+    const problemas: string[] = [];
+    for (const file of Array.from(files)) {
+      if (adjuntos.length + nuevos.length >= MAX_ADJUNTOS) {
+        problemas.push(`no entran más de ${MAX_ADJUNTOS} archivos`);
+        break;
+      }
+      try {
+        nuevos.push(await leerAdjunto(file));
+      } catch (e) {
+        problemas.push(`${file.name}: ${e instanceof Error ? e.message : "no se pudo leer"}`);
+      }
     }
+    // El peso se controla sobre el TOTAL, no por archivo: tres PDF de 2 MB
+    // pasan uno por uno y revientan el límite del server action juntos.
+    const total = [...adjuntos, ...nuevos].reduce((a, x) => a + x.bytes, 0);
+    if (total > MAX_BYTES) {
+      setError(`Los archivos suman ${(total / 1e6).toFixed(1)} MB y el máximo es ${MAX_BYTES / 1e6} MB. Quitá alguno.`);
+      return;
+    }
+    if (nuevos.length) setAdjuntos((prev) => [...prev, ...nuevos]);
+    if (problemas.length) setError(problemas.join(" · "));
+  }
+
+  function quitarAdjunto(i: number) {
+    setAdjuntos((prev) => prev.filter((_, j) => j !== i));
   }
   const [pub, setPub] = useState<{ state: "idle" | "working" | "ok"; result: PublishOut | null; error: string | null }>({
     state: "idle",
@@ -212,7 +281,7 @@ export function CotizadorDialog({
   async function generar() {
     setPhase("generating");
     setError(null);
-    const r = await api.generate(brief, image?.img ?? null);
+    const r = await api.generate(brief, adjuntos.map((a) => a.a));
     if ("error" in r) {
       setError(r.error);
       setPhase("brief");
@@ -335,39 +404,93 @@ export function CotizadorDialog({
                     {listening ? "Escuchando… toca para parar" : "Dictar por voz"}
                   </button>
                 ) : null}
+                {/* La cámara va aparte del selector de archivos: en el celular
+                    `capture` abre la cámara directo, que es lo que quiere el
+                    técnico parado frente al equipo. Mezclarlo con "adjuntar"
+                    obligaría a elegir entre cámara y galería cada vez. */}
                 <button
                   type="button"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={phase === "generating"}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  onClick={() => fotoRef.current?.click()}
+                  disabled={phase === "generating" || adjuntos.length >= MAX_ADJUNTOS}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   <Camera className="size-4" />
-                  {image ? "Cambiar foto" : "Foto (notas, placa, equipo)"}
+                  Foto (notas, placa, equipo)
                 </button>
                 <input
-                  ref={fileRef}
+                  ref={fotoRef}
                   type="file"
                   accept="image/*"
                   capture="environment"
                   className="hidden"
-                  onChange={(e) => void pickPhoto(e.target.files?.[0] ?? null)}
+                  onChange={(e) => {
+                    void agregarArchivos(e.target.files);
+                    e.target.value = ""; // permite volver a elegir el mismo archivo
+                  }}
                 />
+                <button
+                  type="button"
+                  onClick={() => archivoRef.current?.click()}
+                  disabled={phase === "generating" || adjuntos.length >= MAX_ADJUNTOS}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <Paperclip className="size-4" />
+                  Adjuntar archivos
+                </button>
+                <input
+                  ref={archivoRef}
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf,.pdf,text/plain,.txt,.csv,.md,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    void agregarArchivos(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                {adjuntos.length > 0 ? (
+                  <span className="text-[11px] text-slate-400">
+                    {adjuntos.length} de {MAX_ADJUNTOS}
+                  </span>
+                ) : null}
               </div>
-              {image ? (
-                <div className="mt-2 flex items-center gap-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={image.preview} alt="Foto adjunta" className="h-16 w-16 rounded-lg object-cover ring-1 ring-slate-200" />
-                  <button type="button" onClick={() => setImage(null)} className="text-xs font-semibold text-red-500 hover:underline">
-                    Quitar foto
-                  </button>
-                </div>
+
+              {adjuntos.length > 0 ? (
+                <ul className="mt-2 flex flex-wrap gap-2">
+                  {adjuntos.map((ad, i) => (
+                    <li
+                      key={`${ad.a.name}-${i}`}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 py-1 pl-1 pr-2"
+                    >
+                      {ad.preview ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={ad.preview} alt="" className="size-8 rounded object-cover ring-1 ring-slate-200" />
+                      ) : (
+                        <span className="flex size-8 items-center justify-center rounded bg-white text-slate-400 ring-1 ring-slate-200">
+                          <FileText className="size-4" />
+                        </span>
+                      )}
+                      <span className="max-w-[160px] truncate text-[11px] font-medium text-slate-700" title={ad.a.name}>
+                        {ad.a.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => quitarAdjunto(i)}
+                        aria-label={`Quitar ${ad.a.name}`}
+                        className="cursor-pointer rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               ) : null}
 
               {error ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p> : null}
               <button
                 type="button"
                 onClick={generar}
-                disabled={phase === "generating" || (!brief.trim() && !image)}
+                disabled={phase === "generating" || (!brief.trim() && adjuntos.length === 0)}
                 className="mt-3 inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
               >
                 {phase === "generating" ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
