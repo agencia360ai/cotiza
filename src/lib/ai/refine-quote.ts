@@ -27,6 +27,11 @@ const schema = z.object({
         cant: z.number(),
         desc: z.string().describe("Descripción del renglón, en el mismo estilo formal que las que ya están."),
         precio: z.number().describe("Precio unitario en B/. SIN ITBMS."),
+        aparte: z
+          .boolean()
+          .describe(
+            "true = el renglón se cotiza pero NO suma al total (se factura solo cuando el cliente lo pida). false = entra en el total.",
+          ),
       }),
     )
     .min(1)
@@ -55,7 +60,10 @@ La regla que manda: CAMBIÁ SOLO LO QUE TE PIDEN.
 - Devolvés SIEMPRE la lista completa de renglones, incluidos los que no cambiaron.
 
 Sobre los renglones:
-- Separar en grupos (ej. "mensual" y "una sola vez") se hace con los renglones y su descripción, no con títulos nuevos: DICEC usa una sola tabla. Poné en la descripción qué es recurrente y qué es por única vez, y aclaralo también en las condiciones.
+- CADA renglón tiene "aparte". false = suma al total que aprueba el cliente. true = tiene precio acordado pero NO suma: se factura solo cuando lo pidan, y sale en un bloque debajo de la oferta.
+- Un contrato mensual con cargos por evento se arma así: lo recurrente con aparte=false, y el reemplazo de filtros / la recarga de refrigerante / cualquier add-on con aparte=true. Meterlos en el total haría que el cliente lea como cuota fija algo que puede no pasar nunca.
+- Si te piden "que X quede fuera del total" o "que se cobre solo cuando se pida", eso es aparte=true — no una condición al pie.
+- Conservá el "aparte" que ya tenía cada renglón salvo que el pedido hable de eso.
 - Precios en Balboas (B/.), SIN ITBMS.
 - Si te dan un precio, respetalo exacto. Si el pedido implica recalcular (ej. "subí todo 10%"), calculá bien.
 

@@ -16,6 +16,11 @@ const schema = z.object({
         cant: z.number().describe("Cantidad."),
         desc: z.string().describe("Descripción formal del renglón en español técnico HVAC (equipo, capacidad, alcance)."),
         precio: z.number().describe("Precio unitario en B/. SIN ITBMS."),
+        aparte: z
+          .boolean()
+          .describe(
+            "true SOLO si el renglón tiene precio acordado pero no debe sumar al total (cargo por evento, add-on a pedido). Casi siempre false.",
+          ),
       }),
     )
     .min(1)
@@ -41,6 +46,7 @@ Reglas:
 - Si NO da precio, estimá un precio razonable de mercado panameño para ese trabajo y dejalo evidente en la descripción corta que es estimado.
 - Rubro por el CONTENIDO del trabajo (no por el número): mantenimiento preventivo/programado → DM; reparación/servicio puntual (reemplazos, diagnósticos; típicamente < B/.5,000) → DS; venta/suministro de equipos → DV; obra/instalación grande o contrato (típicamente > B/.5,000) → DC.
 - Si menciona un cliente de la LISTA DE CLIENTES, usá ese nombre exacto.
+- Cada renglón lleva "aparte": false suma al total, true se cotiza pero se factura solo cuando el cliente lo pida (y sale debajo de la oferta). Usá true cuando el pedido diga "por evento", "cuando se solicite", "aparte del total" o similar; en la duda, false.
 - No inventes condiciones que el usuario no dio (validez default 30 días).`;
 
 export type QuoteImage = { data: string; mime: "image/jpeg" | "image/png" | "image/webp" };

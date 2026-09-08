@@ -20,6 +20,7 @@ import {
   Paperclip,
   FileText,
   Undo2,
+  CircleDollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { letterTotals, fmtBal, type LetterData, type LetterItem } from "@/lib/quotes/letter";
@@ -930,7 +931,15 @@ export function CotizadorDialog({
                 </div>
                 <div className="divide-y divide-slate-50">
                   {letter.items.map((it, i) => (
-                    <div key={i} className="flex items-start gap-2 px-3 py-2">
+                    <div
+                      key={i}
+                      className={cn(
+                        "flex items-start gap-2 px-3 py-2",
+                        // Fuera del total: se marca en la fila, porque el número
+                        // de abajo ya no la incluye y sin señal parece un bug.
+                        it.aparte && "border-l-2 border-amber-400 bg-amber-50/40",
+                      )}
+                    >
                       <input
                         type="number"
                         min={0}
@@ -961,26 +970,50 @@ export function CotizadorDialog({
                           = B/. {fmtBal((Number(it.cant) || 0) * (Number(it.precio) || 0))}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setLetter((p) => ({ ...p, items: p.items.filter((_, j) => j !== i) }))}
-                        className="mt-1 shrink-0 rounded-md p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-500"
-                        title="Quitar renglón"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
+                      <div className="mt-1 flex shrink-0 flex-col items-center gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setItem(i, { aparte: !it.aparte })}
+                          aria-pressed={!!it.aparte}
+                          title={
+                            it.aparte
+                              ? "Fuera del total — se factura solo cuando el cliente lo pida. Clic para incluirlo."
+                              : "Sacar del total: se cotiza pero no suma (cargos por evento, add-ons)"
+                          }
+                          className={cn(
+                            "rounded-md p-1.5 transition-colors",
+                            it.aparte ? "bg-amber-100 text-amber-700" : "text-slate-300 hover:bg-amber-50 hover:text-amber-600",
+                          )}
+                        >
+                          <CircleDollarSign className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLetter((p) => ({ ...p, items: p.items.filter((_, j) => j !== i) }))}
+                          className="rounded-md p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-500"
+                          title="Quitar renglón"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                   {letter.items.length === 0 ? (
                     <p className="px-3 py-4 text-center text-xs text-slate-400">Sin renglones — agrega al menos uno.</p>
                   ) : null}
                 </div>
-                <div className="border-t border-slate-100 px-3 py-2 text-right text-sm">
-                  <span className="mr-4 text-xs text-slate-500">
+                <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 border-t border-slate-100 px-3 py-2 text-right text-sm">
+                  {letter.items.some((it) => it.aparte) ? (
+                    <span className="mr-auto inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                      <CircleDollarSign className="size-3" />
+                      {letter.items.filter((it) => it.aparte).length} fuera del total
+                    </span>
+                  ) : null}
+                  <span className="text-xs text-slate-500">
                     Subtotal <b className="tabular-nums text-slate-800">B/. {fmtBal(totals.subtotal)}</b>
                   </span>
                   {letter.aplica_itbms ? (
-                    <span className="mr-4 text-xs text-slate-500">
+                    <span className="text-xs text-slate-500">
                       ITBMS {letter.tasa}% <b className="tabular-nums text-slate-800">B/. {fmtBal(totals.itbms)}</b>
                     </span>
                   ) : null}

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, Loader2, Pencil, Printer, Trash2, Upload, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fechaLarga, fmtBal, letterTotals, resolveTextos, type LetterData, type LetterFirma, type LetterTextos } from "@/lib/quotes/letter";
+import { fechaLarga, fmtBal, letterTotals, partirItems, resolveTextos, type LetterData, type LetterFirma, type LetterTextos } from "@/lib/quotes/letter";
 import { publishQuote } from "@/app/(app)/potenciales/cotizador-actions";
 import { createSignature, deleteSignature, listSignatures, saveLetterEdits, type Signature } from "./actions";
 
@@ -161,6 +161,7 @@ export function CartaEditor({
 
   const T = resolveTextos({ ...letter, textos }, { quoteNumber });
   const { subtotal, itbms, total } = letterTotals(letter);
+  const { enTotal, aparte } = partirItems(letter.items);
 
   // Se compara contra el texto RESUELTO (lo que el usuario ve), no contra el
   // override: así salir de un campo sin tocarlo no ensucia la carta ni guarda un
@@ -408,7 +409,7 @@ export function CartaEditor({
               </tr>
             </thead>
             <tbody>
-              {letter.items.map((it, i) => (
+              {enTotal.map((it, i) => (
                 <tr key={i} className="border-b border-slate-200 align-top">
                   <td className="py-1.5 pr-2 tabular-nums">{it.cant}</td>
                   <td className="py-1.5 pr-2">{it.desc}</td>
@@ -440,6 +441,24 @@ export function CartaEditor({
             <Editable value={T.oferta} onChange={(v) => setT("oferta", v)} edit={edit} />{" "}
             <i className="font-semibold">B/. {fmtBal(total)}</i>
           </p>
+
+          {aparte.length > 0 ? (
+            <div className="mt-4">
+              <Editable value={T.lbl_aparte} onChange={(v) => setT("lbl_aparte", v)} edit={edit} block />
+              <table className="mt-1.5 w-full border-collapse text-[12.5px]">
+                <tbody>
+                  {aparte.map((it, i) => (
+                    <tr key={i} className="border-b border-slate-200 align-top">
+                      <td className="w-[0.6in] py-1.5 pr-2 tabular-nums">{it.cant}</td>
+                      <td className="py-1.5 pr-2">{it.desc}</td>
+                      <td className="w-[1.1in] py-1.5 pr-2 text-right tabular-nums">B/. {fmtBal(it.precio)}</td>
+                      <td className="w-[1.1in] py-1.5 text-right tabular-nums">B/. {fmtBal(it.cant * it.precio)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
 
           {T.validez_texto || letter.condiciones || edit ? (
             <div className="mt-3 space-y-1">

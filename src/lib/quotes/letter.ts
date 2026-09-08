@@ -2,7 +2,21 @@
 // (preview editable) y la vista imprimible. Formato tomado del generador HTML
 // de DICEC (fecha larga, Referencia, tabla de renglones, ITBMS, oferta, firma).
 
-export type LetterItem = { cant: number; desc: string; precio: number };
+// `aparte` = el renglón se cotiza pero NO entra en el total que se le manda al
+// cliente. Es lo que hace falta para un contrato mensual con cargos por evento
+// (reemplazo de filtros, una recarga de refrigerante): tienen precio acordado,
+// pero solo se facturan cuando se piden. Sumarlos al total mensual haría que el
+// cliente lea como cuota fija algo que puede no pasar nunca.
+// undefined/false = suma, que es lo que hacían todos los renglones antes.
+export type LetterItem = { cant: number; desc: string; precio: number; aparte?: boolean };
+
+/** Los que suman al total y los que se cotizan por separado. */
+export function partirItems(items: LetterItem[]): { enTotal: LetterItem[]; aparte: LetterItem[] } {
+  return {
+    enTotal: items.filter((it) => !it.aparte),
+    aparte: items.filter((it) => it.aparte),
+  };
+}
 
 // Textos de la carta que el usuario puede reescribir a mano. TODOS opcionales:
 // null/undefined = usar el texto por defecto de DICEC. Así las cartas viejas
@@ -22,6 +36,7 @@ export type LetterTextos = {
   oferta?: string | null; // "Nuestra oferta es por:"
   validez_texto?: string | null; // "Esta cotización tiene una validez de 30 días."
   empresa?: string | null; // "DICEC, INC"
+  lbl_aparte?: string | null; // encabezado del bloque de renglones fuera del total
 };
 
 // Firma PNG posicionada libremente. Coordenadas en FRACCIONES de la página
@@ -81,6 +96,10 @@ export function resolveTextos(
       letter.validez && letter.validez > 0 ? `Esta cotización tiene una validez de ${letter.validez} días.` : "",
     ),
     empresa: pick(t.empresa, "DICEC, INC"),
+    lbl_aparte: pick(
+      t.lbl_aparte,
+      "Servicios adicionales — precios acordados, se facturan solo cuando se soliciten (no incluidos en el total anterior):",
+    ),
   };
 }
 
@@ -89,7 +108,11 @@ export function letterTotals(d: Pick<LetterData, "items" | "aplica_itbms" | "tas
   itbms: number;
   total: number;
 } {
-  const subtotal = d.items.reduce((a, it) => a + (Number(it.cant) || 0) * (Number(it.precio) || 0), 0);
+  // Los renglones `aparte` quedan fuera: no son parte de la oferta, son precios
+  // acordados para cuando el cliente los pida.
+  const subtotal = d.items
+    .filter((it) => !it.aparte)
+    .reduce((a, it) => a + (Number(it.cant) || 0) * (Number(it.precio) || 0), 0);
   const itbms = d.aplica_itbms ? subtotal * ((Number(d.tasa) || 0) / 100) : 0;
   return { subtotal, itbms, total: subtotal + itbms };
 }
