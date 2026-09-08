@@ -2,7 +2,7 @@ import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
-import { fechaLarga, fmtBal, letterTotals, resolveTextos, type LetterData } from "./letter";
+import { fechaLarga, fmtBal, letterTotals, partirItems, resolveTextos, type LetterData, type LetterItem } from "./letter";
 
 // Carta US Letter en puntos. El membrete va a sangre (imagen de página completa)
 // y el contenido respeta el encabezado/pie del arte.
@@ -186,7 +186,9 @@ export async function renderQuotePdf(input: {
   ctx.page.drawLine({ start: { x: MX, y: ctx.y }, end: { x: PAGE_W - MX, y: ctx.y }, thickness: 1.1, color: INK });
   ctx.y -= 6;
 
-  for (const it of letter.items) {
+  const { enTotal, aparte } = partirItems(letter.items);
+
+  const fila = (it: LetterItem) => {
     const descLines = wrap(it.desc, font, size, DESC_W);
     const rowH = descLines.length * lh + 6;
     ensure(ctx, rowH);
@@ -204,7 +206,9 @@ export async function renderQuotePdf(input: {
     ctx.y = rowTop - descLines.length * lh - 4;
     ctx.page.drawLine({ start: { x: MX, y: ctx.y }, end: { x: PAGE_W - MX, y: ctx.y }, thickness: 0.4, color: rgb(0.8, 0.84, 0.89) });
     ctx.y -= 5;
-  }
+  };
+
+  for (const it of enTotal) fila(it);
 
   // Totales (bloque derecho)
   const { subtotal, itbms, total } = letterTotals(letter);
@@ -240,6 +244,17 @@ export async function renderQuotePdf(input: {
       color: INK,
     });
     ctx.y -= size2 * 1.9;
+  }
+
+  // Renglones fuera del total. Van después de la oferta a propósito: se leen
+  // como "y además, si lo pedís", que es exactamente lo que son. Ponerlos antes
+  // los haría parecer parte del número que el cliente está aprobando.
+  if (aparte.length > 0) {
+    ctx.y -= 4;
+    if (T.lbl_aparte) text(ctx, T.lbl_aparte, {});
+    ctx.y -= 2;
+    for (const it of aparte) fila(it);
+    ctx.y -= 6;
   }
 
   if (T.validez_texto) text(ctx, T.validez_texto, {});
