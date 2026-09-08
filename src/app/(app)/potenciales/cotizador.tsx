@@ -81,9 +81,7 @@ const MAX_ADJUNTOS = 5;
 // bytes reales tiene que quedar bien por debajo o el envío falla sin mensaje.
 const MAX_BYTES = 5_000_000;
 
-// Los que Claude lee como texto plano. Word y Excel NO están: la API no los
-// acepta y no hay parser en el proyecto, así que se rechazan diciéndolo en vez
-// de mandarlos y que la cotización salga vacía.
+// Los que Claude lee como texto plano tal cual vienen.
 const TEXTO = /^(text\/|application\/(json|csv))/i;
 
 function base64De(buf: ArrayBuffer): string {
@@ -111,10 +109,26 @@ async function leerAdjunto(file: File): Promise<Adjunto> {
     const text = await file.text();
     return { a: { kind: "text", name: file.name, text }, preview: null, bytes: file.size };
   }
-  if (/\.(docx?|xlsx?|pptx?)$/i.test(file.name)) {
-    throw new Error("Word y Excel todavía no — exportalo a PDF");
+  // Word y Excel se convierten a texto ACÁ, en el navegador: un .docx de 5 MB
+  // se vuelve ~20 KB antes de salir, así que no gasta el límite del envío.
+  if (/\.docx$/i.test(file.name)) {
+    const { docxATexto } = await import("@/lib/office/texto");
+    const text = await docxATexto(await file.arrayBuffer());
+    if (!text.trim()) throw new Error("el documento no tiene texto");
+    return { a: { kind: "text", name: file.name, text }, preview: null, bytes: text.length };
   }
-  throw new Error("formato no soportado (imagen, PDF o texto)");
+  if (/\.xlsx$/i.test(file.name)) {
+    const { xlsxATexto } = await import("@/lib/office/texto");
+    const text = await xlsxATexto(await file.arrayBuffer());
+    if (!text.trim()) throw new Error("la planilla no tiene datos");
+    return { a: { kind: "text", name: file.name, text }, preview: null, bytes: text.length };
+  }
+  // .doc y .xls viejos son binarios propietarios, no ZIP: no hay nada que
+  // desempaquetar. Se dice cuál es la salida en vez de "formato no soportado".
+  if (/\.(doc|xls|ppt)$/i.test(file.name)) {
+    throw new Error("formato viejo — guardalo como .docx/.xlsx o PDF");
+  }
+  throw new Error("formato no soportado (imagen, PDF, Word, Excel o texto)");
 }
 
 const inputCls =
@@ -441,7 +455,7 @@ export function CotizadorDialog({
                   ref={archivoRef}
                   type="file"
                   multiple
-                  accept="image/*,application/pdf,.pdf,text/plain,.txt,.csv,.md,.json"
+                  accept="image/*,application/pdf,.pdf,.docx,.xlsx,text/plain,.txt,.csv,.md,.json"
                   className="hidden"
                   onChange={(e) => {
                     void agregarArchivos(e.target.files);
