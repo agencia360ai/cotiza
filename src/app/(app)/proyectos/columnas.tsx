@@ -80,7 +80,7 @@ type Guardado = { orden?: unknown; ocultas?: unknown };
 // Se sanea lo leído contra las columnas que existen HOY: si una se renombra o
 // se agrega, una preferencia vieja no puede dejar la tabla sin esa columna ni
 // meter una llave que ya no se renderiza.
-function sanear(orden: unknown, ocultas: unknown): { orden: ColKey[]; ocultas: ColKey[] } {
+export function sanear(orden: unknown, ocultas: unknown): { orden: ColKey[]; ocultas: ColKey[] } {
   const validas = new Set(ORDEN_DEFECTO);
   const pedido = Array.isArray(orden) ? orden.filter((k): k is ColKey => validas.has(k as ColKey)) : [];
   const sinDuplicar = [...new Set(pedido)];
@@ -89,7 +89,7 @@ function sanear(orden: unknown, ocultas: unknown): { orden: ColKey[]; ocultas: C
   return { orden: [...sinDuplicar, ...faltantes], ocultas: [...new Set(oc)] };
 }
 
-function mover(orden: ColKey[], from: ColKey, to: ColKey): ColKey[] {
+export function mover(orden: ColKey[], from: ColKey, to: ColKey): ColKey[] {
   if (from === to) return orden;
   const iFrom = orden.indexOf(from);
   const iTo = orden.indexOf(to);

@@ -25,7 +25,11 @@ export async function refinarBorrador(
       descripcion_corta: actual.descripcionCorta,
       ubicacion: actual.letter.ubicacion,
       tipo: actual.letter.tipo,
-      items: actual.letter.items,
+      // Explícito para cada renglón: al modelo se le dice que TODOS traen
+      // "aparte", y en una carta guardada antes de que existiera la llave no
+      // está. Sin normalizar, vería renglones sin el campo que le pedimos
+      // respetar.
+      items: actual.letter.items.map((it) => ({ cant: it.cant, desc: it.desc, precio: it.precio, aparte: !!it.aparte })),
       aplica_itbms: actual.letter.aplica_itbms,
       validez: actual.letter.validez,
       condiciones: actual.letter.condiciones,

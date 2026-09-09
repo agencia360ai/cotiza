@@ -84,7 +84,7 @@ export async function refineQuote(
     descripcion_corta: string;
     ubicacion: string | null;
     tipo: "realizar" | "realizados";
-    items: { cant: number; desc: string; precio: number }[];
+    items: { cant: number; desc: string; precio: number; aparte: boolean }[];
     aplica_itbms: boolean;
     validez: number | null;
     condiciones: string | null;
