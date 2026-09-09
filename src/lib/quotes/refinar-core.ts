@@ -32,7 +32,7 @@ export type RefinedQuote = {
   descripcion_corta: string;
   ubicacion: string | null;
   tipo: "realizar" | "realizados";
-  items: { cant: number; desc: string; precio: number }[];
+  items: { cant: number; desc: string; precio: number; aparte?: boolean }[];
   aplica_itbms: boolean;
   validez_dias: number | null;
   condiciones: string | null;

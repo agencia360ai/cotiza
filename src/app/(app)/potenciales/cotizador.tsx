@@ -528,7 +528,9 @@ export function CotizadorDialog({
       fecha: new Date().toISOString().slice(0, 10),
       ubicacion: g.ubicacion,
       tipo: g.tipo,
-      items: g.items.map((it) => ({ cant: it.cant, desc: it.desc, precio: it.precio })),
+      // `aparte` viaja: la IA marca los cargos por evento al generar, y sin esto
+      // se perdían acá y todo terminaba dentro del total.
+      items: g.items.map((it) => ({ cant: it.cant, desc: it.desc, precio: it.precio, aparte: it.aparte || undefined })),
       aplica_itbms: g.aplica_itbms,
       tasa: 7,
       validez: g.validez_dias ?? 30,
