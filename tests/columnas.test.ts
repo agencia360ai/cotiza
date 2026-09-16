@@ -37,3 +37,19 @@ test("sanear: basura total → defaults", () => {
   assert.deepEqual(s.orden, ORDEN_DEFECTO);
   assert.deepEqual(s.ocultas, ["cotizacion", "margen"]);
 });
+
+test("Facturado y Tax existen y una preferencia vieja las recibe", () => {
+  assert.ok(ORDEN_DEFECTO.includes("facturado"), "el pendiente de cobro es columna propia");
+  assert.ok(ORDEN_DEFECTO.includes("tax"), "el ITBMS salió del gasto y tiene la suya");
+  // Preferencia guardada ANTES de que existieran: no puede dejarlas afuera.
+  const vieja = ["nombre", "cliente", "total", "cobrado", "gasto", "inicio", "fin", "estado", "margen", "cotizacion"];
+  const s = sanear(vieja, []);
+  assert.ok(s.orden.includes("facturado"));
+  assert.ok(s.orden.includes("tax"));
+  assert.equal(s.orden.length, ORDEN_DEFECTO.length);
+});
+
+test("Facturado va pegado a Cobrado: se leen juntas o no se leen", () => {
+  const i = ORDEN_DEFECTO.indexOf("cobrado");
+  assert.equal(ORDEN_DEFECTO[i + 1], "facturado", "cobrado + facturado = total, así que van contiguas");
+});

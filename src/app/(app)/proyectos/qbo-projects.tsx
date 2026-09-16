@@ -180,7 +180,7 @@ function rangeFor(key: RangeKey, customFrom: string, customTo: string): DateRang
   }
 }
 
-type SortKey = "nombre" | "cliente" | "cobro" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
+type SortKey = "nombre" | "cliente" | "cobro" | "cobrado" | "facturado" | "tax" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
 
 // Proyección de un proyecto dentro del rango activo.
 //
@@ -202,6 +202,15 @@ type Enriched = {
   // HOY, así que `paid` es una foto sin fecha: para recortarlo al rango se
   // reparte según qué porción de lo FACTURADO cae adentro. Null = sin dato.
   cobradoRango: number | null;
+  // Lo que ya salió en factura y TODAVÍA NO ENTRA. En la tabla se llama
+  // "Facturado" —así lo pidió el equipo— aunque acá `enRango` sea el facturado
+  // TOTAL; por eso el campo no se llama igual que la columna. Se deriva en vez
+  // de pedirse: cobrado + por cobrar tiene que dar el total, siempre.
+  // null si no se sabe cuánto entró: restar de un null inventaría un número.
+  porCobrarRango: number | null;
+  // ITBMS del rango. Aparte del gasto y fuera del margen: no es costo ni
+  // ingreso del proyecto, es plata que se le debe al fisco.
+  taxRango: number | null;
   meses: MesMonto[]; // desglose del proyecto (vacío si no hay)
 };
 
@@ -371,6 +380,11 @@ export function QboProjectsBoard() {
       // repartir, y usar su monto inflaría la barra verde.
       const cobradoDe = (share: number): number | null =>
         p.paid === null ? null : round2(p.paid * Math.min(1, Math.max(0, share)));
+      // Por cobrar = facturado − cobrado, nunca negativo: un cobrado mayor que
+      // lo facturado del rango (un anticipo) significa que no queda nada por
+      // cobrar ahí, no una deuda al revés.
+      const porCobrarDe = (facturado: number | null, cobrado: number | null): number | null =>
+        facturado === null || cobrado === null ? null : round2(Math.max(0, facturado - cobrado));
 
       // Camino real: sumar los meses del rango. Se usa cuando hay desglose y no
       // hay un total de contrato que mande (un contrato firmado se devenga a lo
@@ -379,7 +393,10 @@ export function QboProjectsBoard() {
         const s = sumarMeses(meses, range);
         // Dentro del rango = tuvo movimiento ahí. Un proyecto de 2025 deja de
         // aparecer en "Este año" solo porque su nombre diga 26.
-        const inRange = !range || s.income !== 0 || s.cost !== 0;
+        // El ITBMS también es movimiento: un mes cuya única cifra es el
+        // impuesto igual tuvo factura, y antes entraba por `cost`.
+        const inRange = !range || s.income !== 0 || s.cost !== 0 || s.tax !== 0;
+        const cobradoRango = cobradoDe(p.income && p.income > 0 ? s.income / p.income : 1);
         return {
           p,
           eff,
@@ -390,7 +407,9 @@ export function QboProjectsBoard() {
           usaContrato,
           enRango: s.income,
           gastoRango: s.cost,
-          cobradoRango: cobradoDe(p.income && p.income > 0 ? s.income / p.income : 1),
+          cobradoRango,
+          porCobrarRango: porCobrarDe(s.income, cobradoRango),
+          taxRango: s.tax,
           meses,
         };
       }
@@ -403,6 +422,8 @@ export function QboProjectsBoard() {
           inRange = fraction > 0;
         } // sin ninguna pista de fechas: se muestra siempre (no se puede juzgar)
       }
+      const enRango = totalBase === null ? null : round2(totalBase * fraction);
+      const cobradoRango = cobradoDe(fraction);
       return {
         p,
         eff,
@@ -411,9 +432,11 @@ export function QboProjectsBoard() {
         real: false,
         totalBase,
         usaContrato,
-        enRango: totalBase === null ? null : round2(totalBase * fraction),
+        enRango,
         gastoRango: p.cost === null ? null : round2(p.cost * fraction),
-        cobradoRango: cobradoDe(fraction),
+        cobradoRango,
+        porCobrarRango: porCobrarDe(enRango, cobradoRango),
+        taxRango: p.tax === null ? null : round2(p.tax * fraction),
         meses,
       };
     });
@@ -472,6 +495,10 @@ export function QboProjectsBoard() {
           return e.enRango ?? e.p.income;
         case "cobrado":
           return e.cobradoRango;
+        case "facturado":
+          return e.porCobrarRango;
+        case "tax":
+          return e.taxRango;
         case "gasto":
           return e.gastoRango ?? e.p.cost;
         case "margen":
@@ -2037,6 +2064,45 @@ function ProjectRow({
             title={parcial && p.paid !== null ? `${bal(p.paid)} cobrados en todo el proyecto` : undefined}
           >
             {bal(e.cobradoRango)}
+          </span>
+        )}
+      </td>
+    ),
+
+    // Lo facturado que todavía no entra. Va en ámbar: no es un error, pero es
+    // plata afuera. Junto al Cobrado (verde) se lee de un vistazo cuánto del
+    // total ya está en la mano y cuánto sigue en la calle.
+    facturado: (
+      <td key="facturado" className="whitespace-nowrap px-2.5 py-2.5 text-right">
+        {!conDatos ? (
+          <span className="text-slate-300">—</span>
+        ) : e.porCobrarRango === null ? (
+          <span className="text-[11px] italic text-slate-400" title="Sin saber cuánto entró, no se puede decir cuánto falta">
+            s/d
+          </span>
+        ) : e.porCobrarRango === 0 ? (
+          <span className="tabular-nums text-slate-300" title="Todo lo facturado ya se cobró">
+            {bal(0)}
+          </span>
+        ) : (
+          <span className="font-medium tabular-nums text-amber-700" title="Ya salió en factura y todavía no entra">
+            {bal(e.porCobrarRango)}
+          </span>
+        )}
+      </td>
+    ),
+
+    // ITBMS. Apagado a propósito: no es plata de Dicec ni mide nada del
+    // proyecto — se recauda y se entrega. Por eso queda fuera del margen.
+    tax: (
+      <td key="tax" className="whitespace-nowrap px-2.5 py-2.5 text-right">
+        {!conDatos || e.taxRango === null ? (
+          <span className="text-slate-300">—</span>
+        ) : e.taxRango === 0 ? (
+          <span className="tabular-nums text-slate-300">{bal(0)}</span>
+        ) : (
+          <span className="tabular-nums text-slate-500" title="ITBMS facturado al cliente. No es gasto ni entra en el margen">
+            {bal(e.taxRango)}
           </span>
         )}
       </td>

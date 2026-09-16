@@ -13,7 +13,7 @@ import type { SortState } from "@/components/ui/sortable";
 // no un dato de la empresa— así que no vale la pena una tabla ni sincronizarla
 // entre dispositivos.
 
-export type ColKey = "nombre" | "cliente" | "cotizacion" | "total" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado";
+export type ColKey = "nombre" | "cliente" | "cotizacion" | "total" | "cobrado" | "facturado" | "tax" | "gasto" | "margen" | "inicio" | "fin" | "estado";
 
 type ColMeta = {
   label: string;
@@ -30,6 +30,10 @@ export const COL_META: Record<ColKey, ColMeta> = {
   cotizacion: { label: "Cotización", min: 150, align: "left", ayuda: "Vincular cotizaciones al proyecto" },
   total: { label: "Total", min: 118, align: "right", ayuda: "Lo facturado, con el margen debajo" },
   cobrado: { label: "Cobrado", min: 106, align: "right", ayuda: "Lo que ya entró de ese total" },
+  // "Facturado" acá es el pendiente, no el total — así lo nombra el equipo: la
+  // factura ya se metió pero todavía no se paga. Cobrado + Facturado = Total.
+  facturado: { label: "Facturado", min: 112, align: "right", ayuda: "Ya salió en factura y todavía no entra" },
+  tax: { label: "Tax", min: 96, align: "right", ayuda: "ITBMS facturado al cliente. No cuenta como gasto ni entra en el margen" },
   gasto: { label: "Gasto", min: 100, align: "right" },
   margen: { label: "Margen", min: 110, align: "right", ayuda: "Como columna propia; si no, va debajo del Total" },
   inicio: { label: "Inicio", min: 104, align: "left" },
@@ -44,6 +48,8 @@ export const SORT_DE_COL: Record<ColKey, string> = {
   cotizacion: "cotizacion",
   total: "cobro",
   cobrado: "cobrado",
+  facturado: "facturado",
+  tax: "tax",
   gasto: "gasto",
   margen: "margen",
   inicio: "inicio",
@@ -56,6 +62,8 @@ export const ORDEN_DEFECTO: ColKey[] = [
   "cliente",
   "total",
   "cobrado",
+  "facturado",
+  "tax",
   "gasto",
   "inicio",
   "fin",
