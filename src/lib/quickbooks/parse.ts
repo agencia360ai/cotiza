@@ -204,6 +204,72 @@ function parseMeses(report: unknown, rows: PnlRow[]): MonthPnl[] {
   return Array.from(acc, ([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month));
 }
 
+// ── Desglose por cuenta ──────────────────────────────────────────────────────
+
+/** Una sección del P&L con las cuentas que la componen. */
+export type SeccionPnl = {
+  grupo: string;
+  total: number;
+  cuentas: { nombre: string; total: number }[];
+};
+
+/**
+ * Las secciones del P&L abiertas por cuenta.
+ *
+ * `parsePnl` solo lee los TOTALES de cada sección, que alcanza para el board
+ * pero no para explicar un número raro. Cuando una sección de gastos da
+ * negativo —el ITBMS entrando como crédito, un reembolso mal clasificado— la
+ * única forma de saber qué cuenta lo causa es mirar adentro. Esto es lo que
+ * mira: nombre de cuenta y monto, sin interpretar nada.
+ */
+export function desglosarPnl(result: QboToolResult): SeccionPnl[] {
+  let json: unknown = result.structuredContent;
+  if (json === undefined) {
+    const text = (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
+    const start = text.indexOf("{");
+    if (start < 0) return [];
+    try {
+      json = JSON.parse(text.slice(start));
+    } catch {
+      return [];
+    }
+  }
+  const report = (json as { Report?: unknown }).Report ?? json;
+  const rows = ((report as { Rows?: { Row?: PnlRowDetalle[] } }).Rows?.Row ?? []) as PnlRowDetalle[];
+
+  const ultimoMonto = (cd: { value?: string }[] | undefined): number => {
+    for (let i = (cd ?? []).length - 1; i >= 0; i--) {
+      const raw = cd![i].value ?? "";
+      if (raw) return montoDe(raw);
+    }
+    return 0;
+  };
+
+  // Las cuentas pueden estar anidadas varios niveles (subcuentas); se aplanan,
+  // que es como se leen en el reporte impreso.
+  const cuentasDe = (r: PnlRowDetalle, out: { nombre: string; total: number }[], prof = 0): void => {
+    if (prof > 8) return;
+    for (const hija of r.Rows?.Row ?? []) {
+      const cd = hija.ColData ?? hija.Summary?.ColData;
+      const nombre = cd?.[0]?.value;
+      if (nombre) out.push({ nombre, total: ultimoMonto(cd) });
+      cuentasDe(hija, out, prof + 1);
+    }
+  };
+
+  const out: SeccionPnl[] = [];
+  for (const r of rows) {
+    const grupo = r.group ?? "";
+    if (!grupo) continue;
+    const cuentas: { nombre: string; total: number }[] = [];
+    cuentasDe(r, cuentas);
+    out.push({ grupo, total: ultimoMonto(r.Summary?.ColData), cuentas });
+  }
+  return out;
+}
+
+type PnlRowDetalle = PnlRow & { ColData?: { value?: string }[]; Rows?: { Row?: PnlRowDetalle[] } };
+
 /** Primer y último mes con movimiento (income o cost ≠ 0). */
 export function ventanaDeMeses(meses: MonthPnl[]): { first: string; last: string } | null {
   const conMovimiento = meses.filter((m) => m.income !== 0 || m.cost !== 0).map((m) => m.month).sort();
