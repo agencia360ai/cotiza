@@ -101,10 +101,16 @@ export function toIsoDate(v: unknown): string | null {
 // ── Profit & Loss ────────────────────────────────────────────────────────────
 
 /** Un mes con movimiento del proyecto. `month` = primer día: "2026-03-01". */
-export type MonthPnl = { month: string; income: number; cost: number };
-export type Pnl = { income: number; cost: number; meses: MonthPnl[] };
+export type MonthPnl = { month: string; income: number; cost: number; tax: number };
+export type Pnl = { income: number; cost: number; tax: number; meses: MonthPnl[] };
 
-type PnlRow = { group?: string; Summary?: { ColData?: { value?: string }[] }; Rows?: { Row?: PnlRow[] } };
+type PnlCol = { value?: string };
+type PnlRow = {
+  group?: string;
+  ColData?: PnlCol[]; // filas de dato (una cuenta); las secciones no la traen
+  Summary?: { ColData?: PnlCol[] };
+  Rows?: { Row?: PnlRow[] };
+};
 // Cabecera de columnas. Con summarize_column_by=Month cada columna es un mes y
 // trae su rango en MetaData ({ Name:"StartDate", Value:"2026-03-01" }); la
 // primera columna (la cuenta) y la última (Total) no traen StartDate.
@@ -122,9 +128,64 @@ function montoDe(raw: string | undefined): number {
 const ES_INGRESO = (g: string) => g === "income" || g === "otherincome";
 const ES_GASTO = (g: string) => g === "cogs" || g === "expenses" || g === "otherexpenses" || g.includes("expense");
 
+// El ITBMS que se le factura al cliente aterriza en una cuenta de SISTEMA de QBO
+// —"VAT Expense", AccountSubType GlobalTaxExpense— que vive DENTRO de la sección
+// de gastos y con signo negativo, porque la venta la acredita. #217 diagnosticó
+// esto pero no pudo filtrarlo: el gateway tenía el token vencido y no se quiso
+// adivinar la forma del reporte. Ya se leyó el reporte real y la cuenta es esa,
+// así que acá se separa: el impuesto no es costo del proyecto (es recaudación
+// para el fisco) y pasa a ser su propia columna.
+//
+// El patrón es angosto a propósito: "Impuesto Municipal", "Impuesto de Inmueble",
+// "Tasa Única" y "Gasto de Impuesto sobre la Renta" SÍ son gastos reales de Dicec
+// y tienen que seguir contando como costo.
+const ES_CUENTA_IMPUESTO = (nombre: string) => /\bvat\b|\bitbms\b|\bsales tax\b/i.test(nombre);
+
+/** Filas de dato (hoja) de una sección. Recursivo: las sub-cuentas anidan. */
+function hojasDe(seccion: PnlRow, out: PnlRow[] = []): PnlRow[] {
+  for (const r of seccion.Rows?.Row ?? []) {
+    if (r.Rows?.Row?.length) hojasDe(r, out);
+    else if (r.ColData?.length) out.push(r);
+  }
+  return out;
+}
+
 /**
- * Parser del ProfitAndLoss de QBO (un solo customer/project). Toma los totales
- * de las secciones de nivel superior; si hay NetIncome, cost = income - net.
+ * Monto de una fila. `col` null = la columna Total (la última con valor).
+ * Nunca la columna 0, que es el nombre de la cuenta y no un monto.
+ */
+function montoEn(cd: PnlCol[] | undefined, col: number | null): number {
+  const cols = cd ?? [];
+  if (col !== null) return montoDe(cols[col]?.value);
+  for (let i = cols.length - 1; i >= 1; i--) {
+    if (cols[i].value) return montoDe(cols[i].value);
+  }
+  return 0;
+}
+
+/**
+ * Parte una sección en costo real vs impuesto, sumando CUENTA POR CUENTA. Leer
+ * el Summary de la sección es justamente lo que impedía separarlos.
+ * `impuesto` sale con el signo del reporte (negativo = recaudado en la venta).
+ * Si la sección no trae desglose, cae al Summary y no hay nada que separar.
+ */
+function partirSeccion(seccion: PnlRow, col: number | null): { normal: number; impuesto: number } {
+  const hojas = hojasDe(seccion);
+  if (hojas.length === 0) return { normal: montoEn(seccion.Summary?.ColData, col), impuesto: 0 };
+  let normal = 0;
+  let impuesto = 0;
+  for (const h of hojas) {
+    const v = montoEn(h.ColData, col);
+    if (ES_CUENTA_IMPUESTO(h.ColData?.[0]?.value ?? "")) impuesto += v;
+    else normal += v;
+  }
+  return { normal, impuesto };
+}
+
+/**
+ * Parser del ProfitAndLoss de QBO (un solo customer/project). Suma las secciones
+ * de nivel superior CUENTA POR CUENTA, apartando el ITBMS en `tax` (ver
+ * ES_CUENTA_IMPUESTO); si hay NetIncome, cost = income - net como fallback.
  * Con summarize_column_by=Month desglosa además cada mes: el total sigue
  * saliendo de la ÚLTIMA columna con valor, que es exactamente la de Total.
  */
@@ -144,25 +205,30 @@ export function parsePnl(result: QboToolResult): Pnl | null {
   const report = (json as { Report?: unknown }).Report ?? json;
   const rows = ((report as { Rows?: { Row?: PnlRow[] } }).Rows?.Row ?? []) as PnlRow[];
 
-  const total = (r: PnlRow): number => {
-    const cd = r.Summary?.ColData ?? [];
-    for (let i = cd.length - 1; i >= 0; i--) {
-      const raw = cd[i].value ?? "";
-      if (raw) return montoDe(raw);
-    }
-    return 0;
-  };
-
   let income = 0;
   let cost = 0;
+  // El impuesto se guarda POSITIVO = lo cobrado al cliente. En el reporte viene
+  // como crédito (negativo), de ahí el signo invertido al acumular.
+  let tax = 0;
   let net: number | null = null;
   let huboGastos = false;
   for (const r of rows) {
     const g = (r.group ?? "").toLowerCase();
-    if (ES_INGRESO(g)) income += total(r);
-    else if (g === "netincome") net = total(r);
-    else if (ES_GASTO(g)) {
-      cost += total(r);
+    if (ES_INGRESO(g)) {
+      const s = partirSeccion(r, null);
+      income += s.normal;
+      tax -= s.impuesto;
+    } else if (g === "netincome") {
+      // NetIncome no tiene desglose: sale del Summary y SÍ incluye el impuesto.
+      // Por eso solo sirve de fallback, nunca para restar.
+      net = montoEn(r.Summary?.ColData, null);
+    } else if (ES_GASTO(g)) {
+      const s = partirSeccion(r, null);
+      cost += s.normal;
+      tax -= s.impuesto;
+      // La sección existe aunque el filtro la deje en 0 (proyecto cuyo único
+      // "gasto" era el ITBMS). Marcarla igual evita caer al fallback income-net,
+      // que reinyectaría el impuesto como costo negativo.
       huboGastos = true;
     }
   }
@@ -170,8 +236,8 @@ export function parsePnl(result: QboToolResult): Pnl | null {
   // cost = income - net SOLO como fallback cuando el reporte no trae secciones
   // de gastos: con OtherIncome presente, esa resta daba costos NEGATIVOS y
   // márgenes >100% (net incluye el otro ingreso).
-  if (!huboGastos && net !== null && income > 0) return { income, cost: income - net, meses };
-  return { income, cost, meses };
+  if (!huboGastos && net !== null && income > 0) return { income, cost: income - net, tax, meses };
+  return { income, cost, tax, meses };
 }
 
 // Desglose mensual. Sin summarize_column_by=Month (o si el gateway lo ignora)
@@ -185,20 +251,20 @@ function parseMeses(report: unknown, rows: PnlRow[]): MonthPnl[] {
   });
   if (mesPorCol.size === 0) return [];
 
-  const acc = new Map<string, { income: number; cost: number }>();
-  for (const [, mes] of mesPorCol) acc.set(mes, { income: 0, cost: 0 });
+  const acc = new Map<string, { income: number; cost: number; tax: number }>();
+  for (const [, mes] of mesPorCol) acc.set(mes, { income: 0, cost: 0, tax: 0 });
   for (const r of rows) {
     const g = (r.group ?? "").toLowerCase();
     const ingreso = ES_INGRESO(g);
     // netincome ya está contenido en las otras secciones: sumarlo lo duplicaría.
     if (!ingreso && !ES_GASTO(g)) continue;
-    const cd = r.Summary?.ColData ?? [];
     for (const [i, mes] of mesPorCol) {
-      const v = montoDe(cd[i]?.value);
-      if (v === 0) continue;
+      const { normal, impuesto } = partirSeccion(r, i);
+      if (normal === 0 && impuesto === 0) continue;
       const b = acc.get(mes)!;
-      if (ingreso) b.income += v;
-      else b.cost += v;
+      if (ingreso) b.income += normal;
+      else b.cost += normal;
+      b.tax -= impuesto;
     }
   }
   return Array.from(acc, ([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month));
@@ -272,7 +338,10 @@ type PnlRowDetalle = PnlRow & { ColData?: { value?: string }[]; Rows?: { Row?: P
 
 /** Primer y último mes con movimiento (income o cost ≠ 0). */
 export function ventanaDeMeses(meses: MonthPnl[]): { first: string; last: string } | null {
-  const conMovimiento = meses.filter((m) => m.income !== 0 || m.cost !== 0).map((m) => m.month).sort();
+  // El impuesto cuenta como movimiento: si hubo ITBMS, hubo una transacción ese
+  // mes. Antes entraba por `cost` (el crédito del ITBMS lo hacía ≠ 0); ahora que
+  // se aparta en `tax`, omitirlo acá encogería la ventana de fechas del proyecto.
+  const conMovimiento = meses.filter((m) => m.income !== 0 || m.cost !== 0 || m.tax !== 0).map((m) => m.month).sort();
   if (conMovimiento.length === 0) return null;
   const last = conMovimiento[conMovimiento.length - 1];
   // El fin es el ÚLTIMO DÍA del mes: un proyecto cuyo único movimiento es marzo

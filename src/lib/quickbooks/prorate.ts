@@ -48,7 +48,7 @@ export function prorate(total: number, projStart: string, projEnd: string, range
 
 // ── Meses reales ─────────────────────────────────────────────────────────────
 
-export type MesMonto = { month: string; income: number; cost: number };
+export type MesMonto = { month: string; income: number; cost: number; tax: number };
 
 /** Último día del mes de "2026-03-01" → "2026-03-31". */
 export function finDeMes(monthIso: string): string {
@@ -61,17 +61,19 @@ export function finDeMes(monthIso: string): string {
  * (rangos de 90 días, o personalizados) aporta la parte proporcional de sus
  * días — no todo el mes ni nada.
  */
-export function sumarMeses(meses: MesMonto[], range: DateRange | null): { income: number; cost: number } {
+export function sumarMeses(meses: MesMonto[], range: DateRange | null): { income: number; cost: number; tax: number } {
   let income = 0;
   let cost = 0;
+  let tax = 0;
   for (const m of meses) {
     const f = range ? overlapFraction(m.month, finDeMes(m.month), range) : 1;
     if (f === 0) continue;
     income += m.income * f;
     cost += m.cost * f;
+    tax += m.tax * f;
   }
   const round2 = (n: number) => Math.round(n * 100) / 100;
-  return { income: round2(income), cost: round2(cost) };
+  return { income: round2(income), cost: round2(cost), tax: round2(tax) };
 }
 
 // ── Fechas efectivas ─────────────────────────────────────────────────────────

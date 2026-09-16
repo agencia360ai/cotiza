@@ -17,6 +17,10 @@ export type QboProject = {
   income: number | null; // FACTURADO — el total del proyecto según QuickBooks
   paid: number | null;   // COBRADO de verdad. null = no se pudo determinar
   cost: number | null;
+  // ITBMS facturado al cliente, apartado del gasto (ver ES_CUENTA_IMPUESTO en
+  // parse.ts). Positivo = recaudado. No entra en el margen: no es costo ni
+  // ingreso del proyecto, es plata que se le debe al fisco.
+  tax: number | null;
   margin: number | null; // 0..1
   closed: boolean; // derivado: status === 'cerrado' → no se re-consulta a QBO
   status: ProjectBizStatus; // status de negocio editable en Reportme
@@ -90,6 +94,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         income: null,
         paid: null,
         cost: null,
+        tax: null,
         margin: null,
         closed: false,
         status: "activo" as ProjectBizStatus,

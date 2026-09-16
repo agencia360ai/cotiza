@@ -54,10 +54,10 @@ test("overlapFraction y sumarMeses: un mes partido por el rango aporta su parte"
   assert.equal(overlapFraction("2026-01-01", "2026-12-31", { from: "2027-01-01", to: "2027-12-31" }), 0);
   const s = sumarMeses(
     [
-      { month: "2026-03-01", income: 3100, cost: 310 },
-      { month: "2026-04-01", income: 1000, cost: 100 },
+      { month: "2026-03-01", income: 3100, cost: 310, tax: 217 },
+      { month: "2026-04-01", income: 1000, cost: 100, tax: 70 },
     ],
     { from: "2026-03-01", to: "2026-03-31" },
   );
-  assert.deepEqual(s, { income: 3100, cost: 310 });
+  assert.deepEqual(s, { income: 3100, cost: 310, tax: 217 });
 });
