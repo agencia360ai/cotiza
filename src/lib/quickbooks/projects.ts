@@ -1,7 +1,7 @@
 import "server-only";
 import { fetchQboCustomers } from "./customers";
 import { listQboTools, withQboSession } from "./mcp";
-import { parsePnl, type MonthPnl, type Pnl } from "./parse";
+import { parsePnl, desglosarPnl, type MonthPnl, type Pnl, type SeccionPnl } from "./parse";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
 export type QboProject = {
@@ -107,6 +107,12 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
 
 export function marginOf(income: number | null, cost: number | null): number | null {
   if (income === null || cost === null || income <= 0) return null;
+  // Un gasto NEGATIVO no es "ganamos más": es un dato que no se puede leer como
+  // gasto. En QBO aparece cuando algo se acredita a una cuenta de gasto —el
+  // ITBMS de la factura, un reembolso mal clasificado— y calcular el margen
+  // igual daba 107%, un número que no existe y que se lee como un proyecto
+  // buenísimo. Sin gasto confiable no hay margen: s/d.
+  if (cost < 0) return null;
   return (income - cost) / income;
 }
 
@@ -278,6 +284,9 @@ export type PnlDiagnostico = {
   empresa: Pnl | null;
   cliente: Pnl | null;
   variantes: { args: string; pnl: Pnl | null; error: string | null; veredicto: string }[];
+  // Las secciones del reporte abiertas por cuenta. Es lo único que explica un
+  // gasto negativo: dice QUÉ cuenta lo trae. Sin esto solo se ve el total.
+  desglose: SeccionPnl[];
   conclusion: string;
 };
 
@@ -315,13 +324,18 @@ export async function diagnosticarPnl(
       { start_date: start, end_date: end, customer: p.id },
     ];
     const out: PnlDiagnostico["variantes"] = [];
+    // El desglose de la PRIMERA variante que conteste: es lo que explica un
+    // gasto negativo, diciendo de qué cuenta sale.
+    let desglose: SeccionPnl[] = [];
     let aceptada = false;
     let igualóAlCliente = false;
     for (const v of variants) {
       let pnl: Pnl | null = null;
       let error: string | null = null;
       try {
-        pnl = parsePnl(await call(tool.name, v));
+        const crudo = await call(tool.name, v);
+        pnl = parsePnl(crudo);
+        if (desglose.length === 0) desglose = desglosarPnl(crudo);
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
       }
@@ -355,6 +369,7 @@ export async function diagnosticarPnl(
       empresa,
       cliente,
       variantes: out,
+      desglose,
       conclusion,
     };
   });

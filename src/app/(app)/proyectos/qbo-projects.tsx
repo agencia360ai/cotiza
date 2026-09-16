@@ -499,15 +499,32 @@ export function QboProjectsBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered, sort, statusOv, datesOv, quotes]);
 
+  // Qué gasto de un proyecto puede entrar en una suma.
+  //
+  // Un gasto negativo no es "gastamos de menos": es QuickBooks acreditando algo
+  // a una cuenta de gasto (el ITBMS de la factura). Sumarlo daba un Gasto total
+  // NEGATIVO y un margen de 107% — dos números que no existen. Cuenta como 0, y
+  // el proyecto queda fuera del margen porque su costo real se desconoce.
+  const gastoDeAgregado = (e: Enriched): { gasto: number; confiable: boolean } => {
+    const g = e.gastoRango ?? e.p.cost ?? 0;
+    return g < 0 ? { gasto: 0, confiable: false } : { gasto: g, confiable: true };
+  };
+
   const porRubro = useMemo(() => {
-    const m = new Map<string, { count: number; cobro: number; gasto: number }>();
-    for (const key of RUBRO_ORDER) m.set(key, { count: 0, cobro: 0, gasto: 0 });
+    // `cobro` = base del margen (solo proyectos con gasto confiable).
+    // `cobroTotal` = lo facturado de verdad, que es lo que se muestra.
+    const m = new Map<string, { count: number; cobro: number; cobroTotal: number; gasto: number }>();
+    for (const key of RUBRO_ORDER) m.set(key, { count: 0, cobro: 0, cobroTotal: 0, gasto: 0 });
     for (const e of sinRubro) {
       const key = e.p.rubro && RUBRO_META[e.p.rubro] ? e.p.rubro : "otro";
-      const b = m.get(key) ?? { count: 0, cobro: 0, gasto: 0 };
+      const b = m.get(key) ?? { count: 0, cobro: 0, cobroTotal: 0, gasto: 0 };
+      const { gasto, confiable } = gastoDeAgregado(e);
       b.count++;
-      b.cobro += e.enRango ?? 0;
-      b.gasto += e.gastoRango ?? 0;
+      // Un proyecto sin gasto confiable no aporta ingreso al margen del rubro:
+      // si aportara, inflaría el porcentaje con un costo que no conocemos.
+      if (confiable) b.cobro += e.enRango ?? 0;
+      b.cobroTotal += e.enRango ?? 0;
+      b.gasto += gasto;
       m.set(key, b);
     }
     return m;
@@ -529,7 +546,9 @@ export function QboProjectsBoard() {
     const suma = (mes: string, cobro: number, gasto: number, cobrado: number | null) => {
       const b = acc.get(mes) ?? { cobro: 0, gasto: 0, cobrado: 0, conCobrado: false };
       b.cobro += cobro;
-      b.gasto += gasto;
+      // Igual que en los KPIs: un gasto negativo (ITBMS acreditado) no es gasto.
+      // Sumarlo dibujaba una barra que se comía la del mes y un margen >100%.
+      b.gasto += Math.max(0, gasto);
       if (cobrado !== null) {
         b.cobrado += cobrado;
         b.conCobrado = true;
@@ -583,9 +602,18 @@ export function QboProjectsBoard() {
     // dice "s/d" en vez de un cero que se leería como "no cobramos nada".
     let cobrado = 0;
     let conCobrado = 0;
+    // Proyectos cuyo gasto QBO devuelve negativo: cuentan como 0 en las sumas y
+    // quedan fuera del margen. El badge dice cuántos son, para que nadie lea el
+    // margen de la vista como si estuviera completo.
+    let gastoNegativo = 0;
+    // Base del margen: solo lo facturado de proyectos con gasto confiable.
+    let cobroConGasto = 0;
     for (const e of sorted) {
+      const g = gastoDeAgregado(e);
       cobro += e.enRango ?? 0;
-      gasto += e.gastoRango ?? 0;
+      gasto += g.gasto;
+      if (g.confiable) cobroConGasto += e.enRango ?? 0;
+      else gastoNegativo++;
       if (e.cobradoRango !== null) {
         cobrado += e.cobradoRango;
         conCobrado++;
@@ -609,11 +637,12 @@ export function QboProjectsBoard() {
       cobro,
       gasto,
       prorrateados,
+      gastoNegativo,
       cobrado: conCobrado > 0 ? cobrado : null,
       porCobrar,
       nPorCobrar,
       abiertos,
-      margen: cobro > 0 ? (cobro - gasto) / cobro : null,
+      margen: cobroConGasto > 0 ? (cobroConGasto - gasto) / cobroConGasto : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sorted, statusOv]);
@@ -734,9 +763,11 @@ export function QboProjectsBoard() {
           {RUBRO_ORDER.map((key) => {
             const meta = RUBRO_META[key];
             const Icon = meta.icon;
-            const b = porRubro.get(key) ?? { count: 0, cobro: 0, gasto: 0 };
+            const b = porRubro.get(key) ?? { count: 0, cobro: 0, cobroTotal: 0, gasto: 0 };
             const active = rubros.has(key);
-            const maxCobro = Math.max(...RUBRO_ORDER.map((k) => porRubro.get(k)?.cobro ?? 0), 1);
+            const maxCobro = Math.max(...RUBRO_ORDER.map((k) => porRubro.get(k)?.cobroTotal ?? 0), 1);
+            // El margen sale de la base con gasto confiable; el monto que se
+            // muestra es lo facturado completo.
             const margen = b.cobro > 0 ? (b.cobro - b.gasto) / b.cobro : null;
             return (
               <button
@@ -761,9 +792,9 @@ export function QboProjectsBoard() {
                 </div>
                 <p className="mt-2 text-sm font-semibold text-slate-800">{meta.label}</p>
                 <p className="mt-0.5 flex items-baseline gap-1.5 text-xs tabular-nums text-slate-500">
-                  {b.cobro > 0 ? (
+                  {b.cobroTotal > 0 ? (
                     <>
-                      <span className="font-semibold text-slate-700">{balCompact(b.cobro)}</span>
+                      <span className="font-semibold text-slate-700">{balCompact(b.cobroTotal)}</span>
                       {margen !== null ? <span className={marginTextColor(margen)}>{Math.round(margen * 100)}%</span> : null}
                     </>
                   ) : (
@@ -774,7 +805,7 @@ export function QboProjectsBoard() {
                 <span className="mt-2 block h-1 overflow-hidden rounded-full bg-slate-100">
                   <span
                     className="block h-full rounded-full transition-all"
-                    style={{ width: `${Math.max(b.cobro > 0 ? 4 : 0, (b.cobro / maxCobro) * 100)}%`, backgroundColor: meta.accent }}
+                    style={{ width: `${Math.max(b.cobroTotal > 0 ? 4 : 0, (b.cobroTotal / maxCobro) * 100)}%`, backgroundColor: meta.accent }}
                   />
                 </span>
               </button>
@@ -893,6 +924,15 @@ export function QboProjectsBoard() {
                   title={`${vista.prorrateados} proyecto${vista.prorrateados === 1 ? "" : "s"} multi-período: se muestra solo la porción del contrato dentro del rango`}
                 >
                   {vista.prorrateados} prorrateado{vista.prorrateados === 1 ? "" : "s"}
+                </span>
+              ) : null}
+              {vista.gastoNegativo > 0 ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20"
+                  title="QuickBooks devuelve un gasto negativo en estos proyectos (suele ser el ITBMS de la factura acreditado a una cuenta de gasto). Su margen queda s/d."
+                >
+                  <AlertTriangle className="size-3" />
+                  {vista.gastoNegativo} con gasto negativo
                 </span>
               ) : null}
               <span className="text-slate-500">
@@ -1758,6 +1798,25 @@ function PorQueSinDatos({ qbJobId, cerrado }: { qbJobId: string; cerrado: boolea
               {v.pnl ? ` — ${money(v.pnl)}` : v.error ? ` — ${v.error.slice(0, 60)}` : ""}
             </p>
           ))}
+          {/* Las cuentas que componen cada sección. Es lo que identifica de
+              dónde sale un gasto negativo — sin esto solo se ve el total. */}
+          {diag.desglose.length > 0 ? (
+            <div className="mt-1.5 border-t border-slate-200 pt-1.5">
+              {diag.desglose.map((s, i) => (
+                <div key={i} className="mt-1">
+                  <p className={cn("font-semibold", s.total < 0 ? "text-amber-700" : "text-slate-700")}>
+                    {s.grupo}: {bal(s.total)}
+                  </p>
+                  {s.cuentas.map((c, j) => (
+                    <p key={j} className={cn("truncate pl-3", c.total < 0 && "font-semibold text-amber-700")} title={c.nombre}>
+                      {c.nombre} — {bal(c.total)}
+                      {c.total < 0 ? " ← negativo" : ""}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1808,6 +1867,10 @@ function ProjectRow({
   // margen: es gasto sin cargar. Mostrar 100% invita a leer una ganancia que
   // no existe, así que el margen dice s/d y la barra queda gris.
   const faltaGasto = (e.gastoRango ?? p.cost ?? 0) === 0 && (e.enRango ?? p.income ?? 0) > 0 && status !== "cerrado";
+  // Gasto negativo: QBO acreditó algo a una cuenta de gasto (típicamente el
+  // ITBMS de la factura). No es un gasto chico, es un número que no se puede
+  // leer como gasto — y arrastraba el margen a >100%.
+  const gastoNegativo = (e.gastoRango ?? p.cost ?? 0) < 0;
   // `parcial`: el rango muestra solo una porción del proyecto. `prorrateado`:
   // además esa porción es una ESTIMACIÓN (repartida por días) y no lo que
   // QuickBooks reportó en esos meses — solo ahí corresponde el aviso.
@@ -1819,7 +1882,11 @@ function ProjectRow({
   const gasto = e.gastoRango ?? p.cost ?? 0;
   // La celda del margen cuando no tiene columna propia: va pegada al total,
   // que es de donde sale.
-  const margenAdentro = !cols.ocultas.has("margen") ? null : faltaGasto ? (
+  const margenAdentro = !cols.ocultas.has("margen") ? null : gastoNegativo ? (
+    <div className="mt-0.5 text-[11px] font-semibold text-amber-700" title="Gasto negativo en QuickBooks: sin gasto confiable no hay margen">
+      margen s/d
+    </div>
+  ) : faltaGasto ? (
     <div className="mt-0.5 text-[11px] font-semibold text-orange-600" title="Falta cargar el gasto en QuickBooks">
       margen s/d
     </div>
@@ -1979,9 +2046,21 @@ function ProjectRow({
       <td key="gasto" className="whitespace-nowrap px-2.5 py-2.5 text-right">
         {conDatos ? (
           <span
-            className="font-medium tabular-nums text-rose-600"
-            title={prorrateado ? "Prorrateado por días: el rango corta meses sin desglose en QuickBooks" : undefined}
+            className={cn(
+              "font-medium tabular-nums",
+              // Ámbar, no rosa: un gasto negativo no es un gasto chico, es un
+              // dato que no se puede leer. El color lo separa de los normales.
+              gastoNegativo ? "text-amber-700" : "text-rose-600",
+            )}
+            title={
+              gastoNegativo
+                ? "QuickBooks devolvió un gasto NEGATIVO para este proyecto — suele ser el ITBMS de la factura entrando como crédito en una cuenta de gasto. El margen queda s/d hasta corregir la cuenta en QuickBooks."
+                : prorrateado
+                  ? "Prorrateado por días: el rango corta meses sin desglose en QuickBooks"
+                  : undefined
+            }
           >
+            {gastoNegativo ? <AlertTriangle className="mr-1 inline size-3 align-[-1px]" /> : null}
             {e.gastoRango !== null ? bal(e.gastoRango) : p.cost !== null ? bal(p.cost) : "—"}
             {prorrateado ? <span className="text-rose-300"> ~</span> : null}
           </span>
@@ -1995,9 +2074,12 @@ function ProjectRow({
       <td key="margen" className="w-28 whitespace-nowrap px-3 py-2.5 text-right">
         {!conDatos ? (
           <span className="text-slate-300">—</span>
-        ) : faltaGasto ? (
+        ) : gastoNegativo || faltaGasto ? (
           <>
-            <div className="text-xs font-semibold text-orange-600" title="Falta cargar el gasto en QuickBooks">
+            <div
+              className="text-xs font-semibold text-orange-600"
+              title={gastoNegativo ? "Gasto negativo en QuickBooks: sin gasto confiable no hay margen" : "Falta cargar el gasto en QuickBooks"}
+            >
               s/d
             </div>
             <div className="mt-1 h-1.5 rounded-full bg-slate-200" />
