@@ -2,14 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { Copy, Eye, EyeOff, Loader2, UserPlus, CheckCircle2, RefreshCw } from "lucide-react";
+import { rolSinRestriccion, type Seccion } from "@/lib/secciones";
 import { inviteMember } from "./actions";
+import { AccesoPicker } from "./acceso-picker";
 
 type Role = "owner" | "admin" | "engineer" | "viewer";
 
 const ROLE_OPTIONS: { value: Role; label: string; hint: string }[] = [
   { value: "engineer", label: "Ingeniero", hint: "Puede crear/editar clientes, equipos y reportes" },
-  { value: "admin", label: "Administrador", hint: "Igual que ingeniero + gestionar miembros" },
-  { value: "viewer", label: "Solo lectura", hint: "Ve toda la información pero no edita" },
+  { value: "admin", label: "Administrador", hint: "Ve toda la plataforma, edita y gestiona miembros" },
+  { value: "viewer", label: "Solo lectura", hint: "Pensado para consultar — ojo: la app todavía no le bloquea editar" },
   { value: "owner", label: "Owner", hint: "Control total, incluyendo eliminar la org" },
 ];
 
@@ -25,6 +27,7 @@ export function InviteMemberForm() {
   const [nombre, setNombre] = useState("");
   const [password, setPassword] = useState(generatePassword());
   const [role, setRole] = useState<Role>("engineer");
+  const [secciones, setSecciones] = useState<Seccion[] | null>(null);
   const [showPwd, setShowPwd] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +39,13 @@ export function InviteMemberForm() {
     setError(null);
     setSuccess(null);
     startTransition(async () => {
-      const r = await inviteMember({ email: email.trim(), password, role, displayName: nombre.trim() || null });
+      const r = await inviteMember({
+        email: email.trim(),
+        password,
+        role,
+        displayName: nombre.trim() || null,
+        secciones: rolSinRestriccion(role) ? null : secciones,
+      });
       if (r && "error" in r) {
         setError(r.error);
         return;
@@ -124,6 +133,23 @@ export function InviteMemberForm() {
             {ROLE_OPTIONS.find((r) => r.value === role)?.hint}
           </p>
         </label>
+
+        <div className="sm:col-span-2">
+          <span id="invitar-acceso" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+            Qué puede ver
+          </span>
+          <AccesoPicker
+            value={rolSinRestriccion(role) ? null : secciones}
+            onChange={setSecciones}
+            disabled={rolSinRestriccion(role)}
+            labelledBy="invitar-acceso"
+          />
+          <p className="mt-1 text-[10px] text-slate-500">
+            {rolSinRestriccion(role)
+              ? "Owner y admin ven toda la plataforma, siempre."
+              : "Solo le aparecen estas secciones en el menú, y la base de datos no le entrega nada de las demás."}
+          </p>
+        </div>
 
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">

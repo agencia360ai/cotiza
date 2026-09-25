@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getActiveOrgId } from "@/lib/org-context";
+import { sinAcceso } from "@/lib/acceso";
 import { revisarUna, ESTADOS_VIGILADOS, type Snapshot } from "@/lib/panamacompra/vigilancia";
 
 async function ctx() {
@@ -12,6 +13,9 @@ async function ctx() {
   if (!u.user) return { ok: false as const, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
+  // PanamaCompra y el admin client no pasan por RLS.
+  const sinPermiso = await sinAcceso("licitaciones");
+  if (sinPermiso) return { ok: false as const, error: sinPermiso };
   return { ok: true as const, supabase, orgId };
 }
 

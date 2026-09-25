@@ -19,10 +19,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NavCounts } from "@/lib/nav-counts";
+import type { Seccion } from "@/lib/secciones";
 
 type CountKey = keyof NavCounts;
 
 type NavItem = {
+  seccion: Seccion;
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -38,9 +40,10 @@ const GRUPOS: { label: string; items: NavItem[] }[] = [
   {
     label: "Operación",
     items: [
-      { href: "/inicio", label: "Inicio", icon: LayoutDashboard, exact: true },
-      { href: "/proyectos", label: "Proyectos", icon: Hammer, count: "proyectos" },
+      { seccion: "inicio", href: "/inicio", label: "Inicio", icon: LayoutDashboard, exact: true },
+      { seccion: "proyectos", href: "/proyectos", label: "Proyectos", icon: Hammer, count: "proyectos" },
       {
+        seccion: "mantenimiento",
         href: "/mantenimiento",
         label: "Mantenimiento",
         icon: Wrench,
@@ -53,16 +56,16 @@ const GRUPOS: { label: string; items: NavItem[] }[] = [
   {
     label: "Potenciales",
     items: [
-      { href: "/leads", label: "Leads", icon: Sparkles, count: "leads" },
-      { href: "/potenciales", label: "Cotizaciones", icon: TrendingUp, count: "cotizaciones" },
-      { href: "/licitaciones", label: "Licitaciones", icon: Landmark, count: "licitaciones" },
+      { seccion: "leads", href: "/leads", label: "Leads", icon: Sparkles, count: "leads" },
+      { seccion: "cotizaciones", href: "/potenciales", label: "Cotizaciones", icon: TrendingUp, count: "cotizaciones" },
+      { seccion: "licitaciones", href: "/licitaciones", label: "Licitaciones", icon: Landmark, count: "licitaciones" },
     ],
   },
   {
     label: "Base",
     items: [
-      { href: "/clientes", label: "Clientes", icon: Building2, count: "clientes" },
-      { href: "/personal", label: "Personal", icon: Users, count: "personal" },
+      { seccion: "clientes", href: "/clientes", label: "Clientes", icon: Building2, count: "clientes" },
+      { seccion: "personal", href: "/personal", label: "Personal", icon: Users, count: "personal" },
     ],
   },
 ];
@@ -80,6 +83,8 @@ type Props = {
   user: { email: string | null };
   showOrgSwitcher?: boolean;
   counts?: NavCounts;
+  secciones: Seccion[];
+  verConfiguracion: boolean;
 };
 
 function Pastilla({ n, alerta }: { n: number; alerta?: boolean }) {
@@ -96,9 +101,12 @@ function Pastilla({ n, alerta }: { n: number; alerta?: boolean }) {
   );
 }
 
-export function AppSidebar({ org, user, showOrgSwitcher = false, counts }: Props) {
+export function AppSidebar({ org, user, showOrgSwitcher = false, counts, secciones, verConfiguracion }: Props) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const grupos = GRUPOS.map((g) => ({ ...g, items: g.items.filter((i) => secciones.includes(i.seccion)) })).filter(
+    (g) => g.items.length > 0,
+  );
 
   useEffect(() => {
     setOpen(false);
@@ -131,7 +139,7 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts }: Props
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 pb-3">
-        {GRUPOS.map((grupo) => (
+        {grupos.map((grupo) => (
           <div key={grupo.label} className="mb-1.5">
             <p className="px-3 pb-1 pt-3 text-[9px] font-bold uppercase tracking-[0.12em] text-sidebar-label">
               {grupo.label}
@@ -169,19 +177,21 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts }: Props
         <p className="truncate px-3 pb-1.5 text-[11px] text-slate-400" title={user.email ?? undefined}>
           {user.email}
         </p>
-        <Link
-          href="/settings"
-          onClick={() => setOpen(false)}
-          className={cn(
-            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors",
-            pathname.startsWith("/settings")
-              ? "bg-sidebar-active font-semibold text-white"
-              : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
-          )}
-        >
-          <Settings className="size-4" />
-          Configuración
-        </Link>
+        {verConfiguracion ? (
+          <Link
+            href="/settings"
+            onClick={() => setOpen(false)}
+            className={cn(
+              "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors",
+              pathname.startsWith("/settings")
+                ? "bg-sidebar-active font-semibold text-white"
+                : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
+            )}
+          >
+            <Settings className="size-4" />
+            Configuración
+          </Link>
+        ) : null}
         <form action="/logout" method="post">
           <button
             type="submit"

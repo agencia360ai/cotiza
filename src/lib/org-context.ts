@@ -1,25 +1,43 @@
 import "server-only";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { normalizarSecciones, type Seccion } from "@/lib/secciones";
 
 export const ACTIVE_ORG_COOKIE = "cotiza_active_org";
 
-export type OrgMembership = { org_id: string; role: string };
+/** secciones: null = ve todas (ver src/lib/secciones.ts). */
+export type OrgMembership = { org_id: string; role: string; secciones: Seccion[] | null };
+
+type FilaMembresia = { org_id: string; role: string; secciones?: unknown };
 
 /**
  * Returns all org_ids the current user belongs to (along with role).
  * Empty array if not logged in.
+ *
+ * cache(): el layout, el guardia de la sección y la página la piden en el mismo
+ * request — con una consulta alcanza.
  */
-export async function listMemberships(): Promise<OrgMembership[]> {
+export const listMemberships = cache(async (): Promise<OrgMembership[]> => {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return [];
-  const { data } = (await supabase
-    .from("org_members")
-    .select("org_id, role")
-    .eq("user_id", u.user.id)) as { data: OrgMembership[] | null };
-  return data ?? [];
-}
+  const userId = u.user.id;
+  const leer = (cols: string) =>
+    supabase.from("org_members").select(cols).eq("user_id", userId) as unknown as Promise<{
+      data: FilaMembresia[] | null;
+      error: { message?: string } | null;
+    }>;
+  let res = await leer("org_id, role, secciones");
+  // Sin la 0050 la columna no existe y PostgREST rechaza la consulta entera:
+  // sin este reintento, todos quedarían "sin organización" hasta correrla.
+  if (res.error && /secciones/.test(res.error.message ?? "")) res = await leer("org_id, role");
+  return (res.data ?? []).map((m) => ({
+    org_id: m.org_id,
+    role: m.role,
+    secciones: normalizarSecciones(m.secciones),
+  }));
+});
 
 /**
  * Returns the currently active org_id for the user:
@@ -46,11 +64,12 @@ export async function getActiveOrgId(): Promise<string | null> {
  * Returns the active org_id + role for the user, plus the authenticated user.
  * Throws (via redirect intended) the caller should handle null user.
  */
-export async function getActiveOrgContext(): Promise<{
+export const getActiveOrgContext = cache(async (): Promise<{
   user: { id: string; email: string | null };
   orgId: string;
   role: string;
-} | null> {
+  secciones: Seccion[] | null;
+} | null> => {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) return null;
@@ -66,5 +85,6 @@ export async function getActiveOrgContext(): Promise<{
     user: { id: u.user.id, email: u.user.email ?? null },
     orgId: active.org_id,
     role: active.role,
+    secciones: active.secciones,
   };
-}
+});

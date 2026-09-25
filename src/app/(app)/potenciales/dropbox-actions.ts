@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
+import { sinAcceso } from "@/lib/acceso";
 import { hasDropboxConfig, listFolder, downloadFile } from "@/lib/dropbox/client";
 import { parseQuotePdf } from "@/lib/ai/parse-quote-pdf";
 import { matchClientByName } from "@/lib/clients/match";
@@ -30,6 +31,9 @@ async function ctx() {
   if (!u.user) return { ok: false as const, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
+  // Dropbox se lee con la cuenta de la empresa: RLS no llega.
+  const sinPermiso = await sinAcceso("cotizaciones");
+  if (sinPermiso) return { ok: false as const, error: sinPermiso };
   return { ok: true as const, supabase, orgId };
 }
 

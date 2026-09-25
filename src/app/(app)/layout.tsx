@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgContext, listMemberships } from "@/lib/org-context";
 import { AppSidebar } from "@/components/app-sidebar";
 import { getNavCounts } from "@/lib/nav-counts";
+import { seccionesVisibles, verConfiguracion } from "@/lib/secciones";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -27,7 +28,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     .single()) as { data: { id: string; name: string } | null };
   if (!org) redirect("/onboarding");
 
-  const counts = await getNavCounts(ctx.orgId);
+  const secciones = seccionesVisibles(ctx.role, ctx.secciones);
+  const counts = await getNavCounts(ctx.orgId, secciones);
 
   return (
     <div className="min-h-screen bg-canvas md:flex">
@@ -36,6 +38,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         user={{ email: user.email ?? null }}
         showOrgSwitcher={memberships.length > 1}
         counts={counts}
+        secciones={secciones}
+        verConfiguracion={verConfiguracion(ctx.role, ctx.secciones)}
       />
       <main className="min-w-0 flex-1">{children}</main>
     </div>

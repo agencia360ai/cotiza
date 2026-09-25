@@ -4,9 +4,12 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getActiveOrgContext } from "@/lib/org-context";
+import { normalizarSecciones, rolSinRestriccion } from "@/lib/secciones";
 
 type Result = { error: string } | { ok: true };
 type Role = "owner" | "admin" | "engineer" | "viewer";
+
+const FALTA_0050 = "Falta la migración 0050 (secciones) — corré el SQL en Supabase y reintentá.";
 
 type OrgCtx = NonNullable<Awaited<ReturnType<typeof getActiveOrgContext>>>;
 type RequireAdmin = { kind: "err"; error: string } | { kind: "ok"; ctx: OrgCtx };
@@ -31,6 +34,7 @@ export async function inviteMember(input: {
   password: string;
   role: Role;
   displayName?: string | null;
+  secciones?: string[] | null;
 }): Promise<Result> {
   const auth = await requireAdmin();
   if (auth.kind === "err") return { error: auth.error };
@@ -42,6 +46,15 @@ export async function inviteMember(input: {
 
   const admin = createAdminClient();
   const supabase = await createClient();
+
+  // Owner/admin ven todo por rol: no se les guarda restricción.
+  const secciones = rolSinRestriccion(input.role) ? null : normalizarSecciones(input.secciones);
+  // Antes de crear la cuenta: si falta la 0050, fallar acá y no dejar un
+  // usuario creado sin membresía.
+  if (secciones) {
+    const { error } = (await admin.from("org_members").select("secciones").limit(1)) as { error: { message: string } | null };
+    if (error && /secciones/.test(error.message)) return { error: FALTA_0050 };
+  }
 
   // 1) ¿El usuario ya existe en auth?
   type ListUsersData = { users: { id: string; email?: string | null }[] };
@@ -138,10 +151,13 @@ export async function inviteMember(input: {
     (admin.from("org_members") as unknown as {
       insert: (r: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
     }).insert(row);
-  const base = { org_id: ctx.orgId, user_id: userId, role: input.role };
+  const base = { org_id: ctx.orgId, user_id: userId, role: input.role, ...(secciones ? { secciones } : {}) };
   let { error: memErr } = await insertar({ ...base, display_name: nombre });
   // 0046 pendiente: se crea igual el miembro, solo sin nombre.
   if (memErr && /display_name/.test(memErr.message)) ({ error: memErr } = await insertar(base));
+  // Sin la 0050 NO se crea sin restricción: sería darle todo a quien tenía que
+  // ver una sola cosa.
+  if (memErr && /secciones/.test(memErr.message)) return { error: FALTA_0050 };
   if (memErr) return { error: memErr.message };
 
   revalidatePath("/settings/members");
@@ -269,6 +285,31 @@ export async function setMemberDisplayName(memberId: string, nombre: string | nu
   if (error) {
     return { error: /display_name/.test(error.message) ? "Falta la migración 0046 — corre el SQL y reintenta." : error.message };
   }
+  revalidatePath("/settings/members");
+  return { ok: true };
+}
+
+// Qué secciones ve el miembro. null = todas.
+export async function setMemberSecciones(memberId: string, secciones: string[] | null): Promise<Result> {
+  const auth = await requireAdmin();
+  if (auth.kind === "err") return { error: auth.error };
+  const ctx = auth.ctx;
+
+  const { data: member } = await membersTable().select("role").eq("id", memberId).eq("org_id", ctx.orgId).maybeSingle();
+  if (!member?.role) return { error: "Miembro no encontrado" };
+  if (rolSinRestriccion(member.role)) return { error: "Owner y admin ven todo siempre — bajale el rol para restringirlo." };
+
+  // secciones es de la 0050 y todavía no está en los tipos generados.
+  const { error } = await (membersTable() as unknown as {
+    update: (v: Record<string, unknown>) => {
+      eq: (c: string, v: string) => { eq: (c: string, v: string) => Promise<{ error: { message: string } | null }> };
+    };
+  })
+    .update({ secciones: normalizarSecciones(secciones) })
+    .eq("id", memberId)
+    .eq("org_id", ctx.orgId);
+  if (error) return { error: /secciones/.test(error.message) ? FALTA_0050 : error.message };
+
   revalidatePath("/settings/members");
   return { ok: true };
 }

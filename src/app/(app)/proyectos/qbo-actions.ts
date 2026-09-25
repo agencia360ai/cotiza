@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
+import { sinAcceso } from "@/lib/acceso";
 import { hasQboConfig, QboTransportError } from "@/lib/quickbooks/mcp";
 import {
   fetchQboProjectsList,
@@ -462,6 +463,9 @@ export async function getQboProjects(opts?: { force?: boolean; allYears?: boolea
   if (!u.user) return { ok: false, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false, error: "Sin organización" };
+  // Con force, esto trae el P&L directo de QuickBooks: RLS no lo filtra.
+  const sinPermiso = await sinAcceso("proyectos", "inicio");
+  if (sinPermiso) return { ok: false, error: sinPermiso };
   // Año en hora de PANAMÁ: con getFullYear() en UTC, el 31/dic a las 7pm el
   // board ya saltaba al año siguiente (vacío).
   const year = Number(new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }).slice(0, 4));
@@ -578,6 +582,8 @@ export async function diagnosticarProyecto(
   if (!u.user) return { ok: false, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false, error: "Sin organización" };
+  const sinPermiso = await sinAcceso("proyectos");
+  if (sinPermiso) return { ok: false, error: sinPermiso };
   if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada" };
   try {
     const r = await diagnosticarPnl(qbJobId, cerrado);
@@ -736,6 +742,8 @@ export async function diagnosticarCobradoAction(): Promise<
   if (!u.user) return { ok: false, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false, error: "Sin organización" };
+  const sinPermiso = await sinAcceso("proyectos");
+  if (sinPermiso) return { ok: false, error: sinPermiso };
   if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada" };
 
   const { data } = (await supabase
@@ -769,6 +777,8 @@ export async function diagnosticarFechasAction(): Promise<
   if (!u.user) return { ok: false, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false, error: "Sin organización" };
+  const sinPermiso = await sinAcceso("proyectos");
+  if (sinPermiso) return { ok: false, error: sinPermiso };
   if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada" };
 
   const { data } = (await supabase

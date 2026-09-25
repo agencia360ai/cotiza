@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
+import type { Seccion } from "@/lib/secciones";
 
 // Contadores de las pastillas del sidebar. Todo con HEAD + count exacto: no se
 // trae una sola fila, solo el número, y las 7 consultas van en paralelo — el
@@ -35,7 +36,7 @@ type FiltrableQuery = {
   then: <R>(cb: (r: { count: number | null; error: unknown }) => R) => Promise<R>;
 };
 
-export async function getNavCounts(orgId: string): Promise<NavCounts> {
+export async function getNavCounts(orgId: string, visibles: readonly Seccion[]): Promise<NavCounts> {
   if (!orgId) return VACIO;
   const supabase = await createClient();
 
@@ -54,15 +55,20 @@ export async function getNavCounts(orgId: string): Promise<NavCounts> {
   // del día anterior como pasaría comparando en UTC.
   const hoy = new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" });
 
+  // La pastilla de una sección que no está en el menú no se pinta: no gastar la
+  // consulta en cada navegación.
+  const si = (s: keyof NavCounts, consulta: () => Promise<number | null>) =>
+    visibles.includes(s) ? consulta() : Promise.resolve(null);
+
   const [proyectos, mantenimiento, leads, cotizaciones, licitaciones, clientes, personal] = await Promise.all([
     // Abiertos: el número que importa es en cuántos se está trabajando.
-    contar("qbo_project_state", (q) => q.neq("status", "cerrado")),
-    contar("maintenance_schedules", (q) => q.eq("active", true).lt("next_due_date", hoy)),
-    contar("leads", (q) => q.neq("status", "perdido")),
-    contar("sales_quotes"),
-    contar("tenders"),
-    contar("clients"),
-    contar("org_members"),
+    si("proyectos", () => contar("qbo_project_state", (q) => q.neq("status", "cerrado"))),
+    si("mantenimiento", () => contar("maintenance_schedules", (q) => q.eq("active", true).lt("next_due_date", hoy))),
+    si("leads", () => contar("leads", (q) => q.neq("status", "perdido"))),
+    si("cotizaciones", () => contar("sales_quotes")),
+    si("licitaciones", () => contar("tenders")),
+    si("clientes", () => contar("clients")),
+    si("personal", () => contar("org_members")),
   ]);
 
   return { proyectos, mantenimiento, leads, cotizaciones, licitaciones, clientes, personal };

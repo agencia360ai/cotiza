@@ -1,5 +1,6 @@
 import "server-only";
 import { createAdminClient, hasAdminCredentials } from "@/lib/supabase/admin";
+import { normalizarSecciones, type Seccion } from "@/lib/secciones";
 
 // Lista de miembros de la organización, con su email resuelto.
 //
@@ -17,6 +18,7 @@ export type OrgMember = {
   created_at: string;
   wa_phone: string | null;
   last_sign_in_at: string | null;
+  secciones: Seccion[] | null;
 };
 
 /** Cómo se llama este miembro en pantalla: su nombre, o el email sin el dominio. */
@@ -44,15 +46,25 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
   if (!hasAdminCredentials()) return [];
   const admin = createAdminClient();
 
-  type Row = { id: string; user_id: string; role: string; created_at: string; wa_phone?: string | null; display_name?: string | null };
+  type Row = {
+    id: string;
+    user_id: string;
+    role: string;
+    created_at: string;
+    wa_phone?: string | null;
+    display_name?: string | null;
+    secciones?: unknown;
+  };
   const traer = (cols: string) =>
     admin.from("org_members").select(cols).eq("org_id", orgId).order("created_at", { ascending: true }) as unknown as Promise<{
       data: Row[] | null;
       error: { message?: string } | null;
     }>;
-  // Escalera por migración pendiente: sin 0046 no hay display_name, sin 0044 no
-  // hay wa_phone. La lista igual sale — solo pierde esa columna.
-  let res = await traer("id, user_id, role, created_at, wa_phone, display_name");
+  // Escalera por migración pendiente: sin 0050 no hay secciones, sin 0046 no hay
+  // display_name, sin 0044 no hay wa_phone. La lista igual sale — solo pierde
+  // esa columna.
+  let res = await traer("id, user_id, role, created_at, wa_phone, display_name, secciones");
+  if (res.error && /secciones/.test(res.error.message ?? "")) res = await traer("id, user_id, role, created_at, wa_phone, display_name");
   if (res.error && /display_name/.test(res.error.message ?? "")) res = await traer("id, user_id, role, created_at, wa_phone");
   if (res.error && /wa_phone/.test(res.error.message ?? "")) res = await traer("id, user_id, role, created_at");
   if (res.error) return [];
@@ -68,6 +80,7 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
         created_at: m.created_at,
         wa_phone: m.wa_phone ?? null,
         display_name: m.display_name ?? null,
+        secciones: normalizarSecciones(m.secciones),
         email: data?.user?.email ?? "—",
         last_sign_in_at: data?.user?.last_sign_in_at ?? null,
       };
