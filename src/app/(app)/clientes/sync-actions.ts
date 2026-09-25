@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
+import { sinAcceso } from "@/lib/acceso";
 import { hasQboConfig } from "@/lib/quickbooks/mcp";
 import { fetchQboCustomers, type QboCustomer } from "@/lib/quickbooks/customers";
 import { norm } from "@/lib/clients/normalize";
@@ -36,6 +37,8 @@ export async function syncQuickbooksCustomers(opts?: { subCustomersAsLocations?:
   if (!u.user) return { ok: false, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false, error: "Sin organización" };
+  const sinPermiso = await sinAcceso("clientes");
+  if (sinPermiso) return { ok: false, error: sinPermiso };
   if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
 
   const errors: string[] = [];

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
+import { sinAcceso } from "@/lib/acceso";
 import { hasQboConfig } from "@/lib/quickbooks/mcp";
 import {
   createQboProject,
@@ -32,6 +33,9 @@ async function ctx() {
   if (!u.user) return { ok: false as const, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
+  // Esto escribe en QuickBooks con las credenciales del servidor: RLS no llega.
+  const sinPermiso = await sinAcceso("cotizaciones");
+  if (sinPermiso) return { ok: false as const, error: sinPermiso };
   return { ok: true as const, supabase, orgId };
 }
 

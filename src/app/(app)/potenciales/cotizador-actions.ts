@@ -6,6 +6,7 @@ import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient, hasAdminCredentials } from "@/lib/supabase/admin";
 import { getActiveOrgId } from "@/lib/org-context";
+import { sinAcceso } from "@/lib/acceso";
 import {
   buildQuoteDraft,
   insertQuote,
@@ -29,6 +30,9 @@ async function ctx() {
   if (!u.user) return { ok: false as const, error: "Sesión expirada" };
   const orgId = await getActiveOrgId();
   if (!orgId) return { ok: false as const, error: "Sin organización" };
+  // La IA y el admin client (link del portal) no pasan por RLS.
+  const sinPermiso = await sinAcceso("cotizaciones");
+  if (sinPermiso) return { ok: false as const, error: sinPermiso };
   return { ok: true as const, supabase, orgId, userId: u.user.id };
 }
 

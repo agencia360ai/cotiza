@@ -1,7 +1,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { ACTIVE_ORG_COOKIE, listMemberships } from "@/lib/org-context";
+import { ACTIVE_ORG_COOKIE, getActiveOrgContext, listMemberships } from "@/lib/org-context";
+import { primeraRuta } from "@/lib/secciones";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -20,5 +21,6 @@ export default async function Home() {
   const hasValidActive = !!cookieOrgId && memberships.some((m) => m.org_id === cookieOrgId);
   if (memberships.length > 1 && !hasValidActive) redirect("/select-org");
 
-  redirect("/inicio");
+  const ctx = await getActiveOrgContext();
+  redirect(ctx ? primeraRuta(ctx.role, ctx.secciones) : "/inicio");
 }
