@@ -14,6 +14,7 @@ import { STATUS_COLOR, STATUS_LABEL_SHORT as STATUS_LABEL } from "@/lib/maintena
 import { LEAD_STATUS_LABEL, LEAD_STATUS_COLOR, type LeadStatus } from "@/lib/leads/types";
 import { getQboProjects } from "@/app/(app)/proyectos/qbo-actions";
 import type { QboProject } from "@/lib/quickbooks/projects";
+import { gastoConHoras } from "@/lib/quickbooks/horas-core";
 import { CobroGastoChart, type MesCobroGasto } from "@/components/inicio/charts";
 import { cn } from "@/lib/utils";
 
@@ -73,9 +74,11 @@ export default async function InicioDashboard() {
   // Proyectos: abrir Inicio no llama a QuickBooks).
   const qboProjects: QboProject[] = qbo.ok ? qbo.projects : [];
   const qboSyncedAt = qbo.ok ? qbo.syncedAt : null;
+  // Gasto = lo contable + las horas de técnicos, igual que en Proyectos.
+  const gastoDe = (p: QboProject) => gastoConHoras(p.cost, p.horas) ?? 0;
   const conNumeros = qboProjects.filter((p) => p.income !== null || p.cost !== null);
   const ingresos = conNumeros.reduce((a, p) => a + (p.income ?? 0), 0);
-  const costos = conNumeros.reduce((a, p) => a + (p.cost ?? 0), 0);
+  const costos = conNumeros.reduce((a, p) => a + gastoDe(p), 0);
   const margenGlobal = ingresos > 0 ? (ingresos - costos) / ingresos : null;
   const porCobrar = qboProjects.filter((p) => p.status === "por_cobrar");
   const porCobrarMonto = porCobrar.reduce((a, p) => a + (p.income ?? 0), 0);
@@ -96,6 +99,11 @@ export default async function InicioDashboard() {
       serie[i].cobro += m.income;
       serie[i].gasto += m.cost;
     }
+    for (const h of p.horas?.meses ?? []) {
+      if (Number(h.month.slice(0, 4)) !== year) continue;
+      const i = Number(h.month.slice(5, 7)) - 1;
+      if (i >= 0 && i <= 11) serie[i].gasto += h.costo;
+    }
   }
   const mesActual = Number(new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }).slice(5, 7)) - 1;
 
@@ -103,7 +111,7 @@ export default async function InicioDashboard() {
   const porRubro = (["DC", "DM", "DS", "DV"] as const).map((k) => {
     const ps = qboProjects.filter((p) => p.rubro === k);
     const cobro = ps.reduce((a, p) => a + (p.income ?? 0), 0);
-    const gasto = ps.reduce((a, p) => a + (p.cost ?? 0), 0);
+    const gasto = ps.reduce((a, p) => a + gastoDe(p), 0);
     return {
       key: k,
       label: RUBRO_LABEL[k],
@@ -300,7 +308,7 @@ export default async function InicioDashboard() {
                 <tbody>
                   {topProyectos.map((p) => {
                     const m = p.margin;
-                    const sinGasto = (p.cost ?? 0) === 0 && (p.income ?? 0) > 0 && p.status !== "cerrado";
+                    const sinGasto = gastoDe(p) === 0 && (p.income ?? 0) > 0 && p.status !== "cerrado";
                     return (
                       <tr key={p.id} className="border-b border-row last:border-0 hover:bg-row-hover">
                         <td className="max-w-[260px] px-5 py-3">
@@ -315,7 +323,7 @@ export default async function InicioDashboard() {
                           {formatMoney(p.income ?? 0)}
                         </td>
                         <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums text-slate-600">
-                          {formatMoney(p.cost ?? 0)}
+                          {formatMoney(gastoDe(p))}
                         </td>
                         <td className="px-3 py-3">
                           {/* Gasto en cero en un proyecto vivo no es 100% de margen:

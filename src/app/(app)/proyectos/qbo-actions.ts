@@ -8,7 +8,7 @@ import {
   fetchQboProjectsList,
   fetchProjectFinancials,
   diagnosticarPnl,
-  marginOf,
+  margenDe,
   type QboProject,
   type ProjectBizStatus,
   type PnlDiagnostico,
@@ -17,6 +17,8 @@ import { ventanaDeMeses, type MonthPnl } from "@/lib/quickbooks/parse";
 import { fetchSaldosPendientes, calcularCobrado, diagnosticarCobrado, type DiagnosticoCobrado } from "@/lib/quickbooks/cobrado";
 import { fetchFechasReales, diagnosticarFechas, type DiagnosticoFechas } from "@/lib/quickbooks/fechas";
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
+import { fetchHorasTecnicos } from "@/lib/quickbooks/horas";
+import { normalizarHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core";
 
 export type QboProjectsResult =
   | {
@@ -126,6 +128,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
   if (res.error) return { ok: false, error: res.error.message };
   const rows = res.data ?? [];
   const { porProyecto: mesesPorProyecto, desde: mesesDesde } = await loadMeses(supabase, orgId);
+  const horasPorProyecto = await loadHoras(supabase, orgId);
   let syncedAt: number | null = null;
   const projects: QboProject[] = rows
     .map((r) => {
@@ -135,6 +138,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
       const paid = r.paid === null || r.paid === undefined ? null : Number(r.paid);
       const cost = r.cost === null ? null : Number(r.cost);
       if (r.synced_at) syncedAt = Math.max(syncedAt ?? 0, new Date(r.synced_at).getTime());
+      const horas = horasPorProyecto.get(r.qb_job_id) ?? null;
       return {
         id: r.qb_job_id,
         name: r.name ?? r.qb_job_id,
@@ -147,7 +151,8 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
         income,
         paid,
         cost,
-        margin: marginOf(income, cost),
+        margin: margenDe(income, cost, horas),
+        horas,
         closed: r.closed,
         // status derivado si la migración 0016 aún no corrió.
         status: (r.status ?? (r.closed ? "cerrado" : "activo")) as ProjectBizStatus,
@@ -260,7 +265,6 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       p.progress = s.progress ?? null;
       p.income = s.income === null ? null : Number(s.income);
       p.cost = s.cost === null ? null : Number(s.cost);
-      p.margin = marginOf(p.income, p.cost);
       p.quoteNumber = s.quote_number ?? null; // el cruce vive solo en la base
       p.startDate = s.start_date ?? null;
       p.endDate = s.end_date ?? null;
@@ -289,7 +293,6 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
         if (f) {
           p.income = f.income;
           p.cost = f.cost;
-          p.margin = marginOf(f.income, f.cost);
           p.meses = f.meses;
           // Ventana real de actividad. Solo se pisa si QBO reportó movimiento:
           // un proyecto recién abierto conserva lo que ya se sabía de él.
@@ -309,7 +312,6 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
           // un valor viejo contaminado.
           p.income = null;
           p.cost = null;
-          p.margin = null;
         }
       }
     }
@@ -355,6 +357,24 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     /* sin cobrado: los demás números siguen valiendo */
   }
 
+  // Horas de técnicos: una sola llamada para todos. Los abiertos toman lo que
+  // diga QuickBooks hoy; los cerrados conservan lo guardado (números
+  // congelados) y solo se completan si nunca tuvieron. Si la lectura falla,
+  // todos conservan lo guardado: un hipo del gateway no borra horas.
+  const horasGuardadas = await loadHoras(supabase, orgId);
+  try {
+    const horas = await fetchHorasTecnicos(list.filter((p) => !p.closed).map((p) => p.id));
+    for (const p of list) {
+      const guardada = horasGuardadas.get(p.id) ?? null;
+      if (horas === null) p.horas = guardada;
+      else if (p.closed) p.horas = guardada ?? horas.get(p.id) ?? null;
+      else p.horas = horas.get(p.id) ?? null;
+    }
+  } catch {
+    for (const p of list) p.horas = horasGuardadas.get(p.id) ?? null;
+  }
+  for (const p of list) p.margin = margenDe(p.income, p.cost, p.horas);
+
   // Persistir TODO (lista + financials). `closed` no va en el payload → se
   // preserva en updates y arranca en false para los nuevos.
   const nowIso = new Date().toISOString();
@@ -391,6 +411,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     }
     if (upErr) return { ok: false, error: upErr.message };
     await guardarMeses(supabase, orgId, list, nowIso);
+    await guardarHoras(supabase, orgId, list, horasGuardadas);
 
     // Reconciliar: borrar filas del año que ya NO vinieron de QBO (proyecto
     // borrado/renombrado) para que no queden huérfanas inflando conteos.
@@ -454,6 +475,49 @@ async function guardarMeses(supabase: DB, orgId: string, list: QboProject[], now
       .from("qbo_project_month")
       .upsert(filas.slice(i, i + 1000), { onConflict: "org_id,qb_job_id,month" });
     if (error) return;
+  }
+}
+
+// Horas de técnicos guardadas (0051), por proyecto. Columna aparte del resto
+// para no sumar otro escalón a la cadena de migraciones de loadFromDb: si la
+// columna no existe, esto devuelve vacío y el gasto queda como antes.
+async function loadHoras(supabase: DB, orgId: string): Promise<Map<string, HorasProyecto>> {
+  const out = new Map<string, HorasProyecto>();
+  type HRow = { qb_job_id: string; horas_tecnicos: unknown };
+  for (let from = 0; from < 30_000; from += 1000) {
+    const r = (await supabase
+      .from("qbo_project_state")
+      .select("qb_job_id, horas_tecnicos")
+      .eq("org_id", orgId)
+      .not("horas_tecnicos", "is", null)
+      .order("qb_job_id")
+      .range(from, from + 999)) as unknown as { data: HRow[] | null; error: { message: string; code?: string } | null };
+    if (r.error) return new Map();
+    for (const row of r.data ?? []) {
+      const h = normalizarHoras(row.horas_tecnicos);
+      if (h) out.set(row.qb_job_id, h);
+    }
+    if ((r.data?.length ?? 0) < 1000) break;
+  }
+  return out;
+}
+
+// Solo se escriben los proyectos cuyas horas cambiaron. Best-effort, igual que
+// los meses: sin la 0051 el resto de la sincronización ya quedó guardado.
+async function guardarHoras(
+  supabase: DB,
+  orgId: string,
+  list: QboProject[],
+  guardadas: Map<string, HorasProyecto>,
+): Promise<void> {
+  const cambios = list.filter((p) => JSON.stringify(p.horas) !== JSON.stringify(guardadas.get(p.id) ?? null));
+  for (let i = 0; i < cambios.length; i += 20) {
+    const res = await Promise.all(
+      cambios.slice(i, i + 20).map((p) =>
+        supabase.from("qbo_project_state").update({ horas_tecnicos: p.horas }).eq("org_id", orgId).eq("qb_job_id", p.id),
+      ),
+    );
+    if (res.some((r) => isMissingColumn(r.error))) return;
   }
 }
 
