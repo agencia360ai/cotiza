@@ -2,6 +2,7 @@ import "server-only";
 import { fetchQboCustomers } from "./customers";
 import { listQboTools, withQboSession } from "./mcp";
 import { parsePnl, desglosarPnl, type MonthPnl, type Pnl, type SeccionPnl } from "./parse";
+import { gastoConHoras, type HorasProyecto } from "./horas-core";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
 export type QboProject = {
@@ -33,6 +34,9 @@ export type QboProject = {
   // el día cae siempre en 1 y no significa nada. "transaccion" = TxnDate real.
   txnDatesSource: "mes" | "transaccion" | null;
   meses: MonthPnl[]; // movimiento mes a mes (vacío = sin data mensual todavía)
+  // Horas de técnicos (Time Activity × tarifa de costo). `cost` es SOLO lo
+  // contable; el gasto que se muestra es la suma de los dos (gastoConHoras).
+  horas: HorasProyecto | null;
 };
 
 
@@ -79,6 +83,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         lastTxnDate: null,
         txnDatesSource: null,
         meses: [] as MonthPnl[],
+        horas: null, // las trae horas.ts; no salen del listado de customers
         id: p.id,
         name: leafName(p.fullyQualifiedName, p.displayName),
         fullName: p.displayName,
@@ -114,6 +119,19 @@ export function marginOf(income: number | null, cost: number | null): number | n
   // buenísimo. Sin gasto confiable no hay margen: s/d.
   if (cost < 0) return null;
   return (income - cost) / income;
+}
+
+/**
+ * Margen con las horas de técnicos dentro del gasto — el mismo que muestra la
+ * pantalla del proyecto en QuickBooks.
+ *
+ * Un gasto contable negativo sigue siendo s/d aunque las horas lo vuelvan
+ * positivo: el dato contable está roto (ITBMS acreditado a gasto) y sumarle
+ * horas no lo arregla, solo lo esconde.
+ */
+export function margenDe(income: number | null, costContable: number | null, horas: HorasProyecto | null): number | null {
+  if (costContable !== null && costContable < 0) return null;
+  return marginOf(income, gastoConHoras(costContable, horas));
 }
 
 // ── Rentabilidad por proyecto ────────────────────────────────────────────────

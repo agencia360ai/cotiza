@@ -37,6 +37,7 @@ import {
   type FuenteFechas,
   type MesMonto,
 } from "@/lib/quickbooks/prorate";
+import { gastoConHoras, horasEnRango, type HorasProyecto } from "@/lib/quickbooks/horas-core";
 
 // Identidad visual por rubro (misma paleta que el donut del Inicio):
 // DC índigo · DM sky · DS esmeralda · DV ámbar. Ícono + color, nunca solo color.
@@ -92,6 +93,15 @@ function bal(n: number): string {
 }
 function balCompact(n: number): string {
   return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+const fmtHoras = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 1 });
+// Del proyecto entero, no del rango: es para saber de quién son las horas.
+function detalleHoras(h: HorasProyecto): string {
+  const lineas = h.tecnicos.map((t) => `${t.nombre}: ${fmtHoras(t.horas)} h · ${bal(t.costo)}`);
+  if (h.sinTarifa > 0) {
+    lineas.push(`${fmtHoras(h.sinTarifa)} h cargadas sin tarifa de costo — no suman (tampoco en QuickBooks)`);
+  }
+  return `Horas de técnicos (QuickBooks · Time Activity)\n${lineas.join("\n")}`;
 }
 function relTime(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -197,7 +207,12 @@ type Enriched = {
   totalBase: number | null; // contrato (o cobro real como fallback)
   usaContrato: boolean;
   enRango: number | null; // meses del rango, o totalBase × fraction
+  // Gasto del rango = lo contable (Estado de Resultados) + horas de técnicos.
+  // Se guardan las dos partes: el gasto negativo se juzga solo sobre lo
+  // contable, y la celda muestra cuánto del gasto son horas.
   gastoRango: number | null;
+  contableRango: number | null;
+  horasRango: number;
   // Lo cobrado que cae en el rango. QuickBooks solo da el saldo pendiente de
   // HOY, así que `paid` es una foto sin fecha: para recortarlo al rango se
   // reparte según qué porción de lo FACTURADO cae adentro. Null = sin dato.
@@ -377,9 +392,10 @@ export function QboProjectsBoard() {
       // largo del período aunque todavía no se haya facturado completo).
       if (meses.length > 0 && !usaContrato) {
         const s = sumarMeses(meses, range);
+        const horasR = horasEnRango(p.horas, range);
         // Dentro del rango = tuvo movimiento ahí. Un proyecto de 2025 deja de
         // aparecer en "Este año" solo porque su nombre diga 26.
-        const inRange = !range || s.income !== 0 || s.cost !== 0;
+        const inRange = !range || s.income !== 0 || s.cost !== 0 || horasR !== 0;
         return {
           p,
           eff,
@@ -389,7 +405,9 @@ export function QboProjectsBoard() {
           totalBase,
           usaContrato,
           enRango: s.income,
-          gastoRango: s.cost,
+          gastoRango: round2(s.cost + horasR),
+          contableRango: s.cost,
+          horasRango: horasR,
           cobradoRango: cobradoDe(p.income && p.income > 0 ? s.income / p.income : 1),
           meses,
         };
@@ -412,7 +430,9 @@ export function QboProjectsBoard() {
         totalBase,
         usaContrato,
         enRango: totalBase === null ? null : round2(totalBase * fraction),
-        gastoRango: p.cost === null ? null : round2(p.cost * fraction),
+        gastoRango: p.cost === null ? null : round2(p.cost * fraction + horasEnRango(p.horas, range)),
+        contableRango: p.cost === null ? null : round2(p.cost * fraction),
+        horasRango: horasEnRango(p.horas, range),
         cobradoRango: cobradoDe(fraction),
         meses,
       };
@@ -473,7 +493,7 @@ export function QboProjectsBoard() {
         case "cobrado":
           return e.cobradoRango;
         case "gasto":
-          return e.gastoRango ?? e.p.cost;
+          return e.gastoRango ?? gastoConHoras(e.p.cost, e.p.horas);
         case "margen":
           return e.p.margin;
         case "inicio":
@@ -506,8 +526,8 @@ export function QboProjectsBoard() {
   // NEGATIVO y un margen de 107% — dos números que no existen. Cuenta como 0, y
   // el proyecto queda fuera del margen porque su costo real se desconoce.
   const gastoDeAgregado = (e: Enriched): { gasto: number; confiable: boolean } => {
-    const g = e.gastoRango ?? e.p.cost ?? 0;
-    return g < 0 ? { gasto: 0, confiable: false } : { gasto: g, confiable: true };
+    const contable = e.contableRango ?? e.p.cost ?? 0;
+    return contable < 0 ? { gasto: 0, confiable: false } : { gasto: e.gastoRango ?? 0, confiable: true };
   };
 
   const porRubro = useMemo(() => {
@@ -560,6 +580,15 @@ export function QboProjectsBoard() {
       // la serie sume el total de la columna por construcción y no por suerte.
       const porcion = (parte: number): number | null =>
         e.cobradoRango === null || !e.enRango ? null : (parte / e.enRango) * e.cobradoRango;
+      // Las horas van al mes en que se trabajaron, en los dos caminos. Las de
+      // un proyecto con gasto contable negativo quedan fuera, igual que en los
+      // KPIs, para que la gráfica no sume algo que el total no suma.
+      if (gastoDeAgregado(e).confiable) {
+        for (const h of e.p.horas?.meses ?? []) {
+          const f = range ? overlapFraction(h.month, finDeMes(h.month), range) : 1;
+          if (f > 0) suma(h.month, 0, h.costo * f, null);
+        }
+      }
       if (e.real) {
         for (const m of e.meses) {
           const f = range ? overlapFraction(m.month, finDeMes(m.month), range) : 1;
@@ -567,7 +596,7 @@ export function QboProjectsBoard() {
         }
         continue;
       }
-      if (!e.eff || (e.enRango === null && e.gastoRango === null)) continue;
+      if (!e.eff || (e.enRango === null && e.contableRango === null)) continue;
       const cubiertos = mesesEntre(
         range && range.from > e.eff.start ? range.from : e.eff.start,
         range && range.to < e.eff.end ? range.to : e.eff.end,
@@ -578,7 +607,7 @@ export function QboProjectsBoard() {
         suma(
           mes,
           (e.enRango ?? 0) * porMes,
-          (e.gastoRango ?? 0) * porMes,
+          (e.contableRango ?? 0) * porMes,
           e.cobradoRango === null ? null : e.cobradoRango * porMes,
         );
       }
@@ -597,6 +626,7 @@ export function QboProjectsBoard() {
   const vista = useMemo(() => {
     let cobro = 0;
     let gasto = 0;
+    let horas = 0; // la parte del gasto que son horas de técnicos
     let prorrateados = 0;
     // El cobrado solo suma donde HAY dato. Si ningún proyecto lo tiene, el KPI
     // dice "s/d" en vez de un cero que se leería como "no cobramos nada".
@@ -612,7 +642,10 @@ export function QboProjectsBoard() {
       const g = gastoDeAgregado(e);
       cobro += e.enRango ?? 0;
       gasto += g.gasto;
-      if (g.confiable) cobroConGasto += e.enRango ?? 0;
+      if (g.confiable) {
+        cobroConGasto += e.enRango ?? 0;
+        horas += e.horasRango;
+      }
       else gastoNegativo++;
       if (e.cobradoRango !== null) {
         cobrado += e.cobradoRango;
@@ -636,6 +669,7 @@ export function QboProjectsBoard() {
     return {
       cobro,
       gasto,
+      horas,
       prorrateados,
       gastoNegativo,
       cobrado: conCobrado > 0 ? cobrado : null,
@@ -739,7 +773,12 @@ export function QboProjectsBoard() {
             // no traer filas, o traer ids que no son los de estos proyectos.
             extra={vista.cobrado === null ? <PorQueSinCobrado /> : null}
           />
-          <KpiProyecto label="Gasto" value={bal(vista.gasto)} color="#BE123C" />
+          <KpiProyecto
+            label="Gasto"
+            value={bal(vista.gasto)}
+            sub={vista.horas > 0 ? `${balCompact(vista.horas)} en horas de técnicos` : undefined}
+            color="#BE123C"
+          />
           <KpiProyecto
             label="Margen"
             value={vista.margen !== null ? `${Math.round(vista.margen * 100)}%` : "s/d"}
@@ -1870,7 +1909,7 @@ function ProjectRow({
   // Gasto negativo: QBO acreditó algo a una cuenta de gasto (típicamente el
   // ITBMS de la factura). No es un gasto chico, es un número que no se puede
   // leer como gasto — y arrastraba el margen a >100%.
-  const gastoNegativo = (e.gastoRango ?? p.cost ?? 0) < 0;
+  const gastoNegativo = (e.contableRango ?? p.cost ?? 0) < 0;
   // `parcial`: el rango muestra solo una porción del proyecto. `prorrateado`:
   // además esa porción es una ESTIMACIÓN (repartida por días) y no lo que
   // QuickBooks reportó en esos meses — solo ahí corresponde el aviso.
@@ -2067,6 +2106,11 @@ function ProjectRow({
         ) : (
           <span className="text-slate-300">—</span>
         )}
+        {conDatos && e.horasRango > 0 && p.horas ? (
+          <div className="mt-0.5 text-[11px] font-medium text-slate-500 tabular-nums" title={detalleHoras(p.horas)}>
+            {bal(e.horasRango)} en horas
+          </div>
+        ) : null}
       </td>
     ),
 
