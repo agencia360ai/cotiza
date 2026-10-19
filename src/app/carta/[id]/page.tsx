@@ -1,8 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrgId } from "@/lib/org-context";
-import type { LetterData } from "@/lib/quotes/letter";
+import { esPropuesta, type LetterData } from "@/lib/quotes/letter";
 import { CartaEditor } from "./editor";
+import { PropuestaVista } from "./propuesta-vista";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,10 @@ export default async function CartaPage({ params }: { params: Promise<{ id: stri
       elaborado: null,
     };
   const cliente = q.client?.name ?? q.client_name ?? "Cliente";
+
+  // La Propuesta se ve como el PDF mismo: es un diseño de página fija y lo que
+  // se publica tiene que ser exactamente lo que se ve.
+  if (esPropuesta(letter)) return <PropuestaVista quoteId={id} quoteNumber={q.quote_number} cliente={cliente} />;
 
   // Firma seleccionada (best-effort: sin la 0036 o si se borró, va sin firma).
   let firmaUrl: string | null = null;

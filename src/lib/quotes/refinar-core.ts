@@ -1,4 +1,5 @@
 import type { LetterData, LetterTextos } from "./letter";
+import { normalizarPropuesta, type Propuesta } from "./propuesta";
 import type { Rubro } from "@/lib/pipeline/types";
 
 // Lo que la IA puede cambiar de una cotización, y cómo se aplica encima del
@@ -32,11 +33,14 @@ export type RefinedQuote = {
   descripcion_corta: string;
   ubicacion: string | null;
   tipo: "realizar" | "realizados";
-  items: { cant: number; desc: string; precio: number; aparte?: boolean }[];
+  items: { titulo?: string | null; cant: number; desc: string; precio: number; aparte?: boolean }[];
   aplica_itbms: boolean;
   validez_dias: number | null;
   condiciones: string | null;
   textos_cambios: { campo: CampoTexto; valor: string }[];
+  // Lo que la IA ve y devuelve de la Propuesta: todo menos el contacto y las
+  // imágenes, que no son suyos.
+  propuesta?: Omit<Propuesta, "contacto" | "plano"> | null;
   resumen: string;
 };
 
@@ -71,12 +75,22 @@ export function aplicarAjuste(actual: BorradorAjustable, r: RefinedQuote): Ajust
       // cuatro es algo que un ajuste de texto deba poder mover.
       ubicacion: r.ubicacion,
       tipo: r.tipo,
-      items: r.items,
+      items: r.items.map(({ titulo, ...it }) => (titulo ? { ...it, titulo } : it)),
       aplica_itbms: r.aplica_itbms,
       validez: r.validez_dias,
       condiciones: r.condiciones,
       textos: Object.keys(textos).length ? textos : null,
+      propuesta: propuestaAjustada(actual.letter, r),
     },
     resumen: r.resumen,
   };
+}
+
+// Contacto e imágenes del plano se quedan como estaban: los eligió una persona
+// y la IA ni los ve. Si la IA no devolvió propuesta, tampoco se borra la que
+// había.
+function propuestaAjustada(letter: LetterData, r: RefinedQuote): Propuesta | null | undefined {
+  if (!r.propuesta) return letter.propuesta;
+  const previa = letter.propuesta ?? null;
+  return normalizarPropuesta({ ...r.propuesta, contacto: previa?.contacto ?? null, plano: previa?.plano ?? null });
 }

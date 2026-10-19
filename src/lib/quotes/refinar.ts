@@ -29,11 +29,14 @@ export async function refinarBorrador(
       // "aparte", y en una carta guardada antes de que existiera la llave no
       // está. Sin normalizar, vería renglones sin el campo que le pedimos
       // respetar.
-      items: actual.letter.items.map((it) => ({ cant: it.cant, desc: it.desc, precio: it.precio, aparte: !!it.aparte })),
+      items: actual.letter.items.map((it) => ({ titulo: it.titulo ?? null, cant: it.cant, desc: it.desc, precio: it.precio, aparte: !!it.aparte })),
       aplica_itbms: actual.letter.aplica_itbms,
       validez: actual.letter.validez,
       condiciones: actual.letter.condiciones,
       textos: (actual.letter.textos ?? null) as Record<string, string | null | undefined> | null,
+      formato: actual.letter.formato ?? "carta",
+      // Sin contacto ni imágenes: no son de la IA (ver aplicarAjuste).
+      propuesta: actual.letter.propuesta ? { ...actual.letter.propuesta, contacto: undefined, plano: undefined } : null,
     },
     instruccion,
     { numero: actual.numero, clientNames: (clients ?? []).map((c) => c.name) },
