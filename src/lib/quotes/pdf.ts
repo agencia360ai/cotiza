@@ -2,7 +2,8 @@ import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
-import { fechaLarga, fmtBal, letterTotals, partirItems, resolveTextos, type LetterData, type LetterItem } from "./letter";
+import { esPropuesta, fechaLarga, fmtBal, letterTotals, partirItems, resolveTextos, type LetterData, type LetterItem } from "./letter";
+import { renderPropuestaPdf } from "./pdf-propuesta";
 
 // Carta US Letter en puntos. El membrete va a sangre (imagen de página completa)
 // y el contenido respeta el encabezado/pie del arte.
@@ -111,7 +112,9 @@ export async function renderQuotePdf(input: {
   cliente: string;
   letter: LetterData;
   firmaDataUrl?: string | null;
+  imagenes?: Map<string, Uint8Array>; // las del plano, solo para la Propuesta
 }): Promise<Uint8Array> {
+  if (esPropuesta(input.letter)) return renderPropuestaPdf(input);
   const { letter } = input;
   const T = resolveTextos(letter, { quoteNumber: input.quoteNumber });
   const doc = await PDFDocument.create();

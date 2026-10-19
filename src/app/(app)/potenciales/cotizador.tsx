@@ -21,15 +21,21 @@ import {
   FileText,
   Undo2,
   CircleDollarSign,
+  Eye,
+  LayoutTemplate,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { letterTotals, fmtBal, type LetterData, type LetterItem } from "@/lib/quotes/letter";
+import { letterTotals, fmtBal, esPropuesta, type LetterData, type LetterItem } from "@/lib/quotes/letter";
+import { normalizarPropuesta, type PropuestaImagen } from "@/lib/quotes/propuesta";
+import { PropuestaEditor, type ImagenDisponible } from "./propuesta-editor";
 import {
   generateQuoteDraft,
   refineQuoteDraft,
   saveGeneratedQuote,
   updateGeneratedQuote,
   publishQuote,
+  previewCotizacion,
+  subirImagenCotizacion,
   type CotizadorDraft,
   type SaveCotizacionInput,
   type QuoteLetterBundle,
@@ -41,12 +47,15 @@ import type { QuoteRow } from "@/lib/pipeline/types";
 import { RUBROS, type Rubro } from "@/lib/pipeline/types";
 
 type ApiResult<T> = { error: string } | { ok: true; data: T };
+type Formato = "carta" | "propuesta";
 export type CotizadorApi = {
-  generate: (brief: string, adjuntos?: QuoteAdjunto[]) => Promise<ApiResult<CotizadorDraft>>;
+  generate: (brief: string, adjuntos?: QuoteAdjunto[], formato?: Formato) => Promise<ApiResult<CotizadorDraft>>;
   refine: (actual: BorradorAjustable, instruccion: string, adjuntos?: QuoteAdjunto[]) => Promise<ApiResult<AjusteAplicado>>;
   save: (input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
   publish: (quoteId: string) => Promise<ApiResult<PublishOut>>;
   update?: (quoteId: string, input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
+  preview: (input: { quote_number: string; client_name: string; letter: LetterData }) => Promise<ApiResult<{ base64: string }>>;
+  subirImagen: (base64: string, mime: string) => Promise<ApiResult<{ path: string; mime: "image/png" | "image/jpeg" }>>;
 };
 
 const APP_API: CotizadorApi = {
@@ -55,6 +64,8 @@ const APP_API: CotizadorApi = {
   save: saveGeneratedQuote,
   publish: publishQuote,
   update: updateGeneratedQuote,
+  preview: previewCotizacion,
+  subirImagen: subirImagenCotizacion,
 };
 
 // Foto → JPEG achicado (máx 1600px) para mandarlo a la IA sin pasarse del body.
@@ -80,7 +91,9 @@ async function downscaleImage(file: File, maxDim = 1600): Promise<{ img: QuoteIm
 }
 
 // Un adjunto listo para mandar, más lo que la UI necesita para mostrarlo.
-type Adjunto = { a: QuoteAdjunto; preview: string | null; bytes: number };
+// `diseno`: imagen sacada de un HTML de diseño (el plano, la tabla de equipos).
+// Esas van solas al plano de la Propuesta; una foto suelta se elige a mano.
+type Adjunto = { a: QuoteAdjunto; preview: string | null; bytes: number; diseno?: boolean };
 
 const MAX_ADJUNTOS = 5;
 // El límite del server action es 8 MB y base64 infla ~33%, así que el tope de
@@ -99,6 +112,26 @@ function base64De(buf: ArrayBuffer): string {
     bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
   }
   return btoa(bin);
+}
+
+// Un archivo puede dar más de un adjunto: el HTML de una herramienta de diseño
+// trae el texto de la cotización y, además, el plano y la tabla de equipos.
+async function leerAdjuntos(file: File): Promise<Adjunto[]> {
+  if (file.type === "text/html" || /\.html?$/i.test(file.name)) {
+    const { leerHtmlDiseno } = await import("@/lib/office/html-diseno");
+    const r = await leerHtmlDiseno(await file.text());
+    if (!r.texto.trim()) throw new Error("el HTML no tiene texto");
+    return [
+      { a: { kind: "text", name: file.name, text: r.texto }, preview: null, bytes: r.texto.length },
+      ...r.imagenes.map((im) => ({
+        a: { kind: "image" as const, name: im.alt || im.nombre, data: im.base64, mime: im.mime },
+        preview: `data:${im.mime};base64,${im.base64}`,
+        bytes: im.base64.length * 0.75,
+        diseno: true,
+      })),
+    ];
+  }
+  return [await leerAdjunto(file)];
 }
 
 async function leerAdjunto(file: File): Promise<Adjunto> {
@@ -134,7 +167,7 @@ async function leerAdjunto(file: File): Promise<Adjunto> {
   if (/\.(doc|xls|ppt)$/i.test(file.name)) {
     throw new Error("formato viejo — guardalo como .docx/.xlsx o PDF");
   }
-  throw new Error("formato no soportado (imagen, PDF, Word, Excel o texto)");
+  throw new Error("formato no soportado (imagen, PDF, Word, Excel, HTML o texto)");
 }
 
 // Dictado por voz. Vive suelto porque lo usan el brief y el ajuste, y montar
@@ -247,7 +280,7 @@ function AjustarConIA({
     const malos: string[] = [];
     for (const f of Array.from(files).slice(0, MAX_ADJUNTOS - archivos.length)) {
       try {
-        nuevos.push(await leerAdjunto(f));
+        nuevos.push(...(await leerAdjuntos(f)));
       } catch (e) {
         malos.push(`${f.name}: ${e instanceof Error ? e.message : "no se pudo leer"}`);
       }
@@ -333,7 +366,7 @@ function AjustarConIA({
           ref={fileRef}
           type="file"
           multiple
-          accept="image/*,application/pdf,.pdf,.docx,.xlsx,text/plain,.txt,.csv,.md,.json"
+          accept="image/*,application/pdf,.pdf,.docx,.xlsx,text/plain,.txt,.csv,.md,.json,text/html,.html,.htm"
           className="hidden"
           onChange={(e) => {
             void sumar(e.target.files);
@@ -439,8 +472,13 @@ export function CotizadorDialog({
     validez: 30,
     condiciones: null,
     elaborado: null,
+    // Las nuevas salen en el diseño nuevo; la carta clásica queda a un clic.
+    formato: "propuesta",
+    propuesta: null,
   });
   const [savedRow, setSavedRow] = useState<QuoteRow | null>(null);
+  const [preview, setPreview] = useState<{ url: string | null; cargando: boolean }>({ url: null, cargando: false });
+  const [miniaturas, setMiniaturas] = useState<Record<string, string>>({});
   const [adjuntos, setAdjuntos] = useState<Adjunto[]>([]);
   // Ajuste con IA sobre el borrador en pantalla. El historial es lo que hace
   // que probar sea barato: si el ajuste sale mal se vuelve atrás sin perder
@@ -475,7 +513,7 @@ export function CotizadorDialog({
         break;
       }
       try {
-        nuevos.push(await leerAdjunto(file));
+        nuevos.push(...(await leerAdjuntos(file)));
       } catch (e) {
         problemas.push(`${file.name}: ${e instanceof Error ? e.message : "no se pudo leer"}`);
       }
@@ -512,15 +550,17 @@ export function CotizadorDialog({
   async function generar() {
     setPhase("generating");
     setError(null);
-    const r = await api.generate(brief, adjuntos.map((a) => a.a));
+    const formato: Formato = letter.formato ?? "carta";
+    const r = await api.generate(brief, adjuntos.map((a) => a.a), formato);
     if ("error" in r) {
       setError(r.error);
       setPhase("brief");
       return;
     }
     const g = r.data.generated;
+    const nombreCliente = r.data.matchedClientName ?? g.client_name;
     setNumero(r.data.suggestedNumber);
-    setCliente(r.data.matchedClientName ?? g.client_name);
+    setCliente(nombreCliente);
     setClienteExistente(r.data.matchedClientName);
     setRubro(g.rubro);
     setDescCorta(g.descripcion_corta);
@@ -530,15 +570,90 @@ export function CotizadorDialog({
       tipo: g.tipo,
       // `aparte` viaja: la IA marca los cargos por evento al generar, y sin esto
       // se perdían acá y todo terminaba dentro del total.
-      items: g.items.map((it) => ({ cant: it.cant, desc: it.desc, precio: it.precio, aparte: it.aparte || undefined })),
+      items: g.items.map((it) => ({
+        cant: it.cant,
+        desc: it.desc,
+        precio: it.precio,
+        aparte: it.aparte || undefined,
+        ...(formato === "propuesta" && it.titulo ? { titulo: it.titulo } : {}),
+      })),
       aplica_itbms: g.aplica_itbms,
       tasa: 7,
       validez: g.validez_dias ?? 30,
       condiciones: g.condiciones,
       elaborado: letter.elaborado,
+      formato,
+      propuesta:
+        formato === "propuesta"
+          ? normalizarPropuesta({ ...(g.propuesta ?? {}), contacto: r.data.contacto ?? letter.elaborado, plano: null }, nombreCliente)
+          : null,
     });
     setPhase("review");
+    if (formato === "propuesta") void ponerPlanoDelDiseno(g.propuesta?.plano_titulo ?? null, g.propuesta?.plano_fuente ?? null);
   }
+
+  // Las imágenes que vinieron dentro de un HTML de diseño son el plano de esa
+  // cotización: se suben y se ponen solas, en el orden en que venían.
+  async function ponerPlanoDelDiseno(titulo: string | null, fuente: string | null) {
+    const delDiseno = adjuntos.filter((x) => x.diseno && x.a.kind === "image").slice(0, 2);
+    const imagenes: PropuestaImagen[] = [];
+    for (const x of delDiseno) {
+      if (x.a.kind !== "image") continue;
+      const r = await api.subirImagen(x.a.data, x.a.mime);
+      if ("ok" in r) {
+        imagenes.push({ path: r.data.path, mime: r.data.mime, nota: null });
+        if (x.preview) setMiniaturas((m) => ({ ...m, [r.data.path]: x.preview! }));
+      }
+    }
+    if (imagenes.length === 0) return;
+    setLetter((prev) =>
+      prev.propuesta && !prev.propuesta.plano
+        ? { ...prev, propuesta: { ...prev.propuesta, plano: { titulo: titulo || "Plano de aire acondicionado", fuente, imagenes } } }
+        : prev,
+    );
+  }
+
+  function cambiarFormato(f: Formato) {
+    setLetter((prev) => {
+      if ((prev.formato ?? "carta") === f) return prev;
+      if (f === "carta") {
+        // La carta no tiene títulos de partida: se pegan al principio de la
+        // descripción para no perder el nombre de cada renglón.
+        return {
+          ...prev,
+          formato: "carta",
+          items: prev.items.map(({ titulo, ...it }) =>
+            titulo && !it.desc.toLowerCase().startsWith(titulo.toLowerCase()) ? { ...it, desc: `${titulo}: ${it.desc}` } : it,
+          ),
+        };
+      }
+      return { ...prev, formato: "propuesta", propuesta: prev.propuesta ?? normalizarPropuesta({ contacto: prev.elaborado }, cliente) };
+    });
+  }
+
+  async function verPreview() {
+    setPreview({ url: null, cargando: true });
+    setError(null);
+    const r = await api.preview({ quote_number: numero, client_name: cliente, letter });
+    if ("error" in r) {
+      setPreview({ url: null, cargando: false });
+      setError(r.error);
+      return;
+    }
+    const bytes = Uint8Array.from(atob(r.data.base64), (c) => c.charCodeAt(0));
+    setPreview({ url: URL.createObjectURL(new Blob([bytes], { type: "application/pdf" })), cargando: false });
+  }
+
+  function cerrarPreview() {
+    if (preview.url) URL.revokeObjectURL(preview.url);
+    setPreview({ url: null, cargando: false });
+  }
+
+  const imagenesDisponibles: ImagenDisponible[] = adjuntos.flatMap((x) =>
+    x.a.kind === "image" && (x.a.mime === "image/png" || x.a.mime === "image/jpeg")
+      ? [{ nombre: x.a.name, base64: x.a.data, mime: x.a.mime, preview: x.preview ?? `data:${x.a.mime};base64,${x.a.data}` }]
+      : [],
+  );
 
   function borradorActual(): BorradorAjustable {
     return { numero, cliente, rubro, descripcionCorta: descCorta, letter };
@@ -649,6 +764,12 @@ export function CotizadorDialog({
                 Describe el trabajo en una línea — la IA arma la cotización completa en el formato de DICEC: cliente,
                 renglones, precios, ITBMS y condiciones. Después la revisas y ajustas antes de guardar.
               </p>
+              <SelectorFormato
+                value={letter.formato ?? "carta"}
+                onChange={cambiarFormato}
+                disabled={phase === "generating"}
+                className="mt-3"
+              />
               <textarea
                 rows={4}
                 value={brief}
@@ -713,7 +834,7 @@ export function CotizadorDialog({
                   ref={archivoRef}
                   type="file"
                   multiple
-                  accept="image/*,application/pdf,.pdf,.docx,.xlsx,text/plain,.txt,.csv,.md,.json"
+                  accept="image/*,application/pdf,.pdf,.docx,.xlsx,text/plain,.txt,.csv,.md,.json,text/html,.html,.htm"
                   className="hidden"
                   onChange={(e) => {
                     void agregarArchivos(e.target.files);
@@ -842,7 +963,7 @@ export function CotizadorDialog({
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                       >
-                        <ExternalLink className="size-4" /> Ver carta
+                        <ExternalLink className="size-4" /> {esPropuesta(letter) ? "Ver propuesta" : "Ver carta"}
                       </a>
                     ) : null}
                     <button
@@ -866,6 +987,7 @@ export function CotizadorDialog({
                 onDeshacer={deshacer}
                 onAjustar={ajustarConIA}
               />
+              <SelectorFormato value={letter.formato ?? "carta"} onChange={cambiarFormato} />
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <label className="col-span-1 block">
                   <span className="text-xs font-semibold text-slate-500">Número</span>
@@ -937,7 +1059,7 @@ export function CotizadorDialog({
                     <div
                       key={i}
                       className={cn(
-                        "flex items-start gap-2 px-3 py-2",
+                        "flex flex-wrap items-start gap-2 px-3 py-2 sm:flex-nowrap",
                         // Fuera del total: se marca en la fila, porque el número
                         // de abajo ya no la incluye y sin señal parece un bug.
                         it.aparte && "border-l-2 border-amber-400 bg-amber-50/40",
@@ -952,13 +1074,23 @@ export function CotizadorDialog({
                         onChange={(e) => setItem(i, { cant: Number(e.target.value) })}
                         title="Cantidad"
                       />
-                      <textarea
-                        rows={2}
-                        className={cn(inputCls, "flex-1 resize-y")}
-                        value={it.desc}
-                        onChange={(e) => setItem(i, { desc: e.target.value })}
-                        placeholder="Descripción del renglón"
-                      />
+                      <div className="order-first min-w-0 basis-full space-y-1 sm:order-none sm:basis-auto sm:flex-1">
+                        {esPropuesta(letter) ? (
+                          <input
+                            className={cn(inputCls, "font-semibold")}
+                            value={it.titulo ?? ""}
+                            onChange={(e) => setItem(i, { titulo: e.target.value || undefined })}
+                            placeholder="Título de la partida (ej. Unidad autocontenida 15 TR)"
+                          />
+                        ) : null}
+                        <textarea
+                          rows={2}
+                          className={cn(inputCls, "resize-y")}
+                          value={it.desc}
+                          onChange={(e) => setItem(i, { desc: e.target.value })}
+                          placeholder={esPropuesta(letter) ? "Detalle: marca, especificación, alcance" : "Descripción del renglón"}
+                        />
+                      </div>
                       <div className="w-28 shrink-0">
                         <input
                           type="number"
@@ -1057,16 +1189,27 @@ export function CotizadorDialog({
                 </label>
               </div>
 
-              <label className="block">
-                <span className="text-xs font-semibold text-slate-500">Condiciones (una por línea)</span>
-                <textarea
-                  rows={2}
-                  className={inputCls}
-                  value={letter.condiciones ?? ""}
-                  onChange={(e) => setL("condiciones", e.target.value || null)}
-                  placeholder="Anticipo del 50% para iniciar.&#10;Tiempo de entrega: 15 días hábiles."
+              {esPropuesta(letter) && letter.propuesta ? (
+                <PropuestaEditor
+                  value={letter.propuesta}
+                  onChange={(p) => setL("propuesta", p)}
+                  disponibles={imagenesDisponibles}
+                  subirImagen={api.subirImagen}
+                  previews={miniaturas}
+                  onPreview={(path, url) => setMiniaturas((m) => ({ ...m, [path]: url }))}
                 />
-              </label>
+              ) : (
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-500">Condiciones (una por línea)</span>
+                  <textarea
+                    rows={2}
+                    className={inputCls}
+                    value={letter.condiciones ?? ""}
+                    onChange={(e) => setL("condiciones", e.target.value || null)}
+                    placeholder="Anticipo del 50% para iniciar.&#10;Tiempo de entrega: 15 días hábiles."
+                  />
+                </label>
+              )}
 
               <label className="block">
                 <span className="text-xs font-semibold text-slate-500">Descripción corta (para el dashboard)</span>
@@ -1100,9 +1243,20 @@ export function CotizadorDialog({
               ) : null}
               <button
                 type="button"
+                onClick={verPreview}
+                disabled={phase === "saving" || preview.cargando || letter.items.length === 0}
+                className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                title="Ver el PDF tal como se va a publicar, sin guardar"
+                aria-label="Vista previa"
+              >
+                {preview.cargando ? <Loader2 className="size-4 animate-spin" /> : <Eye className="size-4" />}
+                <span className="hidden sm:inline">Vista previa</span>
+              </button>
+              <button
+                type="button"
                 onClick={guardar}
                 disabled={phase === "saving" || letter.items.length === 0 || !numero.trim() || !cliente.trim()}
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
               >
                 {phase === "saving" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
                 {initial ? "Guardar cambios" : "Guardar borrador"}
@@ -1113,7 +1267,84 @@ export function CotizadorDialog({
       </div>
   );
 
-  if (embedded) return card;
+  const vistaPrevia = preview.url ? (
+    <div className="fixed inset-0 z-[60] flex flex-col bg-slate-900/70 p-3 sm:p-6" onClick={cerrarPreview}>
+      <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col overflow-hidden rounded-xl bg-white" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+          <p className="text-sm font-semibold text-slate-900">Vista previa · {numero}</p>
+          <div className="flex items-center gap-2">
+            <a
+              href={preview.url}
+              download={`${numero || "cotizacion"}.pdf`}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Descargar
+            </a>
+            <button type="button" onClick={cerrarPreview} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100" aria-label="Cerrar vista previa">
+              <X className="size-5" />
+            </button>
+          </div>
+        </div>
+        <iframe src={preview.url} title="Vista previa de la cotización" className="w-full flex-1 border-0" />
+      </div>
+    </div>
+  ) : null;
+
+  if (embedded)
+    return (
+      <>
+        {card}
+        {vistaPrevia}
+      </>
+    );
   // Sin cierre al clickear afuera: solo la X (evita perder una cotización a medias).
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">{card}</div>;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      {card}
+      {vistaPrevia}
+    </div>
+  );
+}
+
+// Carta clásica o el diseño nuevo. Se puede cambiar antes de generar y en la
+// revisión; lo que cambia es cómo se dibuja, no los renglones ni los precios.
+function SelectorFormato({
+  value,
+  onChange,
+  disabled,
+  className,
+}: {
+  value: Formato;
+  onChange: (f: Formato) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const opciones: { f: Formato; titulo: string; ayuda: string }[] = [
+    { f: "propuesta", titulo: "Propuesta", ayuda: "Diseño nuevo: resumen con cifras y plano, partidas y condiciones" },
+    { f: "carta", titulo: "Carta clásica", ayuda: "La carta formal de siempre, con firma" },
+  ];
+  return (
+    <div className={cn("grid grid-cols-2 gap-2", className)} role="radiogroup" aria-label="Formato de la cotización">
+      {opciones.map((o) => (
+        <button
+          key={o.f}
+          type="button"
+          role="radio"
+          aria-checked={value === o.f}
+          disabled={disabled}
+          onClick={() => onChange(o.f)}
+          className={cn(
+            "flex items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors disabled:opacity-50",
+            value === o.f ? "border-sky-500 bg-sky-50 ring-1 ring-sky-500" : "border-slate-200 bg-white hover:border-slate-300",
+          )}
+        >
+          <LayoutTemplate className={cn("mt-0.5 size-4 shrink-0", value === o.f ? "text-sky-600" : "text-slate-400")} />
+          <span>
+            <span className="block text-sm font-semibold text-slate-900">{o.titulo}</span>
+            <span className="block text-[11px] leading-snug text-slate-500">{o.ayuda}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
 }

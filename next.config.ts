@@ -10,11 +10,13 @@ const nextConfig: NextConfig = {
   // El cliente MCP de QBO usa undici directo (connect timeout configurable);
   // dejarlo sin bundlear para que use la copia real de node_modules.
   serverExternalPackages: ["undici"],
-  // El renderer del PDF (pdf-lib) lee el membrete del filesystem en runtime;
-  // hay que incluirlo explícitamente en el bundle serverless de esas rutas.
+  // El renderer del PDF (pdf-lib) lee el membrete y las fuentes de la
+  // Propuesta del filesystem en runtime; hay que incluirlos explícitamente en el
+  // bundle serverless de esas rutas.
   outputFileTracingIncludes: {
-    "/potenciales": ["./public/dicec-membrete.png"],
-    "/q/[token]": ["./public/dicec-membrete.png"],
+    "/potenciales": ["./public/dicec-membrete.png", "./public/fonts/propuesta/*.ttf"],
+    "/q/[token]": ["./public/dicec-membrete.png", "./public/fonts/propuesta/*.ttf"],
+    "/carta/[id]/pdf": ["./public/dicec-membrete.png", "./public/fonts/propuesta/*.ttf"],
   },
   async redirects() {
     return [

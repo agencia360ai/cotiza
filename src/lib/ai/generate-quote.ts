@@ -2,6 +2,7 @@ import "server-only";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { anthropic, pickModel } from "./client";
+import { propuestaSchema, REGLAS_PROPUESTA } from "./propuesta-schema";
 
 const schema = z.object({
   client_name: z
@@ -13,6 +14,10 @@ const schema = z.object({
   items: z
     .array(
       z.object({
+        titulo: z
+          .string()
+          .nullable()
+          .describe("Título corto de la partida (3–7 palabras) para el formato Propuesta. null en formato carta."),
         cant: z.number().describe("Cantidad."),
         desc: z.string().describe("Descripción formal del renglón en español técnico HVAC (equipo, capacidad, alcance)."),
         precio: z.number().describe("Precio unitario en B/. SIN ITBMS."),
@@ -32,6 +37,9 @@ const schema = z.object({
     .nullable()
     .describe("Condiciones extra SOLO si el usuario las menciona (anticipo, tiempo de entrega, garantía...). Una por línea."),
   descripcion_corta: z.string().describe("Resumen de una línea para el dashboard (ej. 'Reemplazo de compresor 5HP cuarto frío')."),
+  propuesta: propuestaSchema
+    .nullable()
+    .describe("Resumen para el formato Propuesta. null si el formato pedido es carta."),
 });
 
 export type GeneratedQuote = z.infer<typeof schema>;
@@ -115,6 +123,7 @@ export async function generateQuote(
   brief: string,
   clientNames: string[],
   adjuntos: QuoteAdjunto[] = [],
+  formato: "carta" | "propuesta" = "carta",
 ): Promise<GeneratedQuote> {
   const list = clientNames.slice(0, 250).join("\n");
   const content = bloquesDeAdjuntos(adjuntos);
@@ -126,6 +135,9 @@ export async function generateQuote(
       `LISTA DE CLIENTES:\n${list}\n\nPEDIDO:\n${brief || "(sin texto — usá los archivos adjuntos)"}\n\n` +
       (textos ? `ARCHIVOS DE TEXTO ADJUNTOS:\n${textos}\n\n` : "") +
       comoLeerLosAdjuntos(adjuntos) +
+      (formato === "propuesta"
+        ? `FORMATO: propuesta.\n${REGLAS_PROPUESTA}\n\n`
+        : "FORMATO: carta clásica (títulos de renglón y propuesta en null).\n\n") +
       "Generá la cotización.",
   });
 

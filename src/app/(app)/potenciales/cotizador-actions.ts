@@ -12,6 +12,8 @@ import {
   insertQuote,
   updateQuoteLetter,
   publishQuote as publishQuoteCore,
+  previewQuotePdf,
+  subirImagenPropuesta,
   type DraftBundle,
   type SaveQuoteInput,
   type PublishOut,
@@ -33,7 +35,7 @@ async function ctx() {
   // La IA y el admin client (link del portal) no pasan por RLS.
   const sinPermiso = await sinAcceso("cotizaciones");
   if (sinPermiso) return { ok: false as const, error: sinPermiso };
-  return { ok: true as const, supabase, orgId, userId: u.user.id };
+  return { ok: true as const, supabase, orgId, userId: u.user.id, email: u.user.email ?? null };
 }
 
 // Rotar/cambiar el link público del portal usa el admin client (bypassa RLS):
@@ -49,15 +51,39 @@ async function requireAdminRole(c: { supabase: Awaited<ReturnType<typeof createC
   return "Solo un owner o admin puede cambiar el link del portal.";
 }
 
-export type CotizadorDraft = DraftBundle;
+// La línea de contacto de la Propuesta, de quien está cotizando: nombre, correo
+// y WhatsApp de su ficha de miembro. Se puede editar en la revisión; esto es
+// solo para no tener que escribirla en cada cotización.
+async function contactoDe(c: { supabase: Awaited<ReturnType<typeof createClient>>; orgId: string; userId: string; email: string | null }): Promise<string | null> {
+  const { data } = (await c.supabase
+    .from("org_members")
+    .select("display_name, wa_phone")
+    .eq("org_id", c.orgId)
+    .eq("user_id", c.userId)
+    .maybeSingle()) as { data: { display_name: string | null; wa_phone: string | null } | null };
+  const nombre = data?.display_name?.trim() || null;
+  const tel = data?.wa_phone?.replace(/\D/g, "").replace(/^507/, "") || null;
+  const partes = [nombre, c.email, tel ? `WhatsApp ${tel.length === 8 ? `${tel.slice(0, 4)}-${tel.slice(4)}` : tel}` : null].filter(Boolean);
+  return partes.length ? partes.join(" · ") : null;
+}
+
+export type CotizadorDraft = DraftBundle & { contacto: string | null };
 export type SaveCotizacionInput = SaveQuoteInput;
 
-export async function generateQuoteDraft(brief: string, adjuntos: QuoteAdjunto[] = []): Promise<Result<CotizadorDraft>> {
+export async function generateQuoteDraft(
+  brief: string,
+  adjuntos: QuoteAdjunto[] = [],
+  formato: "carta" | "propuesta" = "carta",
+): Promise<Result<CotizadorDraft>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   if (!brief.trim() && adjuntos.length === 0) return { error: "Cuéntame qué hay que cotizar (o adjuntá un archivo)" };
   try {
-    return { ok: true, data: await buildQuoteDraft(c.supabase, c.orgId, brief.trim(), adjuntos) };
+    const [draft, contacto] = await Promise.all([
+      buildQuoteDraft(c.supabase, c.orgId, brief.trim(), adjuntos, formato),
+      contactoDe(c).catch(() => null),
+    ]);
+    return { ok: true, data: { ...draft, contacto } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
   }
@@ -268,4 +294,35 @@ export async function setEngineerLinkCode(codeRaw: string): Promise<Result<{ url
   }
   if (error) return { error: error.message };
   return { ok: true, data: { url: await portalUrl(code) } };
+}
+
+/**
+ * El PDF como saldría, antes de guardar. Con el formato Propuesta la pantalla
+ * de revisión es un formulario: esto es lo que deja ver el resultado sin
+ * guardar ni publicar.
+ */
+export async function previewCotizacion(input: {
+  quote_number: string;
+  client_name: string;
+  letter: LetterData;
+}): Promise<Result<{ base64: string }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  try {
+    const pdf = await previewQuotePdf(c.supabase as unknown as Db, c.orgId, input);
+    return { ok: true, data: { base64: Buffer.from(pdf).toString("base64") } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo armar la vista previa" };
+  }
+}
+
+export async function subirImagenCotizacion(
+  base64: string,
+  mime: string,
+): Promise<Result<{ path: string; mime: "image/png" | "image/jpeg" }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const r = await subirImagenPropuesta(c.supabase as unknown as Db, c.orgId, base64, mime);
+  if ("error" in r) return { error: r.error };
+  return { ok: true, data: { path: r.path, mime: r.mime } };
 }

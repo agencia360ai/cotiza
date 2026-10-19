@@ -4,6 +4,7 @@ import { z } from "zod";
 import { anthropic, pickModel } from "./client";
 import { bloquesDeAdjuntos, textoDeAdjuntos, comoLeerLosAdjuntos, type QuoteAdjunto } from "./generate-quote";
 import { CAMPOS_TEXTO, type RefinedQuote } from "@/lib/quotes/refinar-core";
+import { propuestaSchema, REGLAS_PROPUESTA } from "./propuesta-schema";
 
 // Ajustar una cotización YA generada, hablándole en castellano.
 //
@@ -24,6 +25,7 @@ const schema = z.object({
   items: z
     .array(
       z.object({
+        titulo: z.string().nullable().describe("Título corto de la partida (formato Propuesta). Igual que estaba salvo que el pedido lo cambie; null en formato carta."),
         cant: z.number(),
         desc: z.string().describe("Descripción del renglón, en el mismo estilo formal que las que ya están."),
         precio: z.number().describe("Precio unitario en B/. SIN ITBMS."),
@@ -47,6 +49,9 @@ const schema = z.object({
       }),
     )
     .describe("Rótulos de la carta que hay que cambiar. Vacío si el pedido no habla de rótulos."),
+  propuesta: propuestaSchema
+    .nullable()
+    .describe("Formato Propuesta: el resumen del encabezado, IGUAL que estaba salvo lo que el pedido cambie. null si la cotización está en formato carta."),
   resumen: z.string().describe("Una línea, en castellano, de qué cambiaste. Para mostrárselo a quien pidió el ajuste."),
 });
 
@@ -84,11 +89,13 @@ export async function refineQuote(
     descripcion_corta: string;
     ubicacion: string | null;
     tipo: "realizar" | "realizados";
-    items: { cant: number; desc: string; precio: number; aparte: boolean }[];
+    items: { titulo: string | null; cant: number; desc: string; precio: number; aparte: boolean }[];
     aplica_itbms: boolean;
     validez: number | null;
     condiciones: string | null;
     textos: Record<string, string | null | undefined> | null;
+    formato: "carta" | "propuesta";
+    propuesta: unknown;
   },
   instruccion: string,
   ctx: ContextoRefinado,
@@ -105,6 +112,7 @@ export async function refineQuote(
       `PEDIDO DE AJUSTE:\n${instruccion || "(sin texto — el ajuste está en los archivos adjuntos)"}\n\n` +
       (textosAdjuntos ? `ARCHIVOS DE TEXTO ADJUNTOS:\n${textosAdjuntos}\n\n` : "") +
       comoLeerLosAdjuntos(adjuntos) +
+      (actual.formato === "propuesta" ? `${REGLAS_PROPUESTA}\n\n` : "") +
       "Devolvé la cotización ajustada.",
   });
 

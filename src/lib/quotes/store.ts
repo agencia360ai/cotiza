@@ -1,10 +1,11 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateQuote, type GeneratedQuote, type QuoteAdjunto } from "@/lib/ai/generate-quote";
 import { matchClientByName } from "@/lib/clients/match";
 import { hasDropboxConfig, listFolder, uploadFile, getSharedLink } from "@/lib/dropbox/client";
 import { quotesFolder } from "@/lib/dropbox/folders";
-import { letterTotals, type LetterData } from "./letter";
+import { esPropuesta, letterTotals, type LetterData } from "./letter";
 import { renderQuotePdf } from "./pdf";
 import type { QuoteRow } from "@/lib/pipeline/types";
 
@@ -71,11 +72,17 @@ export type DraftBundle = {
   matchedClientName: string | null;
 };
 
-export async function buildQuoteDraft(db: Db, orgId: string, brief: string, adjuntos: QuoteAdjunto[] = []): Promise<DraftBundle> {
+export async function buildQuoteDraft(
+  db: Db,
+  orgId: string,
+  brief: string,
+  adjuntos: QuoteAdjunto[] = [],
+  formato: "carta" | "propuesta" = "carta",
+): Promise<DraftBundle> {
   const { data: clients } = (await db.from("clients").select("name").eq("org_id", orgId).order("name")) as {
     data: { name: string }[] | null;
   };
-  const generated = await generateQuote(brief, (clients ?? []).map((r) => r.name), adjuntos);
+  const generated = await generateQuote(brief, (clients ?? []).map((r) => r.name), adjuntos, formato);
   const [suggestedNumber, matched] = await Promise.all([
     nextQuoteNumber(db, orgId),
     matchClientByName(asMatchDb(db), orgId, generated.client_name),
@@ -351,7 +358,13 @@ export async function publishQuote(db: Db, orgId: string, quoteId: string): Prom
     firmaDataUrl = sig?.data_url ?? null;
   }
 
-  const pdf = await renderQuotePdf({ quoteNumber: q.quote_number, cliente, letter, firmaDataUrl });
+  const pdf = await renderQuotePdf({
+    quoteNumber: q.quote_number,
+    cliente,
+    letter,
+    firmaDataUrl,
+    imagenes: await imagenesDePropuesta(db, orgId, letter),
+  });
 
   let desc = q.description ? sanitizeFileName(q.description) : "";
   if (desc.length > 60) desc = desc.slice(0, 57).trim() + "...";
@@ -386,4 +399,72 @@ export async function publishQuote(db: Db, orgId: string, quoteId: string): Prom
 
   const waText = `Cotización ${q.quote_number} - ${cliente}${url ? `: ${url}` : ""}`;
   return { ok: true, data: { url, path: uploaded.path, fileName: uploaded.name, waText, linkWarning } };
+}
+
+// ── Imágenes de la Propuesta (plano, tabla de equipos) ──────────────────────
+//
+// Viven en el bucket privado de documentos, bajo la carpeta de la org. La
+// carta guarda solo el path; el PDF las baja al dibujarse.
+
+const BUCKET_IMAGENES = "cotiza-documents";
+const MAX_IMAGEN = 4_000_000;
+const carpetaImagenes = (orgId: string) => `cotizaciones/${orgId}/`;
+
+export async function subirImagenPropuesta(
+  db: Db,
+  orgId: string,
+  base64: string,
+  mime: string,
+): Promise<{ error: string } | { ok: true; path: string; mime: "image/png" | "image/jpeg" }> {
+  if (mime !== "image/png" && mime !== "image/jpeg") return { error: "La imagen tiene que ser PNG o JPG" };
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0) return { error: "Imagen vacía" };
+  if (bytes.length > MAX_IMAGEN) return { error: "La imagen pesa más de 4 MB" };
+  const path = `${carpetaImagenes(orgId)}${randomUUID()}.${mime === "image/png" ? "png" : "jpg"}`;
+  const { error } = await db.storage.from(BUCKET_IMAGENES).upload(path, bytes, { contentType: mime, upsert: false });
+  if (error) return { error: `No se pudo guardar la imagen: ${error.message}` };
+  return { ok: true, path, mime };
+}
+
+/**
+ * Bytes de las imágenes del plano. Solo las de la carpeta de ESTA org: el path
+ * viaja dentro de la carta, que arma el usuario (o el portal sin login), y el
+ * bucket no separa por organización.
+ */
+export async function imagenesDePropuesta(db: Db, orgId: string, letter: LetterData): Promise<Map<string, Uint8Array>> {
+  const out = new Map<string, Uint8Array>();
+  if (!esPropuesta(letter)) return out;
+  const paths = (letter.propuesta?.plano?.imagenes ?? []).map((i) => i.path).filter((p) => p.startsWith(carpetaImagenes(orgId)));
+  await Promise.all(
+    paths.map(async (p) => {
+      const { data } = await db.storage.from(BUCKET_IMAGENES).download(p);
+      if (data) out.set(p, new Uint8Array(await data.arrayBuffer()));
+    }),
+  );
+  return out;
+}
+
+/** El PDF tal cual se publicaría, sin guardar nada: para la vista previa. */
+export async function previewQuotePdf(
+  db: Db,
+  orgId: string,
+  input: { quote_number: string; client_name: string; letter: LetterData },
+): Promise<Uint8Array> {
+  let firmaDataUrl: string | null = null;
+  if (input.letter.firma?.id) {
+    const { data: sig } = (await db
+      .from("quote_signatures")
+      .select("data_url")
+      .eq("id", input.letter.firma.id)
+      .eq("org_id", orgId)
+      .maybeSingle()) as { data: { data_url: string } | null };
+    firmaDataUrl = sig?.data_url ?? null;
+  }
+  return renderQuotePdf({
+    quoteNumber: input.quote_number || "COT",
+    cliente: input.client_name || "Cliente",
+    letter: input.letter,
+    firmaDataUrl,
+    imagenes: await imagenesDePropuesta(db, orgId, input.letter),
+  });
 }

@@ -5,6 +5,8 @@ import {
   buildQuoteDraft,
   insertQuote,
   publishQuote as publishQuoteCore,
+  previewQuotePdf,
+  subirImagenPropuesta,
   type DraftBundle,
   type SaveQuoteInput,
   type PublishOut,
@@ -13,6 +15,7 @@ import {
 import type { QuoteAdjunto } from "@/lib/ai/generate-quote";
 import { refinarBorrador, type BorradorAjustable, type AjusteAplicado } from "@/lib/quotes/refinar";
 import type { QuoteRow } from "@/lib/pipeline/types";
+import type { LetterData } from "@/lib/quotes/letter";
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
@@ -32,12 +35,18 @@ async function orgFromToken(token: string): Promise<{ ok: true; db: Db; orgId: s
   return { ok: true, db: admin, orgId: data.id };
 }
 
-export async function portalGenerate(token: string, brief: string, adjuntos: QuoteAdjunto[] = []): Promise<Result<DraftBundle>> {
+export async function portalGenerate(
+  token: string,
+  brief: string,
+  adjuntos: QuoteAdjunto[] = [],
+  formato: "carta" | "propuesta" = "carta",
+): Promise<Result<DraftBundle & { contacto: string | null }>> {
   const c = await orgFromToken(token);
   if (!c.ok) return { error: c.error };
   if (!brief.trim() && adjuntos.length === 0) return { error: "Contame qué hay que cotizar (o adjuntá un archivo)" };
   try {
-    return { ok: true, data: await buildQuoteDraft(c.db, c.orgId, brief.trim(), adjuntos) };
+    // Sin sesión no hay a quién atribuirle el contacto: lo escribe el ingeniero.
+    return { ok: true, data: { ...(await buildQuoteDraft(c.db, c.orgId, brief.trim(), adjuntos, formato)), contacto: null } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error generando la cotización" };
   }
@@ -85,4 +94,30 @@ export async function portalPublish(token: string, quoteId: string): Promise<Res
   const r = await publishQuoteCore(c.db, c.orgId, quoteId);
   if ("error" in r) return { error: r.error };
   return { ok: true, data: r.data };
+}
+
+export async function portalPreview(
+  token: string,
+  input: { quote_number: string; client_name: string; letter: LetterData },
+): Promise<Result<{ base64: string }>> {
+  const c = await orgFromToken(token);
+  if (!c.ok) return { error: c.error };
+  try {
+    const pdf = await previewQuotePdf(c.db, c.orgId, input);
+    return { ok: true, data: { base64: Buffer.from(pdf).toString("base64") } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo armar la vista previa" };
+  }
+}
+
+export async function portalSubirImagen(
+  token: string,
+  base64: string,
+  mime: string,
+): Promise<Result<{ path: string; mime: "image/png" | "image/jpeg" }>> {
+  const c = await orgFromToken(token);
+  if (!c.ok) return { error: c.error };
+  const r = await subirImagenPropuesta(c.db, c.orgId, base64, mime);
+  if ("error" in r) return { error: r.error };
+  return { ok: true, data: { path: r.path, mime: r.mime } };
 }

@@ -1,3 +1,5 @@
+import type { Propuesta } from "./propuesta";
+
 // Carta de cotización DICEC — tipos y helpers compartidos entre el cotizador
 // (preview editable) y la vista imprimible. Formato tomado del generador HTML
 // de DICEC (fecha larga, Referencia, tabla de renglones, ITBMS, oferta, firma).
@@ -8,7 +10,9 @@
 // pero solo se facturan cuando se piden. Sumarlos al total mensual haría que el
 // cliente lea como cuota fija algo que puede no pasar nunca.
 // undefined/false = suma, que es lo que hacían todos los renglones antes.
-export type LetterItem = { cant: number; desc: string; precio: number; aparte?: boolean };
+// `titulo`: solo lo usa el formato Propuesta (título corto en negrita, con `desc`
+// debajo como detalle). La carta clásica lo ignora y sigue mostrando `desc`.
+export type LetterItem = { cant: number; desc: string; precio: number; aparte?: boolean; titulo?: string };
 
 /** Los que suman al total y los que se cotizan por separado. */
 export function partirItems(items: LetterItem[]): { enTotal: LetterItem[]; aparte: LetterItem[] } {
@@ -61,7 +65,15 @@ export type LetterData = {
   elaborado: string | null;
   textos?: LetterTextos | null;
   firma?: LetterFirma | null;
+  // Cómo se dibuja. Sin valor = carta clásica, que es como están guardadas
+  // todas las anteriores.
+  formato?: "carta" | "propuesta";
+  propuesta?: Propuesta | null;
 };
+
+export function esPropuesta(l: Pick<LetterData, "formato">): boolean {
+  return l.formato === "propuesta";
+}
 
 // Textos por defecto + los que el usuario haya reescrito. Fuente ÚNICA de la
 // verdad: la usan el preview HTML, el editor y el PDF, así los tres dicen lo
