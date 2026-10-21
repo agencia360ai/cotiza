@@ -6,6 +6,7 @@ import { matchClientByName } from "@/lib/clients/match";
 import { hasDropboxConfig, listFolder, uploadFile, getSharedLink } from "@/lib/dropbox/client";
 import { quotesFolder } from "@/lib/dropbox/folders";
 import { esPropuesta, letterTotals, type LetterData } from "./letter";
+import { formatoNumero, mayor, numeroEnTexto } from "./numeracion";
 import { renderQuotePdf } from "./pdf";
 import type { QuoteRow } from "@/lib/pipeline/types";
 
@@ -25,44 +26,63 @@ function isMissingColumnOrCheck(error: { message?: string; code?: string } | nul
   return /does not exist|could not find|schema cache|check constraint/i.test(error.message ?? "");
 }
 
-// Próximo número de la serie anual única "COT DC YY-NNN". Máximo entre la BD y
-// la carpeta de cartas en Dropbox (la carpeta es la fuente real del correlativo).
-export async function nextQuoteNumber(db: Db, orgId: string): Promise<string> {
-  const yy = String(new Date().getFullYear()).slice(2);
-  const re = new RegExp(`COT\\s+[A-Z]{1,3}\\s+${yy}-(\\d+)`, "i");
-  let max = 0;
+// Próximo número de la serie anual única "COT DC YY-NNN". Máximo entre la
+// carpeta de cartas en Dropbox (la fuente real del correlativo: ahí está lo
+// hecho con la app y lo hecho a mano) y la BD (borradores que todavía no se
+// publicaron).
+export type EstadoNumeracion = {
+  siguiente: string;
+  ultimoDropbox: { numero: string; archivo: string } | null;
+  ultimoBase: { numero: string; cliente: string | null } | null;
+  dropboxLeido: boolean; // false = no se pudo leer la carpeta: el número sale solo de la BD
+};
+
+export async function estadoNumeracion(db: Db, orgId: string): Promise<EstadoNumeracion> {
+  const anio = new Date().getFullYear();
+  const yy = String(anio).slice(2);
 
   // Paginado + ordenado: PostgREST corta en 1000 filas y sin orden el "máximo"
   // saldría de un subconjunto arbitrario → números repetidos.
+  const filas: { quote_number: string; client_name: string | null }[] = [];
   for (let from = 0; from < 30_000; from += 1000) {
     const { data } = (await db
       .from("sales_quotes")
-      .select("quote_number")
+      .select("quote_number, client_name")
       .eq("org_id", orgId)
       .ilike("quote_number", `%${yy}-%`)
       .order("quote_number", { ascending: false })
-      .range(from, from + 999)) as { data: { quote_number: string }[] | null };
-    for (const r of data ?? []) {
-      const m = r.quote_number.match(re);
-      if (m) max = Math.max(max, parseInt(m[1], 10));
-    }
+      .range(from, from + 999)) as { data: { quote_number: string; client_name: string | null }[] | null };
+    filas.push(...(data ?? []));
     if ((data?.length ?? 0) < 1000) break;
   }
+  const enBase = mayor(filas.map((f) => f.quote_number), yy);
+  const ultimoBase = enBase
+    ? { numero: enBase.texto, cliente: filas.find((f) => f.quote_number === enBase.texto)?.client_name ?? null }
+    : null;
 
+  let enDropbox: { n: number; texto: string } | null = null;
+  let dropboxLeido = false;
   if (hasDropboxConfig()) {
     try {
-      const entries = await listFolder(quotesFolder());
-      for (const e of entries) {
-        if (e.tag !== "file") continue;
-        const m = e.name.match(re);
-        if (m) max = Math.max(max, parseInt(m[1], 10));
-      }
+      const entries = await listFolder(quotesFolder(anio));
+      enDropbox = mayor(entries.filter((e) => e.tag === "file").map((e) => e.name), yy);
+      dropboxLeido = true;
     } catch {
       /* sin Dropbox accesible: la BD alcanza */
     }
   }
 
-  return `COT DC ${yy}-${String(max + 1).padStart(3, "0")}`;
+  const max = Math.max(enBase?.n ?? 0, enDropbox?.n ?? 0);
+  return {
+    siguiente: formatoNumero(yy, max + 1),
+    ultimoDropbox: enDropbox ? { numero: numeroEnTexto(enDropbox.texto) ?? formatoNumero(yy, enDropbox.n), archivo: enDropbox.texto } : null,
+    ultimoBase,
+    dropboxLeido,
+  };
+}
+
+export async function nextQuoteNumber(db: Db, orgId: string): Promise<string> {
+  return (await estadoNumeracion(db, orgId)).siguiente;
 }
 
 export type DraftBundle = {

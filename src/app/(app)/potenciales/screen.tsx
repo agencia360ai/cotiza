@@ -23,6 +23,7 @@ import {
   MessageCircle,
   Mail,
   FolderOpen,
+  Upload,
   MapPin,
   Sparkles,
   Link2,
@@ -62,6 +63,9 @@ import {
   listMyTenders,
 } from "./actions";
 import { DropboxImportDialog } from "./dropbox-import";
+import { SubirPdfDialog } from "./subir-pdf";
+import { ProximoNumero } from "./proximo-numero";
+import { getProximoNumero } from "./dropbox-actions";
 import { GovTendersBoard, CompetidoresCard } from "./gov-tenders";
 import {
   listGovTenders,
@@ -281,6 +285,10 @@ function CotizacionesTab({
   const [showDescartadas, setShowDescartadas] = useState(false);
   const [verTodasSeg, setVerTodasSeg] = useState(false);
   const [showDropbox, setShowDropbox] = useState(false);
+  const [showSubirPdf, setShowSubirPdf] = useState(false);
+  // Sube cada vez que se crea una cotización: el próximo número cambió.
+  const [numeroVersion, setNumeroVersion] = useState(0);
+  const numeroUsado = () => setNumeroVersion((v) => v + 1);
   const [showCotizador, setShowCotizador] = useState(false);
   const [showEngineerLink, setShowEngineerLink] = useState(false);
   const [editingLetter, setEditingLetter] = useState<QuoteLetterBundle | null>(null);
@@ -517,6 +525,16 @@ function CotizacionesTab({
         </button>
         <button
           type="button"
+          onClick={() => setShowSubirPdf(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          title="Subir una cotización hecha a mano (PDF): va a Dropbox tal cual y queda creada acá"
+          aria-label="Subir PDF"
+        >
+          <Upload className="size-4 text-blue-600" />
+          <span className="hidden sm:inline">Subir PDF</span>
+        </button>
+        <button
+          type="button"
           onClick={() => setCreating(true)}
           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           title="Crear una cotización manualmente (formulario)"
@@ -533,6 +551,7 @@ function CotizacionesTab({
           <Sparkles className="size-4" />
           Crear cotización
         </button>
+        <ProximoNumero version={numeroVersion} />
       </div>
 
       {/* Rango de fechas (por fecha de envío) */}
@@ -800,6 +819,17 @@ function CotizacionesTab({
           onCreated={(row) => {
             setQuotes((prev) => [row, ...prev]);
             setCreating(false);
+            numeroUsado();
+          }}
+        />
+      ) : null}
+
+      {showSubirPdf ? (
+        <SubirPdfDialog
+          onClose={() => setShowSubirPdf(false)}
+          onCreated={(row) => {
+            setQuotes((prev) => [row, ...prev]);
+            numeroUsado();
           }}
         />
       ) : null}
@@ -831,7 +861,10 @@ function CotizacionesTab({
       {showCotizador ? (
         <CotizadorDialog
           onClose={() => setShowCotizador(false)}
-          onCreated={(row) => setQuotes((prev) => [row, ...prev])}
+          onCreated={(row) => {
+            setQuotes((prev) => [row, ...prev]);
+            numeroUsado();
+          }}
           onUpdated={(row) => setQuotes((prev) => prev.map((x) => (x.id === row.id ? row : x)))}
         />
       ) : null}
@@ -1507,6 +1540,17 @@ function NewQuoteDrawer({
   onCreated: (row: QuoteRow) => void;
 }) {
   const [quoteNumber, setQuoteNumber] = useState("");
+  // Arranca con el próximo número de la carpeta de Dropbox; si la persona ya
+  // empezó a escribir otro, no se lo pisa.
+  useEffect(() => {
+    let vivo = true;
+    void getProximoNumero().then((r) => {
+      if (vivo && "ok" in r) setQuoteNumber((actual) => actual || r.data.siguiente);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, []);
   const [client, setClient] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");

@@ -8,6 +8,9 @@ import { hasDropboxConfig, listFolder, downloadFile } from "@/lib/dropbox/client
 import { parseQuotePdf } from "@/lib/ai/parse-quote-pdf";
 import { matchClientByName } from "@/lib/clients/match";
 import type { QuoteRow } from "@/lib/pipeline/types";
+import { estadoNumeracion, type Db, type EstadoNumeracion } from "@/lib/quotes/store";
+import { numeroEnTexto } from "@/lib/quotes/numeracion";
+import { subirPdfManual, usosDelNumero, type DatosPdf, type UsoNumero } from "@/lib/quotes/subir-pdf";
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
@@ -16,10 +19,7 @@ const IMG_RE = /\.(png|jpe?g|webp)$/i;
 
 // (C) Captura el número incluyendo sufijos de revisión (Rev 2, R1.1) y letra
 // (A/B), para que las revisiones NO colapsen al mismo número.
-function guessNumber(name: string): string | null {
-  const m = name.match(/COT\s+[A-Za-z]{1,3}\s+\d{2}-\d{1,4}[A-Za-z]?(?:\s+(?:rev\.?\s*\d+|r\d+(?:\.\d+)?))?/i);
-  return m ? m[0].replace(/\s+/g, " ").trim().toUpperCase() : null;
-}
+const guessNumber = numeroEnTexto;
 function yearFromNumber(num: string): number | null {
   const m = num.match(/(\d{2})-\d/);
   return m ? 2000 + Number(m[1]) : null;
@@ -231,5 +231,100 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
     };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Error importando" };
+  }
+}
+
+// ── Próximo número y PDF hechos a mano ───────────────────────────────────────
+
+export async function getProximoNumero(): Promise<Result<EstadoNumeracion>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  try {
+    return { ok: true, data: await estadoNumeracion(c.supabase as unknown as Db, c.orgId) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo calcular el próximo número" };
+  }
+}
+
+const MAX_PDF = 5_500_000; // el server action acepta 8 MB, y base64 infla ~33%
+
+function pdfDe(base64: string): Buffer | string {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0) return "Archivo vacío";
+  if (bytes.length > MAX_PDF) return "El PDF pesa más de 5.5 MB";
+  if (bytes.subarray(0, 4).toString() !== "%PDF") return "El archivo no es un PDF";
+  return bytes;
+}
+
+export type LecturaPdf = {
+  datos: DatosPdf;
+  usos: UsoNumero[];
+  siguiente: string;
+  // La IA no pudo leerlo (sin saldo, PDF escaneado ilegible…): los datos van a
+  // mano, pero el archivo se puede subir igual.
+  iaError: string | null;
+};
+
+/** Lee el PDF (con IA) y dice si su número ya está usado. No sube nada. */
+export async function leerPdfManual(nombre: string, base64: string): Promise<Result<LecturaPdf>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const pdf = pdfDe(base64);
+  if (typeof pdf === "string") return { error: pdf };
+
+  let parsed: Awaited<ReturnType<typeof parseQuotePdf>> | null = null;
+  let iaError: string | null = null;
+  try {
+    parsed = await parseQuotePdf({ filename: nombre, data: pdf, isPdf: true });
+  } catch (e) {
+    iaError = e instanceof Error ? e.message : "No se pudo leer con IA";
+  }
+  // El número que se VE en la cotización manda; el del nombre del archivo es
+  // el respaldo.
+  const numero = (parsed?.quote_number && numeroEnTexto(parsed.quote_number)) || numeroEnTexto(nombre) || "";
+  const db = c.supabase as unknown as Db;
+  const [usos, estado] = await Promise.all([numero ? usosDelNumero(db, c.orgId, numero) : Promise.resolve([]), estadoNumeracion(db, c.orgId)]);
+  return {
+    ok: true,
+    data: {
+      datos: {
+        quote_number: numero,
+        client_name: parsed?.client_name ?? null,
+        amount_usd: parsed?.amount_usd ?? null,
+        sent_date: parsed?.sent_date ?? null,
+        description: parsed?.description ?? null,
+        rubro: parsed?.rubro ?? null,
+      },
+      usos,
+      siguiente: estado.siguiente,
+      iaError,
+    },
+  };
+}
+
+/** Para volver a avisar cuando cambian el número a mano. */
+export async function revisarNumeroCotizacion(numero: string): Promise<Result<UsoNumero[]>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  return { ok: true, data: await usosDelNumero(c.supabase as unknown as Db, c.orgId, numero) };
+}
+
+/** Sube el PDF a Dropbox sin tocarlo y crea la cotización. */
+export async function subirPdfCotizacion(
+  nombre: string,
+  base64: string,
+  datos: DatosPdf,
+): Promise<Result<{ row: QuoteRow; aviso: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const pdf = pdfDe(base64);
+  if (typeof pdf === "string") return { error: pdf };
+  try {
+    const r = await subirPdfManual(c.supabase as unknown as Db, c.orgId, { nombre, bytes: pdf, datos });
+    if ("error" in r) return { error: r.error };
+    revalidatePath("/potenciales");
+    return { ok: true, data: { row: r.row, aviso: r.aviso } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo subir el PDF" };
   }
 }
