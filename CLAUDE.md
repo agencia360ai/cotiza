@@ -9,7 +9,7 @@ Plataforma de cotizaciones HVAC para Panamá. Multi-tenant, IA-asistida.
 - **Backend**: Supabase (Postgres + Auth + Storage)
   - Proyecto dedicado: `hliyxksrgqgfatorgbne` (org Agencia360)
   - Schema: `cotiza`
-- **IA**: Anthropic Claude API (Sonnet 4.6 por defecto, Opus 4.7 para casos complejos)
+- **IA**: Anthropic Claude API (Sonnet 4.6 por defecto, Opus 4.7 para casos complejos, Haiku 4.5 para extracciones simples). Con `OPENROUTER_API_KEY` definida, el mismo cliente (`src/lib/ai/client.ts`) va por OpenRouter
 
 ## Comandos
 

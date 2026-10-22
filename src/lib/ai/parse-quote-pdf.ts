@@ -62,8 +62,10 @@ export async function parseQuotePdf(input: {
     text: `Nombre del archivo: ${input.filename}\nExtraé los datos de esta cotización.`,
   });
 
+  // Haiku: sacar seis campos de una carta no pide más, y se corre por cada
+  // archivo de la carpeta — a un tercio del precio de Sonnet.
   const response = await anthropic.messages.parse({
-    model: pickModel("default"),
+    model: pickModel("micro"),
     max_tokens: 1200,
     system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content }],
