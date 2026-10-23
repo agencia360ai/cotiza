@@ -8,6 +8,7 @@ import { quotesFolder } from "@/lib/dropbox/folders";
 import { esPropuesta, letterTotals, type LetterData } from "./letter";
 import { formatoNumero, mayor, numeroEnTexto } from "./numeracion";
 import { renderQuotePdf } from "./pdf";
+import { clienteDe, type Original } from "./subir-pdf";
 import type { QuoteRow } from "@/lib/pipeline/types";
 
 // Core del cotizador, compartido entre las actions autenticadas y el portal de
@@ -126,13 +127,25 @@ export type SaveQuoteInput = {
 
 // Guarda como BORRADOR (el PDF aún no existe). Fallbacks: si la migración 0009
 // (status borrador) o la 0008 (letter) no están, degrada con gracia.
-export async function insertQuote(db: Db, orgId: string, input: SaveQuoteInput): Promise<{ error: string } | { ok: true; row: QuoteRow }> {
+// Con `revisionDe`, cliente, sucursal y contacto son los de la original: el
+// matcher por nombre podría elegir otro cliente parecido.
+export async function insertQuote(
+  db: Db,
+  orgId: string,
+  input: SaveQuoteInput,
+  revisionDe?: Original,
+): Promise<{ error: string } | { ok: true; row: QuoteRow }> {
   if (!input.quote_number.trim()) return { error: "Número requerido" };
   if (input.letter.items.length === 0) return { error: "Agrega al menos un renglón" };
 
   const { total } = letterTotals(input.letter);
-  const matched = await matchClientByName(asMatchDb(db), orgId, input.client_name);
+  const matched = revisionDe ? clienteDe(revisionDe) : await matchClientByName(asMatchDb(db), orgId, input.client_name);
   const year = Number(input.letter.fecha.slice(0, 4)) || new Date().getFullYear();
+  const contacto = {
+    contact_name: revisionDe?.contact_name ?? null,
+    contact_phone: revisionDe?.contact_phone ?? null,
+    contact_email: revisionDe?.contact_email ?? null,
+  };
 
   const base = {
     org_id: orgId,
@@ -144,8 +157,13 @@ export async function insertQuote(db: Db, orgId: string, input: SaveQuoteInput):
     client_id: matched?.id ?? null,
     description: input.descripcion_corta,
     rubro: input.rubro,
-    notes: input.elaborado_por ? `Cotizador IA · elaborada por ${input.elaborado_por}` : "Generada con el cotizador IA",
+    notes: revisionDe
+      ? `Revisión de ${revisionDe.quote_number} — editada en el cotizador`
+      : input.elaborado_por
+        ? `Cotizador IA · elaborada por ${input.elaborado_por}`
+        : "Generada con el cotizador IA",
     source: "manual" as const,
+    ...(revisionDe ? { location_id: revisionDe.location_id, ...contacto } : {}),
   };
 
   const attempts: Record<string, unknown>[] = [
@@ -187,14 +205,12 @@ export async function insertQuote(db: Db, orgId: string, input: SaveQuoteInput):
       invoice_status: null,
       client_name: base.client_name,
       client_id: matched?.id ?? null,
-      client_std_name: matched?.name ?? null,
+      client_std_name: matched?.name || null,
       location_id: matched?.location_id ?? null,
       location_name: matched?.location_name ?? null,
       dropbox_shared_url: null,
       dropbox_path: null,
-      contact_name: null,
-      contact_phone: null,
-      contact_email: null,
+      ...contacto,
       description: base.description,
       notes: base.notes,
       rubro: input.rubro,

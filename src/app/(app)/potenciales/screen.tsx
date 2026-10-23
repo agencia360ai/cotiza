@@ -87,7 +87,7 @@ import {
   restoreSeguimiento,
 } from "./qbo-send-actions";
 import { groupRevisions, parseRev } from "@/lib/pipeline/revisions";
-import { CotizadorDialog } from "./cotizador";
+import { CotizadorDialog, type RevisionEnEdicion } from "./cotizador";
 import { publishQuote, getQuoteLetter, createQuoteSharedLink, type QuoteLetterBundle } from "./cotizador-actions";
 import { EngineerLinkDialog } from "./engineer-link";
 import { SortTh, toggleSort, compareVals, type SortState } from "@/components/ui/sortable";
@@ -288,6 +288,7 @@ function CotizacionesTab({
   const [showDropbox, setShowDropbox] = useState(false);
   const [showSubirPdf, setShowSubirPdf] = useState(false);
   const [revisando, setRevisando] = useState<QuoteRow | null>(null);
+  const [editandoRevision, setEditandoRevision] = useState<RevisionEnEdicion | null>(null);
   // Sube cada vez que se crea una cotización: el próximo número cambió.
   const [numeroVersion, setNumeroVersion] = useState(0);
   const numeroUsado = () => setNumeroVersion((v) => v + 1);
@@ -845,6 +846,19 @@ function CotizacionesTab({
           revisionDe={revisando}
           onClose={() => setRevisando(null)}
           onCreated={(row) => setQuotes((prev) => [row, ...prev])}
+          onEditar={(r) => {
+            setRevisando(null);
+            setEditandoRevision(r);
+          }}
+        />
+      ) : null}
+
+      {editandoRevision ? (
+        <CotizadorDialog
+          revision={editandoRevision}
+          onClose={() => setEditandoRevision(null)}
+          onCreated={(row) => setQuotes((prev) => [row, ...prev])}
+          onUpdated={(row) => setQuotes((prev) => prev.map((x) => (x.id === row.id ? row : x)))}
         />
       ) : null}
 
@@ -1239,9 +1253,9 @@ function QuoteDrawer({
               onClick={onRevision}
               disabled={pubBusy || saving}
               className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-              title="Subir el PDF de una revisión de esta cotización: queda como la REV que sigue, con el mismo cliente"
+              title="Editarla acá o subir el PDF de la revisión: queda como la REV que sigue, con el mismo cliente"
             >
-              <FilePlus2 className="size-3.5" /> Subir revisión
+              <FilePlus2 className="size-3.5" /> Nueva revisión
             </button>
           ) : null}
           {!f.dropbox_shared_url && f.dropbox_path ? (

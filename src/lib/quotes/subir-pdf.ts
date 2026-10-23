@@ -102,6 +102,22 @@ export type Original = Pick<
   | "rubro"
 >;
 
+/** El cliente de la original, como si lo hubiera encontrado el matcher. */
+export function clienteDe(o: Original): { id: string; name: string; location_id: string | null; location_name: string | null } | null {
+  return o.client_id ? { id: o.client_id, name: o.client_std_name ?? "", location_id: o.location_id, location_name: o.location_name } : null;
+}
+
+const MAX_PDF = 5_500_000; // el server action acepta 8 MB, y base64 infla ~33%
+
+/** Los bytes del PDF que mandó el navegador, o qué tiene de malo. */
+export function bytesDePdf(base64: string): Buffer | string {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0) return "Archivo vacío";
+  if (bytes.length > MAX_PDF) return "El PDF pesa más de 5.5 MB";
+  if (bytes.subarray(0, 4).toString() !== "%PDF") return "El archivo no es un PDF";
+  return bytes;
+}
+
 export async function subirPdfManual(
   db: Db,
   orgId: string,
@@ -133,9 +149,7 @@ export async function subirPdfManual(
   }
 
   const matched = original
-    ? original.client_id
-      ? { id: original.client_id, name: original.client_std_name ?? "", location_id: original.location_id, location_name: original.location_name }
-      : null
+    ? clienteDe(original)
     : await matchClientByName(db as unknown as Parameters<typeof matchClientByName>[0], orgId, input.datos.client_name);
   const contacto = {
     contact_name: original?.contact_name ?? null,

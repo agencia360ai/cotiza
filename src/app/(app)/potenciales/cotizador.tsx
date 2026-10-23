@@ -27,12 +27,14 @@ import {
 import { cn } from "@/lib/utils";
 import { letterTotals, fmtBal, esPropuesta, type LetterData, type LetterItem } from "@/lib/quotes/letter";
 import { normalizarPropuesta, type PropuestaImagen } from "@/lib/quotes/propuesta";
+import { cartaDeGenerada } from "@/lib/quotes/desde-ia";
 import { PropuestaEditor, type ImagenDisponible } from "./propuesta-editor";
 import {
   generateQuoteDraft,
   refineQuoteDraft,
   saveGeneratedQuote,
   updateGeneratedQuote,
+  guardarRevisionCotizacion,
   publishQuote,
   previewCotizacion,
   subirImagenCotizacion,
@@ -42,6 +44,7 @@ import {
 } from "./cotizador-actions";
 import type { QuoteImage, QuoteAdjunto } from "@/lib/ai/generate-quote";
 import type { PublishOut } from "@/lib/quotes/store";
+import type { RevisionEditable } from "@/lib/quotes/revision";
 import type { BorradorAjustable, AjusteAplicado } from "@/lib/quotes/refinar-core";
 import type { QuoteRow } from "@/lib/pipeline/types";
 import { RUBROS, type Rubro } from "@/lib/pipeline/types";
@@ -54,6 +57,7 @@ export type CotizadorApi = {
   save: (input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
   publish: (quoteId: string) => Promise<ApiResult<PublishOut>>;
   update?: (quoteId: string, input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
+  saveRevision?: (originalId: string, input: SaveCotizacionInput) => Promise<ApiResult<QuoteRow>>;
   preview: (input: { quote_number: string; client_name: string; letter: LetterData }) => Promise<ApiResult<{ base64: string }>>;
   subirImagen: (base64: string, mime: string) => Promise<ApiResult<{ path: string; mime: "image/png" | "image/jpeg" }>>;
 };
@@ -64,6 +68,7 @@ const APP_API: CotizadorApi = {
   save: saveGeneratedQuote,
   publish: publishQuote,
   update: updateGeneratedQuote,
+  saveRevision: guardarRevisionCotizacion,
   preview: previewCotizacion,
   subirImagen: subirImagenCotizacion,
 };
@@ -436,6 +441,25 @@ const EXAMPLE =
 
 type Phase = "brief" | "generating" | "review" | "saving" | "done";
 
+/**
+ * Una revisión lista para editar. Si se pidió un cambio al armarla, `previo`
+ * es cómo estaba antes: el Deshacer vuelve a la original tal cual.
+ */
+export type RevisionEnEdicion = {
+  datos: RevisionEditable;
+  previo: BorradorAjustable | null;
+  resumen: string | null;
+  error: string | null;
+};
+
+const FUENTE_REVISION: Record<RevisionEditable["fuente"], (original: string) => string> = {
+  carta: (o) => `Copiada de la carta de ${o}. Cambiala a mano o pedíselo a la IA arriba.`,
+  "pdf-original": (o) =>
+    `La IA pasó a la plataforma el PDF de ${o} que está en Dropbox. Revisá renglones y precios contra el original antes de publicar.`,
+  "pdf-subido": () => "La IA pasó a la plataforma el PDF que subiste. Revisá renglones y precios antes de publicar.",
+  resumen: (o) => `${o} no tiene carta ni PDF: arranca con su descripción y su monto en un renglón.`,
+};
+
 export function CotizadorDialog({
   onClose,
   onCreated,
@@ -443,6 +467,7 @@ export function CotizadorDialog({
   api = APP_API,
   embedded = false,
   initial,
+  revision,
 }: {
   onClose: () => void;
   onCreated: (row: QuoteRow) => void;
@@ -451,10 +476,13 @@ export function CotizadorDialog({
   embedded?: boolean;
   // Editar un borrador existente: arranca en review con la carta cargada.
   initial?: QuoteLetterBundle;
+  // La revisión de una cotización que ya salió: se guarda como una nueva, con
+  // el cliente de la original.
+  revision?: RevisionEnEdicion;
 }) {
-  const [phase, setPhase] = useState<Phase>(initial ? "review" : "brief");
+  const [phase, setPhase] = useState<Phase>(initial || revision ? "review" : "brief");
   const [brief, setBrief] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(revision?.error ?? null);
 
   // Campos editables del review
   const [numero, setNumero] = useState("");
@@ -484,21 +512,22 @@ export function CotizadorDialog({
   // que probar sea barato: si el ajuste sale mal se vuelve atrás sin perder
   // nada, así que se puede pedir un cambio arriesgado sin miedo.
   const [ajustando, setAjustando] = useState(false);
-  const [ultimoAjuste, setUltimoAjuste] = useState<string | null>(null);
-  const [historial, setHistorial] = useState<BorradorAjustable[]>([]);
+  const [ultimoAjuste, setUltimoAjuste] = useState<string | null>(revision?.resumen ?? null);
+  const [historial, setHistorial] = useState<BorradorAjustable[]>(revision?.previo ? [revision.previo] : []);
   const voz = useDictado((t) => setBrief((prev) => (prev ? prev + " " : "") + t));
   const fotoRef = useRef<HTMLInputElement | null>(null);
   const archivoRef = useRef<HTMLInputElement | null>(null);
 
-  // Sembrar desde un borrador existente (modo edición).
+  // Sembrar desde un borrador existente (modo edición) o desde la revisión.
   useEffect(() => {
-    if (!initial) return;
-    setNumero(initial.quote_number);
-    setCliente(initial.client_name);
-    setClienteExistente(initial.client_std_name);
-    setRubro(initial.rubro);
-    setDescCorta(initial.descripcion_corta);
-    setLetter(initial.letter);
+    const semilla = initial ?? revision?.datos;
+    if (!semilla) return;
+    setNumero(semilla.quote_number);
+    setCliente(semilla.client_name);
+    setClienteExistente(semilla.client_std_name);
+    setRubro(semilla.rubro);
+    setDescCorta(semilla.descripcion_corta);
+    setLetter(semilla.letter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -564,30 +593,15 @@ export function CotizadorDialog({
     setClienteExistente(r.data.matchedClientName);
     setRubro(g.rubro);
     setDescCorta(g.descripcion_corta);
-    setLetter({
-      fecha: new Date().toISOString().slice(0, 10),
-      ubicacion: g.ubicacion,
-      tipo: g.tipo,
-      // `aparte` viaja: la IA marca los cargos por evento al generar, y sin esto
-      // se perdían acá y todo terminaba dentro del total.
-      items: g.items.map((it) => ({
-        cant: it.cant,
-        desc: it.desc,
-        precio: it.precio,
-        aparte: it.aparte || undefined,
-        ...(formato === "propuesta" && it.titulo ? { titulo: it.titulo } : {}),
-      })),
-      aplica_itbms: g.aplica_itbms,
-      tasa: 7,
-      validez: g.validez_dias ?? 30,
-      condiciones: g.condiciones,
-      elaborado: letter.elaborado,
-      formato,
-      propuesta:
-        formato === "propuesta"
-          ? normalizarPropuesta({ ...(g.propuesta ?? {}), contacto: r.data.contacto ?? letter.elaborado, plano: null }, nombreCliente)
-          : null,
-    });
+    setLetter(
+      cartaDeGenerada(g, {
+        formato,
+        fecha: new Date().toISOString().slice(0, 10),
+        elaborado: letter.elaborado,
+        contacto: r.data.contacto ?? letter.elaborado,
+        cliente: nombreCliente,
+      }),
+    );
     setPhase("review");
     if (formato === "propuesta") void ponerPlanoDelDiseno(g.propuesta?.plano_titulo ?? null, g.propuesta?.plano_fuente ?? null);
   }
@@ -661,7 +675,8 @@ export function CotizadorDialog({
 
   function aplicar(b: BorradorAjustable) {
     setNumero(b.numero);
-    setCliente(b.cliente);
+    // El cliente de una revisión es el de la original, diga lo que diga la IA.
+    if (!revision) setCliente(b.cliente);
     setRubro(b.rubro);
     setDescCorta(b.descripcionCorta);
     setLetter(b.letter);
@@ -704,7 +719,12 @@ export function CotizadorDialog({
       descripcion_corta: descCorta,
       letter,
     };
-    const r = initial && api.update ? await api.update(initial.id, payload) : await api.save(payload);
+    const r =
+      revision && api.saveRevision
+        ? await api.saveRevision(revision.datos.original.id, payload)
+        : initial && api.update
+          ? await api.update(initial.id, payload)
+          : await api.save(payload);
     if ("error" in r) {
       setError(r.error);
       setPhase("review");
@@ -743,7 +763,9 @@ export function CotizadorDialog({
             <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-blue-600 text-white">
               <Sparkles className="size-4" />
             </div>
-            <h3 className="text-base font-semibold text-slate-900">Cotizador IA</h3>
+            <h3 className="text-base font-semibold text-slate-900">
+              {revision ? `Revisión de ${revision.datos.original.quote_number}` : "Cotizador IA"}
+            </h3>
           </div>
           {!embedded ? (
             <button
@@ -980,6 +1002,18 @@ export function CotizadorDialog({
             </div>
           ) : (
             <div className="space-y-3">
+              {revision ? (
+                <div className="space-y-1.5">
+                  <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 ring-1 ring-inset ring-sky-600/20">
+                    {FUENTE_REVISION[revision.datos.fuente](revision.datos.original.quote_number)}
+                  </p>
+                  {revision.datos.aviso ? (
+                    <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-600/20">
+                      <AlertTriangle className="mt-px size-3.5 shrink-0" /> {revision.datos.aviso}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               <AjustarConIA
                 pendiente={ajustando}
                 resumen={ultimoAjuste}
@@ -1024,13 +1058,15 @@ export function CotizadorDialog({
                 <label className="block">
                   <span className="text-xs font-semibold text-slate-500">
                     Cliente{" "}
-                    {clienteExistente ? (
+                    {revision ? (
+                      <span className="font-medium text-slate-400">· el de la original</span>
+                    ) : clienteExistente ? (
                       <span className="font-medium text-emerald-600">· existente ✓</span>
                     ) : (
                       <span className="font-medium text-amber-600">· nuevo (texto libre)</span>
                     )}
                   </span>
-                  <input className={inputCls} value={cliente} onChange={(e) => setCliente(e.target.value)} />
+                  <input className={inputCls} value={cliente} onChange={(e) => setCliente(e.target.value)} disabled={Boolean(revision)} />
                 </label>
                 <label className="block">
                   <span className="text-xs font-semibold text-slate-500">Ubicación (encabezado)</span>
@@ -1223,7 +1259,9 @@ export function CotizadorDialog({
 
         {phase === "review" || phase === "saving" ? (
           <footer className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
-            {!initial ? (
+            {revision ? (
+              <span className="text-xs text-slate-400">Se guarda como borrador {numero}; después la publicás a Dropbox.</span>
+            ) : !initial ? (
               <button
                 type="button"
                 onClick={() => setPhase("brief")}
@@ -1236,7 +1274,7 @@ export function CotizadorDialog({
               <span className="text-xs text-slate-400">Editando borrador — al guardar sigue como borrador hasta publicar.</span>
             )}
             <div className="flex items-center gap-3">
-              {!initial ? (
+              {!initial && !revision ? (
                 <span className="hidden text-[11px] text-slate-400 sm:block">
                   Queda como borrador — cualquier admin puede terminarla y publicarla.
                 </span>
@@ -1259,7 +1297,7 @@ export function CotizadorDialog({
                 className="inline-flex items-center gap-2 whitespace-nowrap rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
               >
                 {phase === "saving" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                {initial ? "Guardar cambios" : "Guardar borrador"}
+                {revision ? "Guardar revisión" : initial ? "Guardar cambios" : "Guardar borrador"}
               </button>
             </div>
           </footer>

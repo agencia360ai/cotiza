@@ -21,6 +21,8 @@ import {
 } from "@/lib/quotes/store";
 import type { QuoteAdjunto } from "@/lib/ai/generate-quote";
 import { refinarBorrador, type BorradorAjustable, type AjusteAplicado } from "@/lib/quotes/refinar";
+import { armarRevision, guardarRevision, type RevisionEditable } from "@/lib/quotes/revision";
+import { bytesDePdf } from "@/lib/quotes/subir-pdf";
 import type { LetterData } from "@/lib/quotes/letter";
 import type { QuoteRow, Rubro } from "@/lib/pipeline/types";
 
@@ -187,6 +189,37 @@ export async function saveGeneratedQuote(input: SaveCotizacionInput): Promise<Re
   const c = await ctx();
   if (!c.ok) return { error: c.error };
   const r = await insertQuote(c.supabase, c.orgId, input);
+  if ("error" in r) return { error: r.error };
+  revalidatePath("/potenciales");
+  return { ok: true, data: r.row };
+}
+
+/**
+ * La revisión lista para editar en el cotizador, sin guardar nada todavía: con
+ * la carta de la original, o con el PDF (el que se subió recién o el de
+ * Dropbox) pasado a la plataforma por la IA.
+ */
+export async function prepararRevision(quoteId: string, pdf?: { nombre: string; base64: string }): Promise<Result<RevisionEditable>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  let subido: { nombre: string; bytes: Buffer } | undefined;
+  if (pdf) {
+    const bytes = bytesDePdf(pdf.base64);
+    if (typeof bytes === "string") return { error: bytes };
+    subido = { nombre: pdf.nombre, bytes };
+  }
+  try {
+    const r = await armarRevision(c.supabase as unknown as Db, c.orgId, quoteId, { pdf: subido });
+    return "error" in r ? { error: r.error } : { ok: true, data: r.data };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo armar la revisión" };
+  }
+}
+
+export async function guardarRevisionCotizacion(originalId: string, input: SaveCotizacionInput): Promise<Result<QuoteRow>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const r = await guardarRevision(c.supabase as unknown as Db, c.orgId, originalId, input);
   if ("error" in r) return { error: r.error };
   revalidatePath("/potenciales");
   return { ok: true, data: r.row };
