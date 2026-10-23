@@ -11,7 +11,8 @@ import type { QuoteRow } from "@/lib/pipeline/types";
 import { estadoNumeracion, type Db, type EstadoNumeracion } from "@/lib/quotes/store";
 import { mismoNumero, numeroBase, numeroEnTexto, revisionSiguiente } from "@/lib/quotes/numeracion";
 import { parseRev } from "@/lib/pipeline/revisions";
-import { subirPdfManual, usosDelNumero, type DatosPdf, type Original, type UsoNumero } from "@/lib/quotes/subir-pdf";
+import { bytesDePdf, subirPdfManual, usosDelNumero, type DatosPdf, type UsoNumero } from "@/lib/quotes/subir-pdf";
+import { cargarOriginal } from "@/lib/quotes/revision";
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
@@ -247,16 +248,6 @@ export async function getProximoNumero(): Promise<Result<EstadoNumeracion>> {
   }
 }
 
-const MAX_PDF = 5_500_000; // el server action acepta 8 MB, y base64 infla ~33%
-
-function pdfDe(base64: string): Buffer | string {
-  const bytes = Buffer.from(base64, "base64");
-  if (bytes.length === 0) return "Archivo vacío";
-  if (bytes.length > MAX_PDF) return "El PDF pesa más de 5.5 MB";
-  if (bytes.subarray(0, 4).toString() !== "%PDF") return "El archivo no es un PDF";
-  return bytes;
-}
-
 export type LecturaPdf = {
   datos: DatosPdf;
   usos: UsoNumero[];
@@ -271,7 +262,7 @@ export type LecturaPdf = {
 export async function leerPdfManual(nombre: string, base64: string): Promise<Result<LecturaPdf>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const pdf = pdfDe(base64);
+  const pdf = bytesDePdf(base64);
   if (typeof pdf === "string") return { error: pdf };
 
   let parsed: Awaited<ReturnType<typeof parseQuotePdf>> | null = null;
@@ -323,7 +314,7 @@ export async function subirPdfCotizacion(
 ): Promise<Result<{ row: QuoteRow; aviso: string | null }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const pdf = pdfDe(base64);
+  const pdf = bytesDePdf(base64);
   if (typeof pdf === "string") return { error: pdf };
   try {
     const r = await subirPdfManual(c.supabase as unknown as Db, c.orgId, { nombre, bytes: pdf, datos });
@@ -337,26 +328,6 @@ export async function subirPdfCotizacion(
 
 // ── Revisión de una cotización que ya existe ─────────────────────────────────
 
-async function cargarOriginal(c: { supabase: Awaited<ReturnType<typeof createClient>>; orgId: string }, id: string): Promise<Original | null> {
-  type Raw = Omit<Original, "client_std_name" | "location_name"> & { client: { name: string } | null; location: { name: string } | null };
-  const { data } = (await c.supabase
-    .from("sales_quotes")
-    .select(
-      "id, quote_number, status, client_name, client_id, location_id, contact_name, contact_phone, contact_email, description, amount_usd, rubro, client:clients(name), location:client_locations(name)",
-    )
-    .eq("org_id", c.orgId)
-    .eq("id", id)
-    .maybeSingle()) as { data: Raw | null };
-  if (!data) return null;
-  const { client, location, ...q } = data;
-  return {
-    ...q,
-    client_std_name: client?.name ?? null,
-    location_name: location?.name ?? null,
-    amount_usd: q.amount_usd === null ? null : Number(q.amount_usd),
-  };
-}
-
 /**
  * Lee el PDF de la revisión y propone su número: el que dice el PDF si es de
  * esta cotización y está libre, o la REV que sigue a todas las que ya hay en la
@@ -365,9 +336,9 @@ async function cargarOriginal(c: { supabase: Awaited<ReturnType<typeof createCli
 export async function leerRevisionPdf(quoteId: string, nombre: string, base64: string): Promise<Result<LecturaPdf>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const pdf = pdfDe(base64);
+  const pdf = bytesDePdf(base64);
   if (typeof pdf === "string") return { error: pdf };
-  const original = await cargarOriginal(c, quoteId);
+  const original = await cargarOriginal(c.supabase as unknown as Db, c.orgId, quoteId);
   if (!original) return { error: "No encontré la cotización" };
   const base = numeroBase(original.quote_number);
   if (!base) return { error: `${original.quote_number} no tiene la forma "COT DC 26-211": corregí el número antes de subirle una revisión` };
@@ -423,9 +394,9 @@ export async function subirRevisionPdf(
 ): Promise<Result<{ row: QuoteRow; aviso: string | null }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  const pdf = pdfDe(base64);
+  const pdf = bytesDePdf(base64);
   if (typeof pdf === "string") return { error: pdf };
-  const original = await cargarOriginal(c, quoteId);
+  const original = await cargarOriginal(c.supabase as unknown as Db, c.orgId, quoteId);
   if (!original) return { error: "No encontré la cotización" };
   try {
     const r = await subirPdfManual(c.supabase as unknown as Db, c.orgId, {

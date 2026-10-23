@@ -1,11 +1,14 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, CloudUpload, ExternalLink, FileText, Loader2, Upload, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CloudUpload, ExternalLink, FileText, Loader2, Pencil, Upload, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RUBROS, type QuoteRow, type Rubro } from "@/lib/pipeline/types";
 import type { DatosPdf, UsoNumero } from "@/lib/quotes/subir-pdf";
+import type { BorradorAjustable } from "@/lib/quotes/refinar-core";
 import { leerPdfManual, leerRevisionPdf, revisarNumeroCotizacion, subirPdfCotizacion, subirRevisionPdf } from "./dropbox-actions";
+import { prepararRevision, refineQuoteDraft } from "./cotizador-actions";
+import type { RevisionEnEdicion } from "./cotizador";
 
 const input = "w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-slate-400 focus:outline-none disabled:bg-slate-50";
 const rotulo = "text-[11px] font-semibold uppercase tracking-wider text-slate-500";
@@ -42,20 +45,63 @@ async function base64De(f: File): Promise<string> {
  * legítima.
  *
  * Con `revisionDe`, el PDF es la revisión siguiente de esa cotización: mismo
- * número con la REV que toca, mismo cliente y contacto.
+ * número con la REV que toca, mismo cliente y contacto. Y en vez de subir un
+ * PDF ya hecho, se puede editar ahí mismo (`onEditar`): se abre el cotizador
+ * con la original y el comentario que se haya escrito ya aplicado.
  */
 export function SubirPdfDialog({
   revisionDe,
   onClose,
   onCreated,
+  onEditar,
 }: {
   revisionDe?: QuoteRow;
   onClose: () => void;
   onCreated: (row: QuoteRow) => void;
+  onEditar?: (r: RevisionEnEdicion) => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
   const [problema, setProblema] = useState<string | null>(null);
+  const [comentario, setComentario] = useState("");
+  const [armando, setArmando] = useState(false);
+  const [errorArmar, setErrorArmar] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  async function editar(pdf?: { nombre: string; base64: string }) {
+    if (!revisionDe || !onEditar) return;
+    setArmando(true);
+    setErrorArmar(null);
+    const r = await prepararRevision(revisionDe.id, pdf);
+    if ("error" in r) {
+      setArmando(false);
+      setErrorArmar(r.error);
+      return;
+    }
+    let datos = r.data;
+    let previo: BorradorAjustable | null = null;
+    let resumen: string | null = null;
+    let error: string | null = null;
+    if (comentario.trim()) {
+      const base: BorradorAjustable = {
+        numero: datos.quote_number,
+        cliente: datos.client_name,
+        rubro: datos.rubro,
+        descripcionCorta: datos.descripcion_corta,
+        letter: datos.letter,
+      };
+      const a = await refineQuoteDraft(base, comentario.trim());
+      // Sin el cambio la revisión igual se abre: el comentario se puede volver
+      // a pedir desde el cotizador.
+      if ("error" in a) error = `No se pudo aplicar el comentario: ${a.error}`;
+      else {
+        previo = base;
+        resumen = a.data.resumen;
+        datos = { ...datos, quote_number: a.data.numero, rubro: a.data.rubro, descripcion_corta: a.data.descripcionCorta, letter: a.data.letter };
+      }
+    }
+    setArmando(false);
+    onEditar({ datos, previo, resumen, error });
+  }
 
   const cambiar = (key: string, patch: Partial<Item>) => setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)));
   const cambiarDatos = (key: string, patch: Partial<DatosPdf>) =>
@@ -126,11 +172,11 @@ export function SubirPdfDialog({
             </div>
             <div>
               <h3 className="text-base font-semibold text-slate-900">
-                {revisionDe ? `Subir revisión de ${revisionDe.quote_number}` : "Subir cotizaciones en PDF"}
+                {revisionDe ? `Nueva revisión de ${revisionDe.quote_number}` : "Subir cotizaciones en PDF"}
               </h3>
               <p className="text-xs text-slate-500">
                 {revisionDe
-                  ? `Va a Dropbox tal cual, como la revisión que sigue — para ${revisionDe.client_std_name ?? revisionDe.client_name ?? "el mismo cliente"}.`
+                  ? `Queda como la REV que sigue, para ${revisionDe.client_std_name ?? revisionDe.client_name ?? "el mismo cliente"}.`
                   : "Van a Dropbox tal cual, sin cambiarlas, y quedan creadas acá."}
               </p>
             </div>
@@ -141,6 +187,43 @@ export function SubirPdfDialog({
         </header>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
+          {revisionDe && onEditar ? (
+            <>
+              <section className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
+                <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                  <Pencil className="size-4 text-violet-600" /> Editala acá
+                </p>
+                <p className="mt-0.5 text-xs text-slate-600">
+                  Se abre en el cotizador con lo que tiene {revisionDe.quote_number} para cambiarla a mano o con un comentario a la IA, y
+                  después la publicás a Dropbox.
+                </p>
+                <textarea
+                  rows={2}
+                  value={comentario}
+                  onChange={(e) => setComentario(e.target.value)}
+                  disabled={armando}
+                  placeholder="¿Qué cambia en esta revisión? (opcional) Ej: bajar el renglón 2 a B/. 450"
+                  className="mt-2 w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm focus:border-violet-400 focus:outline-none disabled:opacity-60"
+                />
+                <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                  {armando ? (
+                    <span className="mr-auto text-[11px] text-slate-500">Si hay que leer un PDF con IA tarda unos segundos.</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void editar()}
+                    disabled={armando}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+                  >
+                    {armando ? <Loader2 className="size-4 animate-spin" /> : <Pencil className="size-4" />}
+                    {armando ? "Preparando la revisión…" : "Editar y armar la revisión"}
+                  </button>
+                </div>
+                {errorArmar ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{errorArmar}</p> : null}
+              </section>
+              <p className="text-center text-[11px] font-semibold uppercase tracking-wider text-slate-400">o subí el PDF que ya hiciste</p>
+            </>
+          ) : null}
           {revisionDe && items.length > 0 ? null : (
             <button
               type="button"
@@ -314,7 +397,18 @@ export function SubirPdfDialog({
                   ) : null}
                   {it.error ? <p className="mt-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{it.error}</p> : null}
 
-                  <div className="mt-2.5 flex justify-end">
+                  <div className="mt-2.5 flex flex-wrap justify-end gap-2">
+                    {revisionDe && onEditar ? (
+                      <button
+                        type="button"
+                        onClick={() => void editar({ nombre: it.nombre, base64: it.base64 })}
+                        disabled={it.fase === "subiendo" || armando}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                        title="Pasar este PDF al cotizador para cambiarlo ahí, con el comentario de arriba si lo hay"
+                      >
+                        {armando ? <Loader2 className="size-4 animate-spin" /> : <Pencil className="size-4" />} Editar antes de subir
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => void subir(it)}
@@ -332,7 +426,11 @@ export function SubirPdfDialog({
         </div>
 
         <footer className="flex items-center justify-between gap-2 border-t border-slate-100 px-5 py-3">
-          <p className="text-[11px] text-slate-400">El archivo no se modifica: el cliente recibe exactamente el PDF que hiciste.</p>
+          <p className="text-[11px] text-slate-400">
+            {revisionDe && onEditar
+              ? "Un PDF subido va tal cual; una revisión editada acá se genera con el membrete al publicarla."
+              : "El archivo no se modifica: el cliente recibe exactamente el PDF que hiciste."}
+          </p>
           <div className="flex shrink-0 items-center gap-2">
             {listas.length > 1 ? (
               <button
