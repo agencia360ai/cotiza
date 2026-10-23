@@ -1,6 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { anioDeNumero, correlativo, formatoNumero, mayor, numeroBase, numeroEnTexto } from "../src/lib/quotes/numeracion";
+import {
+  anioDeNumero,
+  correlativo,
+  formatoNumero,
+  mayor,
+  mismoNumero,
+  numeroBase,
+  numeroEnTexto,
+  reemplazarNumero,
+  revisionSiguiente,
+} from "../src/lib/quotes/numeracion";
 
 test("numeroEnTexto: el número del nombre del archivo, con su revisión", () => {
   assert.equal(numeroEnTexto("COT DC 26-242 - COPAMA - Suministro.pdf"), "COT DC 26-242");
@@ -38,4 +48,33 @@ test("nombre en Dropbox: se respeta el del equipo si ya trae el número; si no, 
   assert.equal(nombreEnDropbox("COT DC 26-200 viejo.pdf", "COT DC 26-244"), "COT DC 26-244 - COT DC 26-200 viejo.pdf", "otro número en el nombre no cuenta");
   assert.equal(nombreEnDropbox('Chen: "final"/v2.PDF', "COT DC 26-244"), "COT DC 26-244 - Chen final v2.PDF");
   assert.equal(nombreEnDropbox("Chen", "COT DC 26-244"), "COT DC 26-244 - Chen.pdf");
+});
+
+test("revisión siguiente: la que sigue a TODAS las de esa base, se escriban como se escriban", () => {
+  assert.equal(revisionSiguiente("COT DC 26-211", ["COT DC 26-211"]), "COT DC 26-211 REV 1");
+  assert.equal(revisionSiguiente("COT DC 26-211", ["COT DC 26-211", "COT DC 26-211 REV 1"]), "COT DC 26-211 REV 2");
+  assert.equal(revisionSiguiente("COT DC 26-020", ["COT DC 26-020 REV. 2", "COT DC 26-020 REV 1"]), "COT DC 26-020 REV 3");
+  assert.equal(revisionSiguiente("COT DC 26-109", ["COT DC 26-109 R1", "COT DC 26-109 R2"]), "COT DC 26-109 REV 3");
+  assert.equal(revisionSiguiente("COT DC 25-104", ["COT DC 25-104 R1.1"]), "COT DC 25-104 REV 2");
+  assert.equal(revisionSiguiente("COT DC 26-211", ["COT DC 26-211", "COT DC 26-212 REV 4"]), "COT DC 26-211 REV 1", "otra cotización no cuenta");
+});
+
+test("mismoNumero: misma base y misma revisión", () => {
+  assert.ok(mismoNumero("COT DC 26-211 REV 2", "COT DC 26-211 R2"));
+  assert.ok(mismoNumero("COT DC 26-211 Rev2", "cot dc 26-211 rev 2"));
+  assert.ok(!mismoNumero("COT DC 26-211 REV 2", "COT DC 26-211 REV 1"));
+  assert.ok(!mismoNumero("COT DC 26-211 REV 2", "COT DC 26-211"));
+  assert.ok(!mismoNumero("26-211", "26-211"));
+  assert.equal(reemplazarNumero("COT DC 26-211 - Cantina.pdf", "COT DC 26-211 REV 2"), "COT DC 26-211 REV 2 - Cantina.pdf");
+  assert.equal(reemplazarNumero("Cantina.pdf", "COT DC 26-211 REV 2"), null);
+});
+
+test("nombre de una revisión en Dropbox: siempre con la revisión exacta", async () => {
+  const { nombreEnDropbox } = await import("../src/lib/quotes/subir-pdf");
+  const n = "COT DC 26-211 REV 2";
+  assert.equal(nombreEnDropbox("COT DC 26-211 REV 2 - Cantina.pdf", n, true), "COT DC 26-211 REV 2 - Cantina.pdf");
+  assert.equal(nombreEnDropbox("COT DC 26-211 R2 - Cantina.pdf", n, true), "COT DC 26-211 R2 - Cantina.pdf", "se respeta cómo la escribe el equipo");
+  assert.equal(nombreEnDropbox("COT DC 26-211 - Cantina.pdf", n, true), "COT DC 26-211 REV 2 - Cantina.pdf", "sin la REV quedaría como la original");
+  assert.equal(nombreEnDropbox("COT DC 26-211 Rev 1 - Cantina.pdf", n, true), "COT DC 26-211 REV 2 - Cantina.pdf");
+  assert.equal(nombreEnDropbox("Cantina actualizada.pdf", n, true), "COT DC 26-211 REV 2 - Cantina actualizada.pdf");
 });

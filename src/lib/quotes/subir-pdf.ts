@@ -3,7 +3,7 @@ import { hasDropboxConfig, listFolder, uploadFile, getSharedLink } from "@/lib/d
 import { quotesFolder } from "@/lib/dropbox/folders";
 import { matchClientByName } from "@/lib/clients/match";
 import type { QuoteRow, Rubro } from "@/lib/pipeline/types";
-import { anioDeNumero, numeroBase, numeroEnTexto } from "./numeracion";
+import { anioDeNumero, mismoNumero, numeroBase, numeroEnTexto, reemplazarNumero } from "./numeracion";
 import type { Db } from "./store";
 
 // Cotizaciones hechas a mano (Word, Excel, otro programa) que entran a la
@@ -67,30 +67,60 @@ export async function usosDelNumero(db: Db, orgId: string, numero: string): Prom
  * Nombre en Dropbox: el original si ya trae el número (así lo nombra el equipo),
  * o el número adelante si no. Sin el número en el nombre, la carpeta deja de
  * servir para sacar el correlativo.
+ *
+ * Una revisión pide la revisión exacta en el nombre: subir la REV 2 con el
+ * archivo "COT DC 26-211 - Cliente.pdf" la dejaría en Dropbox como si fuera la
+ * original, y la próxima revisión se calcularía mal.
  */
-export function nombreEnDropbox(original: string, numero: string): string {
+export function nombreEnDropbox(original: string, numero: string, revision = false): string {
   const limpio = original.replace(/[/\\:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
   const conPdf = /\.pdf$/i.test(limpio) ? limpio : `${limpio}.pdf`;
   const delNombre = numeroEnTexto(conPdf);
-  if (delNombre && numeroBase(delNombre) === numeroBase(numero)) return conPdf;
+  if (delNombre && numeroBase(delNombre) === numeroBase(numero)) {
+    if (!revision || mismoNumero(delNombre, numero)) return conPdf;
+    return reemplazarNumero(conPdf, numero) ?? `${numero} - ${conPdf}`;
+  }
   return `${numero} - ${conPdf}`;
 }
+
+/** La cotización de la que se sube una revisión: cliente y contacto se heredan. */
+export type Original = Pick<
+  QuoteRow,
+  | "id"
+  | "quote_number"
+  | "status"
+  | "client_name"
+  | "client_id"
+  | "client_std_name"
+  | "location_id"
+  | "location_name"
+  | "contact_name"
+  | "contact_phone"
+  | "contact_email"
+  | "description"
+  | "amount_usd"
+  | "rubro"
+>;
 
 export async function subirPdfManual(
   db: Db,
   orgId: string,
-  input: { nombre: string; bytes: Buffer; datos: DatosPdf },
+  input: { nombre: string; bytes: Buffer; datos: DatosPdf; revisionDe?: Original },
 ): Promise<{ error: string } | { ok: true; row: QuoteRow; aviso: string | null }> {
   if (!hasDropboxConfig()) return { error: "Dropbox no está configurado (faltan las env vars)." };
   if (input.bytes.subarray(0, 4).toString() !== "%PDF") return { error: "El archivo no es un PDF" };
   const numero = input.datos.quote_number.trim().replace(/\s+/g, " ").toUpperCase();
   if (!numeroBase(numero)) return { error: 'El número tiene que tener la forma "COT DC 26-243"' };
+  const original = input.revisionDe;
+  if (original && numeroBase(numero) !== numeroBase(original.quote_number)) {
+    return { error: `Una revisión de ${original.quote_number} tiene que llevar su mismo número (${numeroBase(original.quote_number)} REV …)` };
+  }
 
   const year =
     anioDeNumero(numero) ?? (input.datos.sent_date ? Number(input.datos.sent_date.slice(0, 4)) : null) ?? new Date().getFullYear();
   // mode "add" con autorename: si ya hay un archivo con ese nombre, Dropbox le
   // agrega " (1)". Nunca se pisa una carta que ya estaba.
-  const subido = await uploadFile(`${quotesFolder(year)}/${nombreEnDropbox(input.nombre, numero)}`, input.bytes);
+  const subido = await uploadFile(`${quotesFolder(year)}/${nombreEnDropbox(input.nombre, numero, Boolean(original))}`, input.bytes);
 
   let url: string | null = null;
   let aviso: string | null = null;
@@ -102,8 +132,17 @@ export async function subirPdfManual(
       (e instanceof Error && /scope|permission/i.test(e.message) ? " (falta el scope sharing.write en la app de Dropbox)." : ".");
   }
 
-  const matched = await matchClientByName(db as unknown as Parameters<typeof matchClientByName>[0], orgId, input.datos.client_name);
-  const notes = `Subida manual (PDF): ${input.nombre}`;
+  const matched = original
+    ? original.client_id
+      ? { id: original.client_id, name: original.client_std_name ?? "", location_id: original.location_id, location_name: original.location_name }
+      : null
+    : await matchClientByName(db as unknown as Parameters<typeof matchClientByName>[0], orgId, input.datos.client_name);
+  const contacto = {
+    contact_name: original?.contact_name ?? null,
+    contact_phone: original?.contact_phone ?? null,
+    contact_email: original?.contact_email ?? null,
+  };
+  const notes = original ? `Revisión de ${original.quote_number} — subida manual (PDF): ${input.nombre}` : `Subida manual (PDF): ${input.nombre}`;
   const base = {
     org_id: orgId,
     quote_number: numero,
@@ -118,6 +157,7 @@ export async function subirPdfManual(
     rubro: input.datos.rubro,
     notes,
     source: "dropbox" as const,
+    ...(original ? contacto : {}),
   };
   type Ins = { data: { id: string } | null; error: { message: string; code?: string } | null };
   const insertar = (row: Record<string, unknown>) => db.from("sales_quotes").insert(row).select("id").single() as unknown as Promise<Ins>;
@@ -147,14 +187,12 @@ export async function subirPdfManual(
       invoice_status: null,
       client_name: input.datos.client_name,
       client_id: matched?.id ?? null,
-      client_std_name: matched?.name ?? null,
+      client_std_name: matched?.name || null,
       location_id: matched?.location_id ?? null,
       location_name: matched?.location_name ?? null,
       dropbox_shared_url: url,
       dropbox_path: subido.path,
-      contact_name: null,
-      contact_phone: null,
-      contact_email: null,
+      ...contacto,
       description: input.datos.description,
       notes,
       rubro: input.datos.rubro,
