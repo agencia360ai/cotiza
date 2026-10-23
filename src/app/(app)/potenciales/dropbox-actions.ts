@@ -9,8 +9,9 @@ import { parseQuotePdf } from "@/lib/ai/parse-quote-pdf";
 import { matchClientByName } from "@/lib/clients/match";
 import type { QuoteRow } from "@/lib/pipeline/types";
 import { estadoNumeracion, type Db, type EstadoNumeracion } from "@/lib/quotes/store";
-import { numeroEnTexto } from "@/lib/quotes/numeracion";
-import { subirPdfManual, usosDelNumero, type DatosPdf, type UsoNumero } from "@/lib/quotes/subir-pdf";
+import { mismoNumero, numeroBase, numeroEnTexto, revisionSiguiente } from "@/lib/quotes/numeracion";
+import { parseRev } from "@/lib/pipeline/revisions";
+import { subirPdfManual, usosDelNumero, type DatosPdf, type Original, type UsoNumero } from "@/lib/quotes/subir-pdf";
 
 type Result<T> = { error: string } | { ok: true; data: T };
 
@@ -263,6 +264,7 @@ export type LecturaPdf = {
   // La IA no pudo leerlo (sin saldo, PDF escaneado ilegible…): los datos van a
   // mano, pero el archivo se puede subir igual.
   iaError: string | null;
+  aviso?: string | null;
 };
 
 /** Lee el PDF (con IA) y dice si su número ya está usado. No sube nada. */
@@ -302,11 +304,15 @@ export async function leerPdfManual(nombre: string, base64: string): Promise<Res
   };
 }
 
-/** Para volver a avisar cuando cambian el número a mano. */
-export async function revisarNumeroCotizacion(numero: string): Promise<Result<UsoNumero[]>> {
+/**
+ * Para volver a avisar cuando cambian el número a mano. En una revisión las
+ * demás revisiones del número son lo esperado: solo cuenta la misma exacta.
+ */
+export async function revisarNumeroCotizacion(numero: string, soloExacto = false): Promise<Result<UsoNumero[]>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  return { ok: true, data: await usosDelNumero(c.supabase as unknown as Db, c.orgId, numero) };
+  const usos = await usosDelNumero(c.supabase as unknown as Db, c.orgId, numero);
+  return { ok: true, data: soloExacto ? usos.filter((u) => mismoNumero(u.numero, numero)) : usos };
 }
 
 /** Sube el PDF a Dropbox sin tocarlo y crea la cotización. */
@@ -326,5 +332,112 @@ export async function subirPdfCotizacion(
     return { ok: true, data: { row: r.row, aviso: r.aviso } };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "No se pudo subir el PDF" };
+  }
+}
+
+// ── Revisión de una cotización que ya existe ─────────────────────────────────
+
+async function cargarOriginal(c: { supabase: Awaited<ReturnType<typeof createClient>>; orgId: string }, id: string): Promise<Original | null> {
+  type Raw = Omit<Original, "client_std_name" | "location_name"> & { client: { name: string } | null; location: { name: string } | null };
+  const { data } = (await c.supabase
+    .from("sales_quotes")
+    .select(
+      "id, quote_number, status, client_name, client_id, location_id, contact_name, contact_phone, contact_email, description, amount_usd, rubro, client:clients(name), location:client_locations(name)",
+    )
+    .eq("org_id", c.orgId)
+    .eq("id", id)
+    .maybeSingle()) as { data: Raw | null };
+  if (!data) return null;
+  const { client, location, ...q } = data;
+  return {
+    ...q,
+    client_std_name: client?.name ?? null,
+    location_name: location?.name ?? null,
+    amount_usd: q.amount_usd === null ? null : Number(q.amount_usd),
+  };
+}
+
+/**
+ * Lee el PDF de la revisión y propone su número: el que dice el PDF si es de
+ * esta cotización y está libre, o la REV que sigue a todas las que ya hay en la
+ * plataforma y en Dropbox. Cliente y contacto son los de la original.
+ */
+export async function leerRevisionPdf(quoteId: string, nombre: string, base64: string): Promise<Result<LecturaPdf>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const pdf = pdfDe(base64);
+  if (typeof pdf === "string") return { error: pdf };
+  const original = await cargarOriginal(c, quoteId);
+  if (!original) return { error: "No encontré la cotización" };
+  const base = numeroBase(original.quote_number);
+  if (!base) return { error: `${original.quote_number} no tiene la forma "COT DC 26-211": corregí el número antes de subirle una revisión` };
+
+  let parsed: Awaited<ReturnType<typeof parseQuotePdf>> | null = null;
+  let iaError: string | null = null;
+  try {
+    parsed = await parseQuotePdf({ filename: nombre, data: pdf, isPdf: true });
+  } catch (e) {
+    iaError = e instanceof Error ? e.message : "No se pudo leer con IA";
+  }
+
+  const usosBase = await usosDelNumero(c.supabase as unknown as Db, c.orgId, base);
+  const usados = [original.quote_number, ...usosBase.map((u) => u.numero)];
+  const siguiente = revisionSiguiente(base, usados);
+  const delPdf = (parsed?.quote_number && numeroEnTexto(parsed.quote_number)) || numeroEnTexto(nombre);
+  const pdfSirve = delPdf !== null && numeroBase(delPdf) === base && parseRev(delPdf).rev > 0 && !usados.some((u) => mismoNumero(u, delPdf));
+  const numero = pdfSirve ? delPdf : siguiente;
+
+  // El PDF es lo que ve el cliente: si dice otro número, que se sepa antes de subirlo.
+  const aviso =
+    delPdf && numeroBase(delPdf) !== base
+      ? `El PDF dice ${delPdf}, no ${base}: revisá que sea una revisión de esta cotización.`
+      : delPdf && !mismoNumero(delPdf, numero)
+        ? `El PDF dice ${delPdf}; se registra como ${numero}. Si el cliente tiene que ver ${numero}, corregilo en el PDF antes de subirlo.`
+        : null;
+
+  return {
+    ok: true,
+    data: {
+      datos: {
+        quote_number: numero,
+        client_name: original.client_name,
+        amount_usd: parsed?.amount_usd ?? original.amount_usd,
+        sent_date: parsed?.sent_date ?? new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" }),
+        description: parsed?.description ?? original.description,
+        rubro: original.rubro ?? parsed?.rubro ?? null,
+      },
+      usos: usosBase.filter((u) => mismoNumero(u.numero, numero)),
+      siguiente,
+      iaError,
+      aviso,
+    },
+  };
+}
+
+/** Sube el PDF de la revisión a Dropbox sin tocarlo y la crea con el cliente de la original. */
+export async function subirRevisionPdf(
+  quoteId: string,
+  nombre: string,
+  base64: string,
+  datos: DatosPdf,
+): Promise<Result<{ row: QuoteRow; aviso: string | null }>> {
+  const c = await ctx();
+  if (!c.ok) return { error: c.error };
+  const pdf = pdfDe(base64);
+  if (typeof pdf === "string") return { error: pdf };
+  const original = await cargarOriginal(c, quoteId);
+  if (!original) return { error: "No encontré la cotización" };
+  try {
+    const r = await subirPdfManual(c.supabase as unknown as Db, c.orgId, {
+      nombre,
+      bytes: pdf,
+      datos: { ...datos, client_name: original.client_name },
+      revisionDe: original,
+    });
+    if ("error" in r) return { error: r.error };
+    revalidatePath("/potenciales");
+    return { ok: true, data: { row: r.row, aviso: r.aviso } };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "No se pudo subir la revisión" };
   }
 }

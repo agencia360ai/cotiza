@@ -32,6 +32,7 @@ import {
   Undo2,
   Archive,
   ArchiveRestore,
+  FilePlus2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MonthlyBarChart, RubroDonut, type MonthPoint, type DonutSlice } from "@/components/inicio/charts";
@@ -286,6 +287,7 @@ function CotizacionesTab({
   const [verTodasSeg, setVerTodasSeg] = useState(false);
   const [showDropbox, setShowDropbox] = useState(false);
   const [showSubirPdf, setShowSubirPdf] = useState(false);
+  const [revisando, setRevisando] = useState<QuoteRow | null>(null);
   // Sube cada vez que se crea una cotización: el próximo número cambió.
   const [numeroVersion, setNumeroVersion] = useState(0);
   const numeroUsado = () => setNumeroVersion((v) => v + 1);
@@ -800,6 +802,10 @@ function CotizacionesTab({
             setEditing(null);
             setEditingLetter(b);
           }}
+          onRevision={() => {
+            setRevisando(editing);
+            setEditing(null);
+          }}
           onClose={() => setEditing(null)}
           onSaved={(u) => {
             applyLocal(u);
@@ -831,6 +837,14 @@ function CotizacionesTab({
             setQuotes((prev) => [row, ...prev]);
             numeroUsado();
           }}
+        />
+      ) : null}
+
+      {revisando ? (
+        <SubirPdfDialog
+          revisionDe={revisando}
+          onClose={() => setRevisando(null)}
+          onCreated={(row) => setQuotes((prev) => [row, ...prev])}
         />
       ) : null}
 
@@ -1056,6 +1070,7 @@ function QuoteDrawer({
   onSaved,
   onDeleted,
   onEditLetter,
+  onRevision,
 }: {
   quote: QuoteRow;
   clients: ClientOpt[];
@@ -1063,6 +1078,7 @@ function QuoteDrawer({
   onSaved: (q: QuoteRow) => void;
   onDeleted: (id: string) => void;
   onEditLetter?: (b: QuoteLetterBundle) => void;
+  onRevision?: () => void;
 }) {
   const proyectosQbo = useProjectOptions();
   const [f, setF] = useState<QuoteRow>(quote);
@@ -1216,6 +1232,17 @@ function QuoteDrawer({
                 Publicar PDF a Dropbox
               </button>
             </>
+          ) : null}
+          {quote.status !== "borrador" && onRevision ? (
+            <button
+              type="button"
+              onClick={onRevision}
+              disabled={pubBusy || saving}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+              title="Subir el PDF de una revisión de esta cotización: queda como la REV que sigue, con el mismo cliente"
+            >
+              <FilePlus2 className="size-3.5" /> Subir revisión
+            </button>
           ) : null}
           {!f.dropbox_shared_url && f.dropbox_path ? (
             <button

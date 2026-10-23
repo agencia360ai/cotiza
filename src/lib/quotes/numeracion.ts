@@ -5,10 +5,34 @@
 // todo lo que salió, se haya hecho con la app o a mano. La base se suma para no
 // repetir un número que todavía es borrador y no se publicó.
 
+import { parseRev } from "@/lib/pipeline/revisions";
+
+const PATRON_NUMERO = /COT\s+[A-Za-z]{1,3}\s+\d{2}-\d{1,4}[A-Za-z]?(?:\s+(?:rev\.?\s*\d+|r\d+(?:\.\d+)?))?/i;
+
 /** El número que aparece en un texto (nombre de archivo, título), normalizado. */
 export function numeroEnTexto(texto: string): string | null {
-  const m = texto.match(/COT\s+[A-Za-z]{1,3}\s+\d{2}-\d{1,4}[A-Za-z]?(?:\s+(?:rev\.?\s*\d+|r\d+(?:\.\d+)?))?/i);
+  const m = texto.match(PATRON_NUMERO);
   return m ? m[0].replace(/\s+/g, " ").trim().toUpperCase() : null;
+}
+
+/** El texto con su número cambiado por otro, o null si no trae número. */
+export function reemplazarNumero(texto: string, numero: string): string | null {
+  return PATRON_NUMERO.test(texto) ? texto.replace(PATRON_NUMERO, numero) : null;
+}
+
+/** Mismo número y misma revisión, se escriba "REV 2", "Rev2" o "R2". */
+export function mismoNumero(a: string, b: string): boolean {
+  const base = numeroBase(a);
+  return base !== null && base === numeroBase(b) && parseRev(a).rev === parseRev(b).rev;
+}
+
+/**
+ * La revisión que sigue a todas las usadas de esa base:
+ * con "COT DC 26-211" y "COT DC 26-211 REV 1" → "COT DC 26-211 REV 2".
+ */
+export function revisionSiguiente(base: string, usados: string[]): string {
+  const revs = usados.filter((n) => numeroBase(n) === base).map((n) => parseRev(n).rev);
+  return `${base} REV ${Math.floor(Math.max(0, ...revs)) + 1}`;
 }
 
 /** Sin revisión ni letra: "COT DC 26-211 REV 2" → "COT DC 26-211". */

@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, CloudUpload, ExternalLink, FileText, Loade
 import { cn } from "@/lib/utils";
 import { RUBROS, type QuoteRow, type Rubro } from "@/lib/pipeline/types";
 import type { DatosPdf, UsoNumero } from "@/lib/quotes/subir-pdf";
-import { leerPdfManual, revisarNumeroCotizacion, subirPdfCotizacion } from "./dropbox-actions";
+import { leerPdfManual, leerRevisionPdf, revisarNumeroCotizacion, subirPdfCotizacion, subirRevisionPdf } from "./dropbox-actions";
 
 const input = "w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-slate-400 focus:outline-none disabled:bg-slate-50";
 const rotulo = "text-[11px] font-semibold uppercase tracking-wider text-slate-500";
@@ -20,6 +20,7 @@ type Item = {
   datos: DatosPdf;
   usos: UsoNumero[];
   iaError: string | null;
+  aviso: string | null;
   siguiente: string | null;
   error: string | null;
   resultado: { path: string | null; url: string | null; aviso: string | null } | null;
@@ -39,8 +40,19 @@ async function base64De(f: File): Promise<string> {
  * cual y queda creada la cotización. Si el número que se ve en el PDF ya está
  * usado, se avisa — no se bloquea, porque una revisión con el mismo número es
  * legítima.
+ *
+ * Con `revisionDe`, el PDF es la revisión siguiente de esa cotización: mismo
+ * número con la REV que toca, mismo cliente y contacto.
  */
-export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (row: QuoteRow) => void }) {
+export function SubirPdfDialog({
+  revisionDe,
+  onClose,
+  onCreated,
+}: {
+  revisionDe?: QuoteRow;
+  onClose: () => void;
+  onCreated: (row: QuoteRow) => void;
+}) {
   const [items, setItems] = useState<Item[]>([]);
   const [problema, setProblema] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -53,7 +65,7 @@ export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; on
     if (!files?.length) return;
     setProblema(null);
     const malos: string[] = [];
-    for (const f of Array.from(files)) {
+    for (const f of Array.from(files).slice(0, revisionDe ? 1 : undefined)) {
       if (f.type !== "application/pdf" && !/\.pdf$/i.test(f.name)) {
         malos.push(`${f.name}: no es PDF`);
         continue;
@@ -66,24 +78,34 @@ export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; on
       const base64 = await base64De(f);
       setItems((prev) => [
         ...prev,
-        { key, nombre: f.name, tamano: f.size, base64, fase: "leyendo", datos: vacio, usos: [], iaError: null, siguiente: null, error: null, resultado: null },
+        { key, nombre: f.name, tamano: f.size, base64, fase: "leyendo", datos: vacio, usos: [], iaError: null, aviso: null, siguiente: null, error: null, resultado: null },
       ]);
-      const r = await leerPdfManual(f.name, base64);
+      const r = revisionDe ? await leerRevisionPdf(revisionDe.id, f.name, base64) : await leerPdfManual(f.name, base64);
       if ("error" in r) cambiar(key, { fase: "revisar", error: r.error });
-      else cambiar(key, { fase: "revisar", datos: r.data.datos, usos: r.data.usos, iaError: r.data.iaError, siguiente: r.data.siguiente });
+      else
+        cambiar(key, {
+          fase: "revisar",
+          datos: r.data.datos,
+          usos: r.data.usos,
+          iaError: r.data.iaError,
+          aviso: r.data.aviso ?? null,
+          siguiente: r.data.siguiente,
+        });
     }
     if (malos.length) setProblema(malos.join(" · "));
   }
 
   async function revisarNumero(it: Item) {
     if (!it.datos.quote_number.trim()) return;
-    const r = await revisarNumeroCotizacion(it.datos.quote_number);
+    const r = await revisarNumeroCotizacion(it.datos.quote_number, Boolean(revisionDe));
     if ("ok" in r) cambiar(it.key, { usos: r.data });
   }
 
   async function subir(it: Item) {
     cambiar(it.key, { fase: "subiendo", error: null });
-    const r = await subirPdfCotizacion(it.nombre, it.base64, it.datos);
+    const r = revisionDe
+      ? await subirRevisionPdf(revisionDe.id, it.nombre, it.base64, it.datos)
+      : await subirPdfCotizacion(it.nombre, it.base64, it.datos);
     if ("error" in r) {
       cambiar(it.key, { fase: "revisar", error: r.error });
       return;
@@ -103,8 +125,14 @@ export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; on
               <Upload className="size-4" />
             </div>
             <div>
-              <h3 className="text-base font-semibold text-slate-900">Subir cotizaciones en PDF</h3>
-              <p className="text-xs text-slate-500">Van a Dropbox tal cual, sin cambiarlas, y quedan creadas acá.</p>
+              <h3 className="text-base font-semibold text-slate-900">
+                {revisionDe ? `Subir revisión de ${revisionDe.quote_number}` : "Subir cotizaciones en PDF"}
+              </h3>
+              <p className="text-xs text-slate-500">
+                {revisionDe
+                  ? `Va a Dropbox tal cual, como la revisión que sigue — para ${revisionDe.client_std_name ?? revisionDe.client_name ?? "el mismo cliente"}.`
+                  : "Van a Dropbox tal cual, sin cambiarlas, y quedan creadas acá."}
+              </p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="flex size-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100" aria-label="Cerrar">
@@ -113,20 +141,22 @@ export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; on
         </header>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            className="flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center hover:border-blue-300 hover:bg-blue-50/40"
-          >
-            <FileText className="size-6 text-blue-600" />
-            <span className="text-sm font-semibold text-slate-800">Elegir PDF</span>
-            <span className="text-xs text-slate-500">Uno o varios, hasta 5.5 MB cada uno</span>
-          </button>
+          {revisionDe && items.length > 0 ? null : (
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed border-slate-200 px-4 py-6 text-center hover:border-blue-300 hover:bg-blue-50/40"
+            >
+              <FileText className="size-6 text-blue-600" />
+              <span className="text-sm font-semibold text-slate-800">{revisionDe ? "Elegir el PDF de la revisión" : "Elegir PDF"}</span>
+              <span className="text-xs text-slate-500">{revisionDe ? "Hasta 5.5 MB" : "Uno o varios, hasta 5.5 MB cada uno"}</span>
+            </button>
+          )}
           <input
             ref={fileRef}
             type="file"
             accept="application/pdf,.pdf"
-            multiple
+            multiple={!revisionDe}
             className="hidden"
             onChange={(e) => {
               void agregar(e.target.files);
@@ -182,6 +212,12 @@ export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; on
                     </p>
                   ) : null}
 
+                  {it.aviso ? (
+                    <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-600/30">
+                      <AlertTriangle className="mt-px size-3.5 shrink-0" /> {it.aviso}
+                    </p>
+                  ) : null}
+
                   {it.usos.length > 0 ? (
                     <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-600/30" role="alert">
                       <p className="flex items-center gap-1.5 font-semibold">
@@ -195,15 +231,18 @@ export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; on
                         ))}
                       </ul>
                       <p className="mt-1 text-amber-800">
-                        Se puede subir igual (por ejemplo, si es una revisión). Si fue un error, corregí el número en el PDF
-                        {it.siguiente ? ` — el próximo libre es ${it.siguiente}` : ""}.
+                        {revisionDe
+                          ? `Esa revisión ya existe${it.siguiente ? ` — la que sigue es ${it.siguiente}` : ""}.`
+                          : `Se puede subir igual (por ejemplo, si es una revisión). Si fue un error, corregí el número en el PDF${
+                              it.siguiente ? ` — el próximo libre es ${it.siguiente}` : ""
+                            }.`}
                       </p>
                     </div>
                   ) : null}
 
                   <div className="mt-2 grid gap-2 sm:grid-cols-3">
                     <label className="block">
-                      <span className={rotulo}>Número (como dice el PDF)</span>
+                      <span className={rotulo}>{revisionDe ? "Número de la revisión" : "Número (como dice el PDF)"}</span>
                       <input
                         className={cn(input, !it.datos.quote_number.trim() && "border-red-300")}
                         value={it.datos.quote_number}
@@ -214,12 +253,12 @@ export function SubirPdfDialog({ onClose, onCreated }: { onClose: () => void; on
                       />
                     </label>
                     <label className="block sm:col-span-2">
-                      <span className={rotulo}>Cliente</span>
+                      <span className={rotulo}>{revisionDe ? "Cliente (el de la original)" : "Cliente"}</span>
                       <input
                         className={input}
                         value={it.datos.client_name ?? ""}
                         onChange={(e) => cambiarDatos(it.key, { client_name: e.target.value || null })}
-                        disabled={it.fase === "subiendo"}
+                        disabled={it.fase === "subiendo" || Boolean(revisionDe)}
                       />
                     </label>
                     <label className="block">
