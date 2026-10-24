@@ -7,6 +7,7 @@
 // el sync de fechas necesita exactamente lo mismo para facturas y compras.
 
 import type { QboToolResult } from "./mcp";
+import type { CuentaDesglose, SeccionDesglose, TipoSeccion } from "./desglose-core";
 
 /** Objetos `{…}` de nivel superior dentro de un blob (ignora llaves en strings). */
 export function parseConcatenatedObjects(text: string): Record<string, unknown>[] {
@@ -102,7 +103,7 @@ export function toIsoDate(v: unknown): string | null {
 
 /** Un mes con movimiento del proyecto. `month` = primer día: "2026-03-01". */
 export type MonthPnl = { month: string; income: number; cost: number };
-export type Pnl = { income: number; cost: number; meses: MonthPnl[] };
+export type Pnl = { income: number; cost: number; meses: MonthPnl[]; desglose?: SeccionDesglose[] };
 
 type PnlRow = { group?: string; Summary?: { ColData?: { value?: string }[] }; Rows?: { Row?: PnlRow[] } };
 // Cabecera de columnas. Con summarize_column_by=Month cada columna es un mes y
@@ -122,13 +123,8 @@ function montoDe(raw: string | undefined): number {
 const ES_INGRESO = (g: string) => g === "income" || g === "otherincome";
 const ES_GASTO = (g: string) => g === "cogs" || g === "expenses" || g === "otherexpenses" || g.includes("expense");
 
-/**
- * Parser del ProfitAndLoss de QBO (un solo customer/project). Toma los totales
- * de las secciones de nivel superior; si hay NetIncome, cost = income - net.
- * Con summarize_column_by=Month desglosa además cada mes: el total sigue
- * saliendo de la ÚLTIMA columna con valor, que es exactamente la de Total.
- */
-export function parsePnl(result: QboToolResult): Pnl | null {
+/** El reporte dentro de lo que contestó el gateway, o null si no es JSON. */
+function reporteDe(result: QboToolResult): unknown | null {
   let json: unknown = result.structuredContent;
   if (json === undefined) {
     const text = (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
@@ -141,7 +137,29 @@ export function parsePnl(result: QboToolResult): Pnl | null {
       return null;
     }
   }
-  const report = (json as { Report?: unknown }).Report ?? json;
+  return (json as { Report?: unknown }).Report ?? json;
+}
+
+/** Columna → mes ("2026-03-01"), para las columnas que son meses. */
+function mesesDeColumnas(report: unknown): Map<number, string> {
+  const cols = ((report as { Columns?: { Column?: PnlColumn[] } }).Columns?.Column ?? []) as PnlColumn[];
+  const mesPorCol = new Map<number, string>();
+  cols.forEach((c, i) => {
+    const inicio = c.MetaData?.find((m) => m.Name === "StartDate")?.Value;
+    if (inicio && /^\d{4}-\d{2}-\d{2}/.test(inicio)) mesPorCol.set(i, `${inicio.slice(0, 7)}-01`);
+  });
+  return mesPorCol;
+}
+
+/**
+ * Parser del ProfitAndLoss de QBO (un solo customer/project). Toma los totales
+ * de las secciones de nivel superior; si hay NetIncome, cost = income - net.
+ * Con summarize_column_by=Month desglosa además cada mes: el total sigue
+ * saliendo de la ÚLTIMA columna con valor, que es exactamente la de Total.
+ */
+export function parsePnl(result: QboToolResult): Pnl | null {
+  const report = reporteDe(result);
+  if (report === null) return null;
   const rows = ((report as { Rows?: { Row?: PnlRow[] } }).Rows?.Row ?? []) as PnlRow[];
 
   const total = (r: PnlRow): number => {
@@ -177,12 +195,7 @@ export function parsePnl(result: QboToolResult): Pnl | null {
 // Desglose mensual. Sin summarize_column_by=Month (o si el gateway lo ignora)
 // no hay columnas con StartDate y devuelve [] — el caller cae al camino viejo.
 function parseMeses(report: unknown, rows: PnlRow[]): MonthPnl[] {
-  const cols = ((report as { Columns?: { Column?: PnlColumn[] } }).Columns?.Column ?? []) as PnlColumn[];
-  const mesPorCol = new Map<number, string>();
-  cols.forEach((c, i) => {
-    const inicio = c.MetaData?.find((m) => m.Name === "StartDate")?.Value;
-    if (inicio && /^\d{4}-\d{2}-\d{2}/.test(inicio)) mesPorCol.set(i, `${inicio.slice(0, 7)}-01`);
-  });
+  const mesPorCol = mesesDeColumnas(report);
   if (mesPorCol.size === 0) return [];
 
   const acc = new Map<string, { income: number; cost: number }>();
@@ -223,18 +236,8 @@ export type SeccionPnl = {
  * mira: nombre de cuenta y monto, sin interpretar nada.
  */
 export function desglosarPnl(result: QboToolResult): SeccionPnl[] {
-  let json: unknown = result.structuredContent;
-  if (json === undefined) {
-    const text = (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
-    const start = text.indexOf("{");
-    if (start < 0) return [];
-    try {
-      json = JSON.parse(text.slice(start));
-    } catch {
-      return [];
-    }
-  }
-  const report = (json as { Report?: unknown }).Report ?? json;
+  const report = reporteDe(result);
+  if (report === null) return [];
   const rows = ((report as { Rows?: { Row?: PnlRowDetalle[] } }).Rows?.Row ?? []) as PnlRowDetalle[];
 
   const ultimoMonto = (cd: { value?: string }[] | undefined): number => {
@@ -269,6 +272,65 @@ export function desglosarPnl(result: QboToolResult): SeccionPnl[] {
 }
 
 type PnlRowDetalle = PnlRow & { ColData?: { value?: string }[]; Rows?: { Row?: PnlRowDetalle[] } };
+
+const TIPO_DE_GRUPO: Record<string, TipoSeccion> = {
+  income: "ingreso",
+  cogs: "costo_venta",
+  expenses: "gasto",
+  otherincome: "otro_ingreso",
+  otherexpenses: "otro_gasto",
+};
+
+/**
+ * El P&L del proyecto por cuenta y por mes, para la pantalla del proyecto.
+ *
+ * A diferencia de `desglosarPnl` (que es para diagnosticar y lista también los
+ * subtotales), acá solo cuentan las cuentas hoja: con subcuentas, el total del
+ * padre ya es la suma de las hijas y listarlo las contaría dos veces. Las
+ * cuentas sin movimiento no se guardan.
+ */
+export function parseDesglose(result: QboToolResult): SeccionDesglose[] | null {
+  const report = reporteDe(result);
+  if (report === null) return null;
+  const rows = ((report as { Rows?: { Row?: PnlRowDetalle[] } }).Rows?.Row ?? []) as PnlRowDetalle[];
+  const mesPorCol = mesesDeColumnas(report);
+  const ultimoMonto = (cd: { value?: string }[] | undefined): number => {
+    for (let i = (cd ?? []).length - 1; i >= 1; i--) {
+      const raw = cd![i].value ?? "";
+      if (raw) return montoDe(raw);
+    }
+    return 0;
+  };
+
+  const hojas = (r: PnlRowDetalle, out: CuentaDesglose[], prof = 0): void => {
+    if (prof > 8) return;
+    for (const hija of r.Rows?.Row ?? []) {
+      if (hija.ColData?.[0]?.value) {
+        const meses: Record<string, number> = {};
+        for (const [i, mes] of mesPorCol) {
+          const v = montoDe(hija.ColData[i]?.value);
+          if (v !== 0) meses[mes] = (meses[mes] ?? 0) + v;
+        }
+        const total = ultimoMonto(hija.ColData);
+        if (total !== 0 || Object.keys(meses).length > 0) out.push({ nombre: hija.ColData[0].value, total, meses });
+      }
+      hojas(hija, out, prof + 1);
+    }
+  };
+
+  const out: SeccionDesglose[] = [];
+  for (const r of rows) {
+    const tipo = TIPO_DE_GRUPO[(r.group ?? "").toLowerCase()];
+    if (!tipo) continue;
+    const cuentas: CuentaDesglose[] = [];
+    hojas(r, cuentas);
+    const total = ultimoMonto(r.Summary?.ColData);
+    if (total === 0 && cuentas.length === 0) continue;
+    cuentas.sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+    out.push({ tipo, total, cuentas });
+  }
+  return out;
+}
 
 /** Primer y último mes con movimiento (income o cost ≠ 0). */
 export function ventanaDeMeses(meses: MonthPnl[]): { first: string; last: string } | null {

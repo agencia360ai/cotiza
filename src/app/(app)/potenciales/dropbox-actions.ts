@@ -9,7 +9,7 @@ import { parseQuotePdf } from "@/lib/ai/parse-quote-pdf";
 import { matchClientByName } from "@/lib/clients/match";
 import type { QuoteRow } from "@/lib/pipeline/types";
 import { estadoNumeracion, type Db, type EstadoNumeracion } from "@/lib/quotes/store";
-import { mismoNumero, numeroBase, numeroEnTexto, revisionSiguiente } from "@/lib/quotes/numeracion";
+import { mismoNumero, numeroBase, numeroDeLectura, numeroEnTexto, revisionSiguiente } from "@/lib/quotes/numeracion";
 import { parseRev } from "@/lib/pipeline/revisions";
 import { bytesDePdf, subirPdfManual, usosDelNumero, type DatosPdf, type UsoNumero } from "@/lib/quotes/subir-pdf";
 import { cargarOriginal } from "@/lib/quotes/revision";
@@ -155,7 +155,7 @@ export async function importDropboxFile(path: string, name: string, fileId: stri
           : ("image/jpeg" as const);
     const parsed = await parseQuotePdf({ filename: name, data, isPdf, imageMime });
 
-    const number = (parsed.quote_number?.trim() || guessNumber(name) || name).toUpperCase();
+    const number = numeroDeLectura(parsed.quote_number, name) ?? (parsed.quote_number?.trim() || name).toUpperCase();
     const year = (parsed.sent_date ? Number(parsed.sent_date.slice(0, 4)) : yearFromNumber(number)) || new Date().getFullYear();
     const notes = `Importado de Dropbox: ${name}`;
     const matched = await matchClientByName(c.supabase, c.orgId, parsed.client_name);
@@ -274,7 +274,7 @@ export async function leerPdfManual(nombre: string, base64: string): Promise<Res
   }
   // El número que se VE en la cotización manda; el del nombre del archivo es
   // el respaldo.
-  const numero = (parsed?.quote_number && numeroEnTexto(parsed.quote_number)) || numeroEnTexto(nombre) || "";
+  const numero = numeroDeLectura(parsed?.quote_number, nombre) ?? "";
   const db = c.supabase as unknown as Db;
   const [usos, estado] = await Promise.all([numero ? usosDelNumero(db, c.orgId, numero) : Promise.resolve([]), estadoNumeracion(db, c.orgId)]);
   return {
@@ -354,7 +354,7 @@ export async function leerRevisionPdf(quoteId: string, nombre: string, base64: s
   const usosBase = await usosDelNumero(c.supabase as unknown as Db, c.orgId, base);
   const usados = [original.quote_number, ...usosBase.map((u) => u.numero)];
   const siguiente = revisionSiguiente(base, usados);
-  const delPdf = (parsed?.quote_number && numeroEnTexto(parsed.quote_number)) || numeroEnTexto(nombre);
+  const delPdf = numeroDeLectura(parsed?.quote_number, nombre);
   const pdfSirve = delPdf !== null && numeroBase(delPdf) === base && parseRev(delPdf).rev > 0 && !usados.some((u) => mismoNumero(u, delPdf));
   const numero = pdfSirve ? delPdf : siguiente;
 

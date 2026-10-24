@@ -7,6 +7,7 @@ import {
   mayor,
   mismoNumero,
   numeroBase,
+  numeroDeLectura,
   numeroEnTexto,
   reemplazarNumero,
   revisionSiguiente,
@@ -77,4 +78,16 @@ test("nombre de una revisión en Dropbox: siempre con la revisión exacta", asyn
   assert.equal(nombreEnDropbox("COT DC 26-211 - Cantina.pdf", n, true), "COT DC 26-211 REV 2 - Cantina.pdf", "sin la REV quedaría como la original");
   assert.equal(nombreEnDropbox("COT DC 26-211 Rev 1 - Cantina.pdf", n, true), "COT DC 26-211 REV 2 - Cantina.pdf");
   assert.equal(nombreEnDropbox("Cantina actualizada.pdf", n, true), "COT DC 26-211 REV 2 - Cantina actualizada.pdf");
+});
+
+test("número leído por la IA: con COT y con la revisión que trae el nombre del archivo", () => {
+  // Los tres casos reales que entraron mal desde Dropbox.
+  assert.equal(numeroDeLectura("DC 26-249", "COT DC 26-249 Cuarto frío congelados 80 t.pdf"), "COT DC 26-249");
+  assert.equal(numeroDeLectura("DC 26-244", "COT DC 26-244 REV 2 Fletcher Estudio - Le Lien.pdf"), "COT DC 26-244 REV 2");
+  assert.equal(numeroDeLectura("Cotización DC 26-243", "COT DC 26-243 Fletcher Estudio - NAZ.pdf"), "COT DC 26-243");
+  assert.equal(numeroDeLectura("COT DC 26-211 REV 1", "Cantina.pdf"), "COT DC 26-211 REV 1", "lo que se ve en la carta manda");
+  assert.equal(numeroDeLectura("COT DC 26-211 REV 3", "COT DC 26-211 REV 2 - Cantina.pdf"), "COT DC 26-211 REV 3");
+  assert.equal(numeroDeLectura("COT DC 26-300", "COT DC 26-211 - Cantina.pdf"), "COT DC 26-300", "otro número en el nombre no lo pisa");
+  assert.equal(numeroDeLectura("", "COT DC 26-211 - Cantina.pdf"), "COT DC 26-211");
+  assert.equal(numeroDeLectura(null, "Cantina.pdf"), null);
 });

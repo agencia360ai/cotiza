@@ -1,7 +1,8 @@
 import "server-only";
 import { fetchQboCustomers } from "./customers";
 import { listQboTools, withQboSession } from "./mcp";
-import { parsePnl, desglosarPnl, type MonthPnl, type Pnl, type SeccionPnl } from "./parse";
+import { parsePnl, parseDesglose, desglosarPnl, type MonthPnl, type Pnl, type SeccionPnl } from "./parse";
+import type { DesgloseProyecto } from "./desglose-core";
 import { gastoConHoras, type HorasProyecto } from "./horas-core";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
@@ -238,7 +239,11 @@ export async function fetchProjectFinancials(
       for (const variant of variants) {
         let fin: Pnl | null;
         try {
-          fin = parsePnl(await call(tool.name, variant));
+          const crudo = await call(tool.name, variant);
+          fin = parsePnl(crudo);
+          // El desglose sale del MISMO reporte que el total: hereda las
+          // guardias de abajo sin tener que repetirlas.
+          if (fin) fin.desglose = parseDesglose(crudo) ?? undefined;
         } catch {
           continue; // esta variante falló: probar la siguiente
         }
@@ -290,6 +295,30 @@ export async function fetchProjectFinancials(
   return { fin: out, errored, desde: start };
 }
 
+
+/**
+ * El desglose de UN proyecto, a pedido: para los que todavía no lo tienen
+ * guardado (los cerrados no se vuelven a consultar en cada Actualizar). Pasa
+ * por las mismas guardias que el refresh, así que un rollup del cliente o de la
+ * empresa no se muestra como si fuera del proyecto.
+ */
+export async function fetchDesgloseDeProyecto(
+  qbJobId: string,
+): Promise<{ ok: true; pnl: Pnl; desglose: DesgloseProyecto } | { error: string }> {
+  const lista = await fetchQboProjectsList();
+  const p = lista.find((x) => x.id === qbJobId);
+  if (!p) return { error: "El proyecto no aparece en QuickBooks." };
+  const { fin, errored, desde } = await fetchProjectFinancials([{ id: p.id, parentId: p.parentId, siblings: p.siblings }]);
+  const f = fin.get(p.id);
+  if (!f) {
+    return {
+      error: errored.has(p.id)
+        ? "QuickBooks no contestó — probá de nuevo en un minuto."
+        : "QuickBooks devolvió el total del cliente o de la empresa, no el de este proyecto.",
+    };
+  }
+  return { ok: true, pnl: f, desglose: { desde, actualizado: new Date().toISOString(), secciones: f.desglose ?? [] } };
+}
 
 // ── Diagnóstico de UN proyecto ───────────────────────────────────────────────
 // Cuando un proyecto sale "sin datos de QBO" hay varias razones posibles
