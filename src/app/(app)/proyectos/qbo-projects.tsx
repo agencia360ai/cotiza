@@ -16,6 +16,7 @@ import {
   Package,
   Briefcase,
   ChevronDown,
+  ChevronRight,
   FileText,
   ArrowUpRight,
 } from "lucide-react";
@@ -38,6 +39,8 @@ import {
   type MesMonto,
 } from "@/lib/quickbooks/prorate";
 import { gastoConHoras, horasEnRango, type HorasProyecto } from "@/lib/quickbooks/horas-core";
+import { bal, balCompact, fmtCorta, fmtHoras, marginTextColor, MESES_CORTOS } from "./formato";
+import { ResumenProyecto } from "./resumen-proyecto";
 
 // Identidad visual por rubro (misma paleta que el donut del Inicio):
 // DC índigo · DM sky · DS esmeralda · DV ámbar. Ícono + color, nunca solo color.
@@ -87,14 +90,6 @@ const SIN_FIN: Partial<Record<ProjectBizStatus, { label: string; title: string; 
 // resto se alcanza filtrando/buscando. No afecta los totales ni el resumen.
 const RENDER_CAP = 200;
 
-// Mismo $ que el resto de la app (los "B/." viejos desentonaban con el Inicio).
-function bal(n: number): string {
-  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function balCompact(n: number): string {
-  return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-}
-const fmtHoras = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 1 });
 // Del proyecto entero, no del rango: es para saber de quién son las horas.
 function detalleHoras(h: HorasProyecto): string {
   const lineas = h.tecnicos.map((t) => `${t.nombre}: ${fmtHoras(t.horas)} h · ${bal(t.costo)}`);
@@ -112,18 +107,8 @@ function relTime(ts: number): string {
   if (h < 24) return `hace ${h} h`;
   return `hace ${Math.round(h / 24)} d`;
 }
-function marginTextColor(m: number): string {
-  if (m >= 0.4) return "text-emerald-600";
-  if (m >= 0.2) return "text-amber-600";
-  return "text-rose-600";
-}
 
 const hoyPanama = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" });
-const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-function fmtCorta(iso: string): string {
-  const [y, m] = iso.split("-").map(Number);
-  return `${MESES_CORTOS[(m ?? 1) - 1]} ${String(y).slice(2)}`;
-}
 // Fecha de calendario: día, mes y año, sin abreviar el año — "ago 26" se leía
 // tanto como "26 de agosto" como "agosto de 2026", y en un board donde el rango
 // de fechas cambia lo que muestran todas las demás columnas esa duda cuesta.
@@ -249,6 +234,8 @@ export function QboProjectsBoard() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [editingDates, setEditingDates] = useState<string | null>(null);
+  // El proyecto abierto con su resumen (uno a la vez: es para mirar uno, no comparar).
+  const [detalle, setDetalle] = useState<string | null>(null);
   const [editingQuotes, setEditingQuotes] = useState<string | null>(null);
   const [quotes, setQuotes] = useState<QuotesPorProyecto>({});
   const quotesDe = (p: QboProject) => {
@@ -700,9 +687,11 @@ export function QboProjectsBoard() {
   // y nadie descubre que hay columnas más allá.
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const [hayMas, setHayMas] = useState(false);
+  const [anchoTabla, setAnchoTabla] = useState<number | null>(null);
   const medirScroll = (el: HTMLDivElement | null) => {
     if (!el) return;
     setHayMas(el.scrollWidth - el.clientWidth - el.scrollLeft > 4);
+    setAnchoTabla(el.clientWidth);
   };
   const onScrollTabla = (e: React.UIEvent<HTMLDivElement>) => medirScroll(e.currentTarget);
   useEffect(() => {
@@ -1076,6 +1065,9 @@ export function QboProjectsBoard() {
                       quotes={quotesDe(e.p)}
                       codigo={codigoDeProyecto(e.p.name) ?? codigoDeProyecto(e.p.fullName)}
                       editing={editingDates === e.p.id}
+                      detalle={detalle === e.p.id}
+                      onToggleDetalle={() => setDetalle((prev) => (prev === e.p.id ? null : e.p.id))}
+                      anchoVisible={anchoTabla}
                       pickingQuotes={editingQuotes === e.p.id}
                       onTogglePickQuotes={() => setEditingQuotes((prev) => (prev === e.p.id ? null : e.p.id))}
                       onQuotesChanged={() => void getQuotesPorProyecto().then(setQuotes)}
@@ -1143,7 +1135,10 @@ export function QboProjectsBoard() {
 type PuntoMes = { month: string; cobro: number; gasto: number; cobrado: number | null };
 
 function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: boolean }) {
-  const [hover, setHover] = useState<number | null>(null);
+  const [hoverIdx, setHover] = useState<number | null>(null);
+  // Un filtro puede achicar la serie con el mouse encima: el índice viejo ya
+  // no existe y leerlo rompía la pantalla entera.
+  const hover = hoverIdx !== null && hoverIdx < data.length ? hoverIdx : null;
   const W = 720;
   const H = 168;
   const PAD_L = 8;
@@ -1871,6 +1866,9 @@ function ProjectRow({
   quotes,
   codigo,
   editing,
+  detalle,
+  onToggleDetalle,
+  anchoVisible,
   pickingQuotes,
   onTogglePickQuotes,
   onQuotesChanged,
@@ -1886,6 +1884,11 @@ function ProjectRow({
   quotes: { count: number; amount: number } | undefined;
   codigo: string | null;
   editing: boolean;
+  detalle: boolean;
+  onToggleDetalle: () => void;
+  // Ancho visible de la tabla: el resumen se queda en pantalla aunque la tabla
+  // se desplace de costado (en el celular es más ancha que la pantalla).
+  anchoVisible: number | null;
   pickingQuotes: boolean;
   onTogglePickQuotes: () => void;
   onQuotesChanged: () => void;
@@ -1964,9 +1967,16 @@ function ProjectRow({
   const celdas: Record<ColKey, ReactNode> = {
     nombre: (
       <td key="nombre" className="max-w-[190px] px-3 py-2.5 sm:max-w-[250px] xl:max-w-[285px]">
-        <div className="truncate font-semibold text-slate-900" title={p.fullName}>
-          {p.name}
-        </div>
+        <button
+          type="button"
+          onClick={onToggleDetalle}
+          aria-expanded={detalle}
+          title={`${p.fullName} — ${detalle ? "cerrar" : "ver"} el resumen`}
+          className="flex max-w-full cursor-pointer items-center gap-1 text-left"
+        >
+          <ChevronRight className={cn("size-3.5 shrink-0 text-slate-400 transition-transform", detalle && "rotate-90 text-slate-700")} />
+          <span className="truncate font-semibold text-slate-900">{p.name}</span>
+        </button>
         {/* Sin columna de Cliente el dato baja acá: es lo que más se necesita
             cuando dos proyectos se llaman parecido. */}
         {cols.ocultas.has("cliente") ? (
@@ -2178,7 +2188,19 @@ function ProjectRow({
 
   return (
     <>
-      <tr className={cn("border-b border-slate-50 last:border-0 hover:bg-slate-50/60", cerrado && "opacity-60")}>
+      <tr
+        // Tocar la fila abre el resumen; lo que tiene su propio clic (estado,
+        // fechas, cotización) sigue haciendo lo suyo.
+        onClick={(ev) => {
+          if ((ev.target as HTMLElement).closest("button, a, input, select, textarea, label")) return;
+          onToggleDetalle();
+        }}
+        className={cn(
+          "cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60",
+          cerrado && !detalle && "opacity-60",
+          detalle && "border-slate-100 bg-slate-50/60",
+        )}
+      >
         <td className="px-2 py-2.5">
           <span className={cn("flex size-8 items-center justify-center rounded-xl", meta.chip)} title={meta.label}>
             <RubroIcon className="size-4" />
@@ -2203,6 +2225,16 @@ function ProjectRow({
           </button>
         </td>
       </tr>
+      {detalle ? (
+        <tr className="border-b border-slate-100 bg-slate-50/60">
+          <td colSpan={cols.visibles.length + 2} className="p-0">
+            {/* z-10: por encima del degradado que avisa que hay más columnas. */}
+            <div className="sticky left-0 z-10 px-2 pb-3 sm:px-3" style={anchoVisible ? { width: anchoVisible } : undefined}>
+              <ResumenProyecto p={p} rangeActive={rangeActive} />
+            </div>
+          </td>
+        </tr>
+      ) : null}
       {editing ? (
         <tr className="border-b border-slate-50">
           <td colSpan={cols.visibles.length + 2} className="px-3 pb-3">

@@ -15,6 +15,20 @@ export function numeroEnTexto(texto: string): string | null {
   return m ? m[0].replace(/\s+/g, " ").trim().toUpperCase() : null;
 }
 
+/**
+ * El número que leyó la IA, completado con el del nombre del archivo. La IA a
+ * veces lo copia como lo dice la carta ("Cotización DC 26-249", sin el COT) o
+ * se come la revisión que el nombre sí trae ("COT DC 26-244 REV 2"). Sin el
+ * COT el número no agrupa con sus revisiones ni cuenta para el correlativo.
+ */
+export function numeroDeLectura(leido: string | null | undefined, archivo: string): string | null {
+  const limpio = (leido ?? "").replace(/^\s*cotizaci[oó]n\s+(?:n[º°o.]*\s*)?/i, "").trim();
+  const delPdf = limpio ? (numeroEnTexto(limpio) ?? numeroEnTexto(`COT ${limpio}`)) : null;
+  const delNombre = numeroEnTexto(archivo);
+  if (delPdf && delNombre && numeroBase(delPdf) === numeroBase(delNombre) && parseRev(delNombre).rev > parseRev(delPdf).rev) return delNombre;
+  return delPdf ?? delNombre;
+}
+
 /** El texto con su número cambiado por otro, o null si no trae número. */
 export function reemplazarNumero(texto: string, numero: string): string | null {
   return PATRON_NUMERO.test(texto) ? texto.replace(PATRON_NUMERO, numero) : null;

@@ -7,6 +7,7 @@ import { hasQboConfig, QboTransportError } from "@/lib/quickbooks/mcp";
 import {
   fetchQboProjectsList,
   fetchProjectFinancials,
+  fetchDesgloseDeProyecto,
   diagnosticarPnl,
   margenDe,
   type QboProject,
@@ -19,6 +20,7 @@ import { fetchFechasReales, diagnosticarFechas, type DiagnosticoFechas } from "@
 import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 import { fetchHorasTecnicos } from "@/lib/quickbooks/horas";
 import { normalizarHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core";
+import { normalizarDesglose, type DesgloseProyecto } from "@/lib/quickbooks/desglose-core";
 
 export type QboProjectsResult =
   | {
@@ -280,6 +282,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // Financials SOLO de los abiertos.
   let financialsOk = false;
   let mesesDesde: string | null = null;
+  const desgloses = new Map<string, DesgloseProyecto>();
   try {
     const { fin, errored, desde } = await fetchProjectFinancials(
       list.filter((p) => !p.closed).map((p) => ({ id: p.id, parentId: p.parentId, siblings: p.siblings })),
@@ -294,6 +297,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
           p.income = f.income;
           p.cost = f.cost;
           p.meses = f.meses;
+          if (f.desglose) desgloses.set(p.id, { desde, actualizado: new Date().toISOString(), secciones: f.desglose });
           // Ventana real de actividad. Solo se pisa si QBO reportó movimiento:
           // un proyecto recién abierto conserva lo que ya se sabía de él.
           const v = ventanaDeMeses(f.meses);
@@ -412,6 +416,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     if (upErr) return { ok: false, error: upErr.message };
     await guardarMeses(supabase, orgId, list, nowIso);
     await guardarHoras(supabase, orgId, list, horasGuardadas);
+    await guardarDesgloses(supabase, orgId, desgloses);
 
     // Reconciliar: borrar filas del año que ya NO vinieron de QBO (proyecto
     // borrado/renombrado) para que no queden huérfanas inflando conteos.
@@ -518,6 +523,68 @@ async function guardarHoras(
       ),
     );
     if (res.some((r) => isMissingColumn(r.error))) return;
+  }
+}
+
+// Best-effort, como las horas: sin la 0052 el resto ya quedó guardado.
+async function guardarDesgloses(supabase: DB, orgId: string, desgloses: Map<string, DesgloseProyecto>): Promise<void> {
+  const lista = [...desgloses];
+  for (let i = 0; i < lista.length; i += 20) {
+    const res = await Promise.all(
+      lista.slice(i, i + 20).map(([id, d]) =>
+        supabase.from("qbo_project_state").update({ desglose: d }).eq("org_id", orgId).eq("qb_job_id", id),
+      ),
+    );
+    if (res.some((r) => isMissingColumn(r.error))) return;
+  }
+}
+
+export type DesgloseResult =
+  | {
+      ok: true;
+      desglose: DesgloseProyecto | null;
+      // false = falta la 0052: lo que se traiga se muestra pero no queda guardado.
+      guardable: boolean;
+    }
+  | { ok: false; error: string };
+
+/**
+ * El desglose del proyecto para el resumen que se abre al tocarlo. Sin
+ * `traer`, lo guardado (rápido, sin QuickBooks). Con `traer`, lo pide a
+ * QuickBooks y lo guarda: para los que todavía no lo tienen.
+ */
+export async function getDesgloseProyecto(qbJobId: string, traer = false): Promise<DesgloseResult> {
+  const supabase = await createClient();
+  const { data: u } = await supabase.auth.getUser();
+  if (!u.user) return { ok: false, error: "Sesión expirada" };
+  const orgId = await getActiveOrgId();
+  if (!orgId) return { ok: false, error: "Sin organización" };
+  const sinPermiso = await sinAcceso("proyectos", "inicio");
+  if (sinPermiso) return { ok: false, error: sinPermiso };
+
+  if (!traer) {
+    const { data, error } = (await supabase
+      .from("qbo_project_state")
+      .select("desglose")
+      .eq("org_id", orgId)
+      .eq("qb_job_id", qbJobId)
+      .maybeSingle()) as { data: { desglose: unknown } | null; error: { message: string; code?: string } | null };
+    if (isMissingColumn(error)) return { ok: true, desglose: null, guardable: false };
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, desglose: normalizarDesglose(data?.desglose), guardable: true };
+  }
+
+  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
+  // El gateway se cuelga con dos pedidos a la vez: si hay un Actualizar en
+  // curso, esperar a que termine.
+  await inflight.get(orgId)?.catch(() => null);
+  try {
+    const r = await fetchDesgloseDeProyecto(qbJobId);
+    if ("error" in r) return { ok: false, error: r.error };
+    const { error } = await supabase.from("qbo_project_state").update({ desglose: r.desglose }).eq("org_id", orgId).eq("qb_job_id", qbJobId);
+    return { ok: true, desglose: r.desglose, guardable: !isMissingColumn(error) };
+  } catch (e) {
+    return { ok: false, error: mensajeDeFallo(e) };
   }
 }
 
