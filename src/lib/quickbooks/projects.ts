@@ -3,7 +3,7 @@ import { fetchQboCustomers } from "./customers";
 import { listQboTools, withQboSession } from "./mcp";
 import { parsePnl, parseDesglose, desglosarPnl, type MonthPnl, type Pnl, type SeccionPnl } from "./parse";
 import type { DesgloseProyecto } from "./desglose-core";
-import { gastoConHoras, type HorasProyecto } from "./horas-core";
+import { margenConHoras, type HorasProyecto } from "./horas-core";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
 export type QboProject = {
@@ -131,8 +131,7 @@ export function marginOf(income: number | null, cost: number | null): number | n
  * horas no lo arregla, solo lo esconde.
  */
 export function margenDe(income: number | null, costContable: number | null, horas: HorasProyecto | null): number | null {
-  if (costContable !== null && costContable < 0) return null;
-  return marginOf(income, gastoConHoras(costContable, horas));
+  return margenConHoras(income, costContable, horas);
 }
 
 // ── Rentabilidad por proyecto ────────────────────────────────────────────────

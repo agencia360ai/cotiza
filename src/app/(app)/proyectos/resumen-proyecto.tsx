@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Clock, Loader2, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { QboProject } from "@/lib/quickbooks/projects";
-import { gastoConHoras } from "@/lib/quickbooks/horas-core";
+import { gastoConHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core";
 import {
   esCosto,
   gastoPorMes,
@@ -17,6 +17,7 @@ import {
   type SerieGasto,
 } from "@/lib/quickbooks/desglose-core";
 import { getDesgloseProyecto } from "./qbo-actions";
+import { CargarHoras } from "./cargar-horas";
 import { bal, balCompact, fmtCorta, fmtHoras, marginTextColor, MESES_CORTOS } from "./formato";
 
 // Cada categoría de costo tiene su color en la lista de cuentas Y en la
@@ -44,8 +45,18 @@ const NEGATIVO =
  * proyecto en QuickBooks —ingresos menos costos, cuenta por cuenta, más las
  * horas de técnicos— y cómo se fue gastando mes a mes.
  */
-export function ResumenProyecto({ p, rangeActive }: { p: QboProject; rangeActive: boolean }) {
+export function ResumenProyecto({
+  p,
+  rangeActive,
+  onHorasCambiadas,
+}: {
+  p: QboProject;
+  rangeActive: boolean;
+  // Sin esto el resumen solo muestra: cargar horas necesita avisarle al tablero.
+  onHorasCambiadas?: (h: HorasProyecto | null) => void;
+}) {
   const [desglose, setDesglose] = useState<DesgloseProyecto | null>(null);
+  const [cargandoHoras, setCargandoHoras] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [trayendo, setTrayendo] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,13 +150,22 @@ export function ResumenProyecto({ p, rangeActive }: { p: QboProject; rangeActive
               ) : null}
               <div>
                 <TituloSeccion titulo="Horas de técnicos" total={p.horas?.costo ?? 0} />
+                {onHorasCambiadas && !cargandoHoras ? (
+                  <button
+                    type="button"
+                    onClick={() => setCargandoHoras(true)}
+                    className="mb-1.5 inline-flex cursor-pointer items-center gap-1 rounded-md bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-800 ring-1 ring-inset ring-teal-600/20 hover:bg-teal-100"
+                  >
+                    <Clock className="size-3.5" /> + Cargar horas
+                  </button>
+                ) : null}
                 {p.horas && p.horas.tecnicos.length > 0 ? (
                   <ul className="space-y-1.5">
                     {p.horas.tecnicos.map((t) => (
                       <Fila
                         key={t.nombre}
                         nombre={t.nombre}
-                        detalle={`${fmtHoras(t.horas)} h`}
+                        detalle={`${fmtHoras(t.horas)} h${t.proveedor && !/serv/i.test(t.nombre) ? " · serv. profesional" : ""}`}
                         monto={t.costo}
                         color={COLOR.horas}
                         base={baseBarras}
@@ -170,6 +190,10 @@ export function ResumenProyecto({ p, rangeActive }: { p: QboProject; rangeActive
           {cargando ? <Cargando /> : <GastoPorMes data={meses} />}
         </div>
       </div>
+
+      {cargandoHoras && onHorasCambiadas ? (
+        <CargarHoras qbJobId={p.id} nombreProyecto={p.name} onCambio={onHorasCambiadas} onCerrar={() => setCargandoHoras(false)} />
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
         {desglose ? (

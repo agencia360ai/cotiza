@@ -29,7 +29,7 @@ const sobre = (lista: unknown[]) => ({
 test("lee la lista aunque venga como texto, después de una línea de encabezado", () => {
   const r = extraerRegistros(sobre([registro("1", "2026-05-19", "Luis Fenton", 8, 7), registro("2", "2026-05-20", "Alex Martinez", 8, 7)]));
   assert.equal(r.length, 2);
-  assert.deepEqual(r[0], { proyecto: "233", fecha: "2026-05-19", horas: 8, tarifa: 7, nombre: "Luis Fenton" });
+  assert.deepEqual(r[0], { proyecto: "233", fecha: "2026-05-19", horas: 8, tarifa: 7, nombre: "Luis Fenton", proveedor: false });
 });
 
 test("el mismo registro en texto y estructurado se cuenta una vez", () => {

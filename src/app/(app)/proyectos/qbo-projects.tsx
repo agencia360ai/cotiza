@@ -38,7 +38,7 @@ import {
   type FuenteFechas,
   type MesMonto,
 } from "@/lib/quickbooks/prorate";
-import { gastoConHoras, horasEnRango, type HorasProyecto } from "@/lib/quickbooks/horas-core";
+import { gastoConHoras, horasEnRango, margenConHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core";
 import { bal, balCompact, fmtCorta, fmtHoras, marginTextColor, MESES_CORTOS } from "./formato";
 import { ResumenProyecto } from "./resumen-proyecto";
 
@@ -342,6 +342,14 @@ export function QboProjectsBoard() {
   }, []);
 
   const projects = res?.ok ? res.projects : [];
+  // Horas cargadas desde el resumen: el gasto y el margen del tablero cambian
+  // en el momento, sin esperar al próximo Actualizar.
+  const actualizarHoras = (id: string, h: HorasProyecto | null) =>
+    setRes((prev) =>
+      prev?.ok
+        ? { ...prev, projects: prev.projects.map((x) => (x.id === id ? { ...x, horas: h, margin: margenConHoras(x.income, x.cost, h) } : x)) }
+        : prev,
+    );
   const range = useMemo(() => rangeFor(rangeKey, customFrom, customTo), [rangeKey, customFrom, customTo]);
   // QuickBooks se consulta desde enero del año pasado. Si el rango elegido va
   // más atrás, esos meses no tienen desglose y sus montos son estimaciones — se
@@ -1067,6 +1075,7 @@ export function QboProjectsBoard() {
                       editing={editingDates === e.p.id}
                       detalle={detalle === e.p.id}
                       onToggleDetalle={() => setDetalle((prev) => (prev === e.p.id ? null : e.p.id))}
+                      onHorasCambiadas={(h) => actualizarHoras(e.p.id, h)}
                       anchoVisible={anchoTabla}
                       pickingQuotes={editingQuotes === e.p.id}
                       onTogglePickQuotes={() => setEditingQuotes((prev) => (prev === e.p.id ? null : e.p.id))}
@@ -1868,6 +1877,7 @@ function ProjectRow({
   editing,
   detalle,
   onToggleDetalle,
+  onHorasCambiadas,
   anchoVisible,
   pickingQuotes,
   onTogglePickQuotes,
@@ -1886,6 +1896,7 @@ function ProjectRow({
   editing: boolean;
   detalle: boolean;
   onToggleDetalle: () => void;
+  onHorasCambiadas: (h: HorasProyecto | null) => void;
   // Ancho visible de la tabla: el resumen se queda en pantalla aunque la tabla
   // se desplace de costado (en el celular es más ancha que la pantalla).
   anchoVisible: number | null;
@@ -2230,7 +2241,7 @@ function ProjectRow({
           <td colSpan={cols.visibles.length + 2} className="p-0">
             {/* z-10: por encima del degradado que avisa que hay más columnas. */}
             <div className="sticky left-0 z-10 px-2 pb-3 sm:px-3" style={anchoVisible ? { width: anchoVisible } : undefined}>
-              <ResumenProyecto p={p} rangeActive={rangeActive} />
+              <ResumenProyecto p={p} rangeActive={rangeActive} onHorasCambiadas={onHorasCambiadas} />
             </div>
           </td>
         </tr>
