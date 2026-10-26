@@ -230,19 +230,21 @@ async function withSession<T>(
 // (p.ej. un e2-micro) tumban a supergateway. El caller lo usa SECUENCIAL (nada
 // de Promise.all): dos requests concurrentes sobre el bridge stateful lo cuelgan.
 // Si la sesión muere a mitad del lote, reconstruye el handshake y reintenta.
+// `reintentar: false` para lo que crea algo: si la conexión se cortó después de
+// que QuickBooks lo guardó, reintentarlo lo duplica. Mejor fallar y decirlo.
 export async function withQboSession<T>(
-  fn: (call: (name: string, args?: Record<string, unknown>) => Promise<QboToolResult>) => Promise<T>,
+  fn: (call: (name: string, args?: Record<string, unknown>, opts?: { reintentar?: boolean }) => Promise<QboToolResult>) => Promise<T>,
 ): Promise<T> {
   let session = await handshake();
   const attempt = async (sid: string | undefined, name: string, args: Record<string, unknown>): Promise<QboToolResult> => {
     const { res } = await rpc("tools/call", { name, arguments: args }, 3, sid);
     return (res?.result as QboToolResult) ?? {};
   };
-  const call = async (name: string, args: Record<string, unknown> = {}): Promise<QboToolResult> => {
+  const call = async (name: string, args: Record<string, unknown> = {}, opts?: { reintentar?: boolean }): Promise<QboToolResult> => {
     try {
       return await attempt(session, name, args);
     } catch (e) {
-      if (!(e instanceof QboTransportError) || gatewayCaido()) throw e;
+      if (!(e instanceof QboTransportError) || gatewayCaido() || opts?.reintentar === false) throw e;
       // Sesión caída a mitad del lote: reconstruir la sesión (para esta y las
       // siguientes) y reintentar UNA vez. Si vuelve a caer, abrir el breaker.
       try {

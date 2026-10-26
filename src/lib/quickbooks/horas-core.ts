@@ -19,7 +19,9 @@ export type HorasProyecto = {
   // muestran para que se vean, porque son mano de obra que no pesa en el margen.
   sinTarifa: number;
   meses: { month: string; costo: number }[]; // "2026-05-01" → costo de ese mes
-  tecnicos: { nombre: string; horas: number; costo: number }[];
+  // proveedor = servicio profesional: sus horas van sin costo a propósito (se
+  // le paga por factura al proyecto), así que no cuentan como "sin tarifa".
+  tecnicos: { nombre: string; horas: number; costo: number; proveedor?: boolean }[];
 };
 
 type Registro = {
@@ -28,6 +30,7 @@ type Registro = {
   horas: number;
   tarifa: number;
   nombre: string;
+  proveedor: boolean;
 };
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0);
@@ -57,13 +60,15 @@ function comoRegistro(o: Record<string, unknown>): Registro | null {
   if (o.Hours === undefined && o.Minutes === undefined && o.StartTime === undefined) return null;
   const cliente = ref(o.CustomerRef);
   if (!cliente) return null;
-  const quien = ref(o.EmployeeRef) ?? ref(o.VendorRef);
+  const empleado = ref(o.EmployeeRef);
+  const quien = empleado ?? ref(o.VendorRef);
   return {
     proyecto: cliente.value,
     fecha: o.TxnDate.slice(0, 10),
     horas: duracion(o),
     tarifa: num(o.CostRate),
     nombre: quien?.name || "Sin nombre",
+    proveedor: !empleado && (o.NameOf === "Vendor" || !!ref(o.VendorRef)),
   };
 }
 
@@ -118,41 +123,87 @@ export function extraerRegistros(raw: unknown): Registro[] {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+type Acumulado = {
+  costo: number;
+  horas: number;
+  sinTarifa: number;
+  meses: Map<string, number>;
+  tecnicos: Map<string, { horas: number; costo: number; proveedor: boolean }>;
+};
+
+const vacio = (): Acumulado => ({ costo: 0, horas: 0, sinTarifa: 0, meses: new Map(), tecnicos: new Map() });
+
+// signo -1 descuenta: lo usa ajustarHoras para sacar lo que se borró.
+function acumular(a: Acumulado, r: Omit<Registro, "proyecto">, signo: 1 | -1 = 1): void {
+  const horas = r.horas * signo;
+  const costo = horas * r.tarifa;
+  a.costo += costo;
+  a.horas += horas;
+  if (r.tarifa <= 0 && !r.proveedor) a.sinTarifa += horas;
+  const mes = `${r.fecha.slice(0, 7)}-01`;
+  a.meses.set(mes, (a.meses.get(mes) ?? 0) + costo);
+  const t = a.tecnicos.get(r.nombre) ?? { horas: 0, costo: 0, proveedor: r.proveedor };
+  t.horas += horas;
+  t.costo += costo;
+  a.tecnicos.set(r.nombre, t);
+}
+
+function cerrar(a: Acumulado): HorasProyecto | null {
+  const tecnicos = [...a.tecnicos]
+    .map(([nombre, t]) => ({ nombre, horas: round2(t.horas), costo: round2(t.costo), ...(t.proveedor ? { proveedor: true } : {}) }))
+    .filter((t) => t.horas > 0.004)
+    .sort((x, y) => y.costo - x.costo || y.horas - x.horas);
+  if (tecnicos.length === 0) return null;
+  return {
+    costo: round2(a.costo),
+    horas: round2(a.horas),
+    sinTarifa: round2(Math.max(0, a.sinTarifa)),
+    meses: [...a.meses]
+      .filter(([, c]) => Math.abs(c) > 0.004)
+      .sort(([x], [y]) => x.localeCompare(y))
+      .map(([month, c]) => ({ month, costo: round2(c) })),
+    tecnicos,
+  };
+}
+
 /** Agrupa los registros por proyecto (id del customer en QuickBooks). */
 export function agruparHoras(registros: Registro[]): Map<string, HorasProyecto> {
-  type Acc = { costo: number; horas: number; sinTarifa: number; meses: Map<string, number>; tecnicos: Map<string, { horas: number; costo: number }> };
-  const acc = new Map<string, Acc>();
+  const acc = new Map<string, Acumulado>();
   for (const r of registros) {
     if (r.horas <= 0) continue;
-    const a = acc.get(r.proyecto) ?? { costo: 0, horas: 0, sinTarifa: 0, meses: new Map(), tecnicos: new Map() };
-    const costo = r.horas * r.tarifa;
-    a.costo += costo;
-    a.horas += r.horas;
-    if (r.tarifa <= 0) a.sinTarifa += r.horas;
-    const mes = `${r.fecha.slice(0, 7)}-01`;
-    a.meses.set(mes, (a.meses.get(mes) ?? 0) + costo);
-    const t = a.tecnicos.get(r.nombre) ?? { horas: 0, costo: 0 };
-    t.horas += r.horas;
-    t.costo += costo;
-    a.tecnicos.set(r.nombre, t);
+    const a = acc.get(r.proyecto) ?? vacio();
+    acumular(a, r);
     acc.set(r.proyecto, a);
   }
   const out = new Map<string, HorasProyecto>();
   for (const [id, a] of acc) {
-    out.set(id, {
-      costo: round2(a.costo),
-      horas: round2(a.horas),
-      sinTarifa: round2(a.sinTarifa),
-      meses: [...a.meses]
-        .filter(([, c]) => c !== 0)
-        .sort(([x], [y]) => x.localeCompare(y))
-        .map(([month, c]) => ({ month, costo: round2(c) })),
-      tecnicos: [...a.tecnicos]
-        .map(([nombre, t]) => ({ nombre, horas: round2(t.horas), costo: round2(t.costo) }))
-        .sort((x, y) => y.costo - x.costo || y.horas - x.horas),
-    });
+    const h = cerrar(a);
+    if (h) out.set(id, h);
   }
   return out;
+}
+
+/** Una carga de horas hecha desde la app, con el costo por hora que aplicó QuickBooks. */
+export type EntradaHoras = { nombre: string; fecha: string; horas: number; costoHora: number; proveedor: boolean };
+
+/**
+ * Las horas guardadas del proyecto con lo recién cargado (o borrado) desde la
+ * app. Así el resumen y el margen cambian en el momento, sin esperar al
+ * próximo Actualizar, que igual las va a traer de QuickBooks.
+ */
+export function ajustarHoras(actual: HorasProyecto | null, entradas: EntradaHoras[], signo: 1 | -1 = 1): HorasProyecto | null {
+  const a = vacio();
+  if (actual) {
+    a.costo = actual.costo;
+    a.horas = actual.horas;
+    a.sinTarifa = actual.sinTarifa;
+    for (const m of actual.meses) a.meses.set(m.month, m.costo);
+    for (const t of actual.tecnicos) a.tecnicos.set(t.nombre, { horas: t.horas, costo: t.costo, proveedor: !!t.proveedor });
+  }
+  for (const e of entradas) {
+    if (e.horas > 0) acumular(a, { fecha: e.fecha, horas: e.horas, tarifa: e.costoHora, nombre: e.nombre, proveedor: e.proveedor }, signo);
+  }
+  return cerrar(a);
 }
 
 /** Lo que se guarda en la base viene como JSON sin tipo: se valida al leerlo. */
@@ -169,8 +220,8 @@ export function normalizarHoras(v: unknown): HorasProyecto | null {
       .filter((m): m is { month: string; costo: number } => !!m && typeof m.month === "string" && typeof m.costo === "number")
       .map((m) => ({ month: m.month, costo: m.costo })),
     tecnicos: lista(o.tecnicos)
-      .filter((t): t is { nombre: string; horas: number; costo: number } => !!t && typeof t.nombre === "string")
-      .map((t) => ({ nombre: t.nombre, horas: num(t.horas), costo: num(t.costo) })),
+      .filter((t): t is { nombre: string; horas: number; costo: number; proveedor?: unknown } => !!t && typeof t.nombre === "string")
+      .map((t) => ({ nombre: t.nombre, horas: num(t.horas), costo: num(t.costo), ...(t.proveedor === true ? { proveedor: true } : {}) })),
   };
 }
 
@@ -183,6 +234,16 @@ export function normalizarHoras(v: unknown): HorasProyecto | null {
 export function gastoConHoras(contable: number | null, horas: HorasProyecto | null): number | null {
   if (contable === null) return null;
   return round2(contable + (horas?.costo ?? 0));
+}
+
+/**
+ * Margen con las horas incluidas. Un gasto contable negativo no es "ganamos
+ * más": es un asiento a revisar, así que sin gasto confiable no hay margen.
+ */
+export function margenConHoras(income: number | null, costContable: number | null, horas: HorasProyecto | null): number | null {
+  if (income === null || costContable === null || income <= 0 || costContable < 0) return null;
+  const gasto = gastoConHoras(costContable, horas)!;
+  return gasto < 0 ? null : (income - gasto) / income;
 }
 
 /**
