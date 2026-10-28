@@ -23,7 +23,7 @@ export default async function PortalPage({ params }: { params: Promise<{ token: 
         <div className="max-w-sm rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
           <h1 className="text-lg font-semibold text-slate-900">Link inválido</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Este link del cotizador no existe o fue revocado. Pedile uno nuevo al administrador.
+            Este link del cotizador no existe o fue revocado. Pídele uno nuevo al administrador.
           </p>
         </div>
       </div>

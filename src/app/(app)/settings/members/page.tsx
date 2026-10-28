@@ -97,7 +97,7 @@ function ServiceRoleMissing() {
               <p className="font-semibold">Cómo agregarla:</p>
               <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm">
                 <li>
-                  Andá a{" "}
+                  Ve a{" "}
                   <a
                     href="https://supabase.com/dashboard/project/hliyxksrgqgfatorgbne/settings/api"
                     target="_blank"
@@ -108,10 +108,10 @@ function ServiceRoleMissing() {
                   </a>
                 </li>
                 <li>
-                  Copiá la key marcada como <strong>service_role</strong> (la roja, no la anon)
+                  Copia la key marcada como <strong>service_role</strong> (la roja, no la anon)
                 </li>
                 <li>
-                  Andá a{" "}
+                  Ve a{" "}
                   <a
                     href="https://vercel.com/agencia360s-projects/cotiza/settings/environment-variables"
                     target="_blank"
@@ -123,15 +123,15 @@ function ServiceRoleMissing() {
                 </li>
                 <li>
                   Add new → name: <code className="rounded bg-slate-100 px-1 font-mono text-xs">SUPABASE_SERVICE_ROLE_KEY</code> ·
-                  value: la key copiada · marcala para Production, Preview y Development → Save
+                  value: la key copiada · márcala para Production, Preview y Development → Save
                 </li>
                 <li>
-                  Volvé a esta página después del redeploy (~1 min)
+                  Vuelve a esta página después del redeploy (~1 min)
                 </li>
               </ol>
             </div>
             <p className="mt-3 text-xs text-amber-700">
-              Si querés, podés usar el flujo de signup normal en /login (cualquiera con email/password
+              Si quieres, puedes usar el flujo de signup normal en /login (cualquiera con email/password
               puede crear su cuenta), pero esta página de gestión necesita la service role.
             </p>
           </div>

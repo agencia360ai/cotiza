@@ -191,7 +191,7 @@ export function NewReportWizard({ clients, technicians }: { clients: Client[]; t
         <Section step={2} title="Sucursal" done={!!locationId}>
           {locations.length === 0 ? (
             <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-              Este cliente no tiene sucursales. Agregá una desde el detalle del cliente.
+              Este cliente no tiene sucursales. Agrega una desde el detalle del cliente.
             </p>
           ) : (
             <div className="space-y-2">

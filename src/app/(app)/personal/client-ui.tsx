@@ -5,17 +5,23 @@ import Link from "next/link";
 import { Copy, RefreshCw, Trash2, UserPlus, Check, Power, ExternalLink, Pencil } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { createTechnician, regenerateToken, deleteTechnician, updateTechnician } from "./actions";
+import { createTechnician, regenerateToken, deleteTechnician, updateTechnician, type RolPersonal } from "./actions";
 
 type Tech = {
   id: string;
   name: string;
   phone: string | null;
   email: string | null;
+  role: string | null;
   active: boolean;
   access_token: string;
   last_used_at: string | null;
 };
+
+const ROLES: { valor: RolPersonal; texto: string }[] = [
+  { valor: "tecnico", texto: "Técnico" },
+  { valor: "ingeniero", texto: "Ingeniero" },
+];
 
 function relativeFromNow(iso: string | null): string {
   if (!iso) return "Nunca";
@@ -44,6 +50,7 @@ export function NewTechnicianForm() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [rol, setRol] = useState<RolPersonal>("tecnico");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -55,12 +62,14 @@ export function NewTechnicianForm() {
         name: name.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
+        role: rol,
       });
       if ("error" in r) setError(r.error);
       else {
         setName("");
         setPhone("");
         setEmail("");
+        setRol("tecnico");
         router.refresh();
       }
     });
@@ -79,7 +88,7 @@ export function NewTechnicianForm() {
         <h3 className="text-sm font-semibold text-slate-900">Agregar personal</h3>
       </div>
       <p className="sr-only">Carga nombre, teléfono y email. Después puedes editarlo y asignarle clientes específicos.</p>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
         <input
           required
           value={name}
@@ -100,6 +109,18 @@ export function NewTechnicianForm() {
           placeholder="Email"
           className="rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
         />
+        <select
+          value={rol}
+          onChange={(e) => setRol(e.target.value as RolPersonal)}
+          aria-label="Rol"
+          className="rounded-lg border border-border bg-white px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
+        >
+          {ROLES.map((r) => (
+            <option key={r.valor} value={r.valor}>
+              {r.texto}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="mt-3 flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
@@ -159,6 +180,15 @@ function TechRow({ tech }: { tech: Tech }) {
     });
   }
 
+  function cambiarRol(role: RolPersonal) {
+    setError(null);
+    startTransition(async () => {
+      const r = await updateTechnician(tech.id, { role });
+      if ("error" in r) setError(r.error);
+      else router.refresh();
+    });
+  }
+
   function toggleActive() {
     setError(null);
     startTransition(async () => {
@@ -202,7 +232,26 @@ function TechRow({ tech }: { tech: Tech }) {
               .toUpperCase()}
           </div>
           <div>
-            <p className="text-base font-semibold text-slate-900">{tech.name}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-base font-semibold text-slate-900">{tech.name}</p>
+              {/* El rol separa a ingenieros y técnicos al cargar horas a un proyecto. */}
+              <select
+                value={tech.role === "ingeniero" ? "ingeniero" : "tecnico"}
+                onChange={(e) => cambiarRol(e.target.value as RolPersonal)}
+                disabled={isPending}
+                aria-label={`Rol de ${tech.name}`}
+                className={cn(
+                  "cursor-pointer rounded-full border-0 py-0.5 pl-2 pr-6 text-[11px] font-semibold ring-1 ring-inset",
+                  tech.role === "ingeniero" ? "bg-indigo-50 text-indigo-700 ring-indigo-600/20" : "bg-slate-100 text-slate-600 ring-slate-500/20",
+                )}
+              >
+                {ROLES.map((r) => (
+                  <option key={r.valor} value={r.valor}>
+                    {r.texto}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="text-xs text-slate-500">
               {tech.phone ? <span>{tech.phone}</span> : null}
               {tech.phone && tech.email ? <span> · </span> : null}

@@ -252,7 +252,7 @@ export function PublicProjectScreen({
                   <p className="mt-1 text-sm text-slate-500">
                     {data.milestones.length === 0
                       ? "Cuando arranque la obra vas a ver acá el progreso paso a paso."
-                      : "Probá con otra pestaña para ver el avance."}
+                      : "Prueba con otra pestaña para ver el avance."}
                   </p>
                 </div>
               );
@@ -340,7 +340,7 @@ export function PublicProjectScreen({
             </div>
             <h3 className="text-lg font-bold text-slate-900 sm:text-xl">El proyecto está listo</h3>
             <p className="mx-auto mt-1 max-w-md text-sm text-slate-600">
-              Si todo está conforme, dejá tu firma y aceptación para cerrar el proyecto.
+              Si todo está conforme, deja tu firma y aceptación para cerrar el proyecto.
             </p>
             <button
               type="button"
@@ -664,7 +664,7 @@ function AcceptForm({
 
   async function submit() {
     if (!name.trim()) {
-      setError("Ingresá tu nombre");
+      setError("Ingresa tu nombre");
       return;
     }
     if (!hasSig) {

@@ -36,7 +36,7 @@ export default async function SettingsPage() {
       <header className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight">Configuración</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Editá los datos de tu organización — todo lo que ven tus clientes en sus portales
+          Edita los datos de tu organización — todo lo que ven tus clientes en sus portales
         </p>
       </header>
 

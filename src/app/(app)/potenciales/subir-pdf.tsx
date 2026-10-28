@@ -191,11 +191,11 @@ export function SubirPdfDialog({
             <>
               <section className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
                 <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                  <Pencil className="size-4 text-violet-600" /> Editala acá
+                  <Pencil className="size-4 text-violet-600" /> Edítala acá
                 </p>
                 <p className="mt-0.5 text-xs text-slate-600">
                   Se abre en el cotizador con lo que tiene {revisionDe.quote_number} para cambiarla a mano o con un comentario a la IA, y
-                  después la publicás a Dropbox.
+                  después la publicas a Dropbox.
                 </p>
                 <textarea
                   rows={2}
@@ -221,7 +221,7 @@ export function SubirPdfDialog({
                 </div>
                 {errorArmar ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{errorArmar}</p> : null}
               </section>
-              <p className="text-center text-[11px] font-semibold uppercase tracking-wider text-slate-400">o subí el PDF que ya hiciste</p>
+              <p className="text-center text-[11px] font-semibold uppercase tracking-wider text-slate-400">o sube el PDF que ya hiciste</p>
             </>
           ) : null}
           {revisionDe && items.length > 0 ? null : (
@@ -291,7 +291,7 @@ export function SubirPdfDialog({
                 <>
                   {it.iaError ? (
                     <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-600/20">
-                      No se pudo leer con IA: {it.iaError} Completá los datos a mano; el PDF se sube igual.
+                      No se pudo leer con IA: {it.iaError} Completa los datos a mano; el PDF se sube igual.
                     </p>
                   ) : null}
 
@@ -316,7 +316,7 @@ export function SubirPdfDialog({
                       <p className="mt-1 text-amber-800">
                         {revisionDe
                           ? `Esa revisión ya existe${it.siguiente ? ` — la que sigue es ${it.siguiente}` : ""}.`
-                          : `Se puede subir igual (por ejemplo, si es una revisión). Si fue un error, corregí el número en el PDF${
+                          : `Se puede subir igual (por ejemplo, si es una revisión). Si fue un error, corrige el número en el PDF${
                               it.siguiente ? ` — el próximo libre es ${it.siguiente}` : ""
                             }.`}
                       </p>
@@ -393,7 +393,7 @@ export function SubirPdfDialog({
                   </div>
 
                   {!it.datos.quote_number.trim() ? (
-                    <p className="mt-1.5 text-xs text-red-600">No encontré el número en el PDF: escribilo como aparece en la cotización.</p>
+                    <p className="mt-1.5 text-xs text-red-600">No encontré el número en el PDF: escríbelo como aparece en la cotización.</p>
                   ) : null}
                   {it.error ? <p className="mt-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{it.error}</p> : null}
 

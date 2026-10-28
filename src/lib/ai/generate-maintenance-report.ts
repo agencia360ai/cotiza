@@ -19,7 +19,7 @@ const reportItemSchema = z.object({
     .string()
     .nullable()
     .describe(
-      "UUID exacto del equipo existente de la lista provista. SOLO devolvé null si el equipo NO estaba en la lista (caso: el técnico instaló o detectó un equipo nuevo).",
+      "UUID exacto del equipo existente de la lista provista. SOLO devuelve null si el equipo NO estaba en la lista (caso: el técnico instaló o detectó un equipo nuevo).",
     ),
   new_equipment: z
     .object({
@@ -52,7 +52,7 @@ const reportItemSchema = z.object({
     })
     .nullable()
     .describe(
-      "Si equipment_id es null porque el equipo NO estaba en la lista, completá acá los datos detectados desde la captura. Se va a agregar automáticamente a la sucursal como equipo nuevo.",
+      "Si equipment_id es null porque el equipo NO estaba en la lista, completa acá los datos detectados desde la captura. Se va a agregar automáticamente a la sucursal como equipo nuevo.",
     ),
   status: equipmentStatusEnum.describe("Estado del equipo según la inspección"),
   observations_es: z
@@ -89,23 +89,23 @@ const reportOutputSchema = z.object({
 
 export type GeneratedReport = z.infer<typeof reportOutputSchema>;
 
-const SYSTEM_PROMPT = `Sos un asistente experto en sistemas HVAC para Panamá que ayuda a técnicos en campo a redactar reportes de mantenimiento.
+const SYSTEM_PROMPT = `Eres un asistente experto en sistemas HVAC para Panamá que ayuda a técnicos en campo a redactar reportes de mantenimiento.
 
 Tu trabajo: a partir de fotos, transcripciones de voz y notas de texto que el técnico capturó durante una visita, redactar un reporte estructurado en español neutro, conciso y profesional.
 
 Pautas:
-- Una entrada por cada equipo de la lista provista. Si no hay evidencia clara de un equipo en la captura, asignale status "operativo" y dejá observations_es como "Inspección visual sin novedades, funcionamiento normal." (no inventes problemas)
-- EQUIPOS NUEVOS: Si el técnico menciona en su captura (foto/voz/texto) un equipo que NO está en la lista provista (ej: "se instaló una nevera nueva marca X", "encontré un aire que no estaba en el inventario"), devolvé un item adicional con equipment_id=null y completá new_equipment con los datos detectados (marca, modelo, categoría, voltaje, ubicación). Va a agregarse a la sucursal automáticamente.
+- Una entrada por cada equipo de la lista provista. Si no hay evidencia clara de un equipo en la captura, asígnale status "operativo" y deja observations_es como "Inspección visual sin novedades, funcionamiento normal." (no inventes problemas)
+- EQUIPOS NUEVOS: Si el técnico menciona en su captura (foto/voz/texto) un equipo que NO está en la lista provista (ej: "se instaló una nevera nueva marca X", "encontré un aire que no estaba en el inventario"), devuelve un item adicional con equipment_id=null y completa new_equipment con los datos detectados (marca, modelo, categoría, voltaje, ubicación). Va a agregarse a la sucursal automáticamente.
 - Status:
   - "operativo" → funcionamiento normal, sin observaciones
   - "atencion" → problemas menores que NO impiden operación pero requieren mantenimiento (empaques, controles remotos faltantes, cables expuestos, falta de protectores)
   - "critico" → problemas que afectan operación o son riesgo eléctrico/mecánico (cortocircuitos, equipos que no enfrían, fugas)
   - "fuera_de_servicio" → equipo apagado/no funcional
-- Asociá cada foto a un equipo via photo_paths usando el path EXACTO que aparece junto a la foto en el contexto. Si una foto no corresponde a ningún equipo claro, no la incluyas.
-- Recomendaciones: priorizá "alta" sólo para acciones críticas/seguridad, "media" para mantenimiento que no es urgente, "baja" para sugerencias preventivas.
+- Asocia cada foto a un equipo via photo_paths usando el path EXACTO que aparece junto a la foto en el contexto. Si una foto no corresponde a ningún equipo claro, no la incluyas.
+- Recomendaciones: prioriza "alta" sólo para acciones críticas/seguridad, "media" para mantenimiento que no es urgente, "baja" para sugerencias preventivas.
 - Checklist típico HVAC en Panamá: Tomacorrientes, Enchufe de alimentación, Empaques de puertas, Funcionamiento normal, Cordón de alimentación, Protector de voltaje, Filtros, Cables de señal, Drenaje de condensado.
 - NO inventes lecturas (temperaturas, presiones) si no hay evidencia.
-- Resumen general: qué se encontró, qué necesita acción. Mencioná críticos primero. Si hay equipos nuevos, mencionalos.`;
+- Resumen general: qué se encontró, qué necesita acción. Menciona críticos primero. Si hay equipos nuevos, menciónalos.`;
 
 export async function generateReportFromCapture(input: {
   client_name: string;
@@ -157,7 +157,7 @@ CAPTURAS DEL TÉCNICO (en orden cronológico):
 
 ${captureContext}
 
-A continuación van las fotos en el mismo orden listado arriba. Asociá cada foto al equipo correspondiente usando el path indicado.`,
+A continuación van las fotos en el mismo orden listado arriba. Asocia cada foto al equipo correspondiente usando el path indicado.`,
   });
 
   // Photo blocks
@@ -178,7 +178,7 @@ A continuación van las fotos en el mismo orden listado arriba. Asociá cada fot
 
   userBlocks.push({
     type: "text",
-    text: `Generá ahora el reporte estructurado. Recordá: una entrada por cada equipo de la lista, status conservador (no inventes problemas que no se ven), recomendaciones priorizadas, photo_paths con los paths EXACTOS que te di.`,
+    text: `Genera ahora el reporte estructurado. Recuerda: una entrada por cada equipo de la lista, status conservador (no inventes problemas que no se ven), recomendaciones priorizadas, photo_paths con los paths EXACTOS que te di.`,
   });
 
   const model = pickModel("default");

@@ -33,14 +33,14 @@ const schema = z.object({
   banderas: z.array(z.string()).max(6).describe("Señales de riesgo (obra civil incluida, marca cerrada, plazo corto, requisitos difíciles)."),
 });
 
-const SYSTEM = `Sos el analista técnico-comercial de DICEC, Inc (Panamá), empresa de HVAC, climatización y refrigeración.
+const SYSTEM = `Eres el analista técnico-comercial de DICEC, Inc (Panamá), empresa de HVAC, climatización y refrigeración.
 
-Te paso los DOCUMENTOS de un pliego de licitación pública (PDFs: pliego de cargos, especificaciones técnicas, renglones, condiciones). Leelos y extraé lo que DICEC necesita para decidir si participar y armar el precio.
+Te paso los DOCUMENTOS de un pliego de licitación pública (PDFs: pliego de cargos, especificaciones técnicas, renglones, condiciones). Leelos y extrae lo que DICEC necesita para decidir si participar y armar el precio.
 
 Capacidades de DICEC: chillers y agua helada, torres de enfriamiento, cuartos fríos/refrigeración comercial e industrial, unidades manejadoras (UMA/AHU), fan coils, VRF, splits, A/A institucional, ductos de aire (fabricación/instalación/limpieza/aislamiento), controles y gases refrigerantes, bombas de recirculación HVAC.
 NO hace por sí sola: obra civil mayor, instalación eléctrica de potencia, plomería sanitaria, suministros ajenos al rubro.
 
-Sé concreto y fiel a los documentos; si un dato no está, devolvé null (no inventes). cumplimos="parcial" cuando parte del alcance requiere subcontratar (obra civil/eléctrica) o mezcla rubros.`;
+Sé concreto y fiel a los documentos; si un dato no está, devuelve null (no inventes). cumplimos="parcial" cuando parte del alcance requiere subcontratar (obra civil/eléctrica) o mezcla rubros.`;
 
 const MAX_FILES = 6;
 // El request a Claude va en base64 (×4/3): 20MB crudos ≈ 26.7MB de request,
@@ -96,7 +96,7 @@ export async function analyzeTenderDocs(input: {
 
   content.push({
     type: "text",
-    text: `Licitación: ${input.titulo ?? "(sin título)"}\nAnalizá los ${leidos} documento(s) adjuntos y devolvé el análisis para DICEC.`,
+    text: `Licitación: ${input.titulo ?? "(sin título)"}\nAnaliza los ${leidos} documento(s) adjuntos y devuelve el análisis para DICEC.`,
   });
 
   try {

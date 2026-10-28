@@ -114,7 +114,7 @@ export function QuoteItemsEditor({ quoteId, items }: { quoteId: string; items: I
             {items.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  Cotización vacía. Agregá un item.
+                  Cotización vacía. Agrega un item.
                 </td>
               </tr>
             )}

@@ -62,7 +62,7 @@ export async function runExtraction(projectId: string) {
     .eq("project_id", projectId);
   if (!docs || docs.length === 0) {
     await supabase.from("projects").update({ status: "draft" }).eq("id", projectId);
-    return { error: "Subí al menos un archivo antes de extraer." };
+    return { error: "Sube al menos un archivo antes de extraer." };
   }
 
   const documentInputs = await Promise.all(

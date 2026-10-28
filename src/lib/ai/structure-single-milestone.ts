@@ -18,15 +18,15 @@ const outputSchema = z.object({
 
 export type SingleMilestoneProposal = z.infer<typeof outputSchema>;
 
-const SYSTEM_PROMPT = `Sos un asistente que ayuda a estructurar UN único hito de un proyecto de obra/instalación HVAC en Panamá.
+const SYSTEM_PROMPT = `Eres un asistente que ayuda a estructurar UN único hito de un proyecto de obra/instalación HVAC en Panamá.
 
 Tu tarea: a partir de lo que el usuario escribió y/o las fotos que adjuntó, devolver UN hito con title, description, status.
 
 Reglas:
-- TITLE: corto y descriptivo (3-6 palabras). Reflejá lo que se ve y/o el texto del usuario.
-- DESCRIPTION: 1-3 oraciones en español neutro, tono profesional. Si hay fotos sin texto, describí lo que se ve de manera honesta y conservadora.
+- TITLE: corto y descriptivo (3-6 palabras). Refleja lo que se ve y/o el texto del usuario.
+- DESCRIPTION: 1-3 oraciones en español neutro, tono profesional. Si hay fotos sin texto, describe lo que se ve de manera honesta y conservadora.
 - STATUS: si claramente terminó algo → completado. Si está empezando → en_progreso. Default: en_progreso.
-- NUNCA inventes detalles que no estén en las imágenes ni en el texto. Si dudás, sé conservador.`;
+- NUNCA inventes detalles que no estén en las imágenes ni en el texto. Si dudas, sé conservador.`;
 
 export async function structureSingleMilestone(input: {
   project: { name: string; project_type: string; description_es: string | null };
@@ -45,7 +45,7 @@ ${input.project.description_es ? `Descripción del proyecto: ${input.project.des
 ${
   input.text && input.text.trim()
     ? `LO QUE ESCRIBIÓ EL USUARIO:\n"${input.text.trim()}"\n`
-    : "(sin texto del usuario — basate en las imágenes adjuntas)\n"
+    : "(sin texto del usuario — básate en las imágenes adjuntas)\n"
 }
 ${input.photos.length > 0 ? `${input.photos.length} foto(s) a continuación:` : "(sin fotos)"}`,
   });
@@ -64,7 +64,7 @@ ${input.photos.length > 0 ? `${input.photos.length} foto(s) a continuación:` : 
 
   userBlocks.push({
     type: "text",
-    text: "Devolveme el hito estructurado.",
+    text: "Devuélveme el hito estructurado.",
   });
 
   const response = await anthropic.messages.parse({

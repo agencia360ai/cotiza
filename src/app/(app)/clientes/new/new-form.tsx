@@ -107,7 +107,7 @@ export function NewClientForm() {
       </button>
 
       <p className="mt-2 text-center text-xs text-slate-500">
-        Después podés agregar sucursales, equipos y mantenimientos desde el detalle.
+        Después puedes agregar sucursales, equipos y mantenimientos desde el detalle.
       </p>
     </form>
   );

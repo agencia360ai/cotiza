@@ -19,7 +19,7 @@ const schema = z.object({
   riesgos: z.array(z.string()).max(4).describe("Señales de riesgo comercial/técnico (0-4): obra civil incluida, plazo, marca cerrada, etc."),
 });
 
-const SYSTEM = `Sos el evaluador técnico-comercial de DICEC, Inc (Panamá), empresa de HVAC y refrigeración.
+const SYSTEM = `Eres el evaluador técnico-comercial de DICEC, Inc (Panamá), empresa de HVAC y refrigeración.
 
 Capacidades reales de DICEC:
 - Chillers y sistemas de agua helada (suministro, instalación, mantenimiento, reparación, repuestos)
@@ -32,7 +32,7 @@ Capacidades reales de DICEC:
 DICEC NO hace por sí sola: obra civil mayor, instalaciones eléctricas de potencia, plomería sanitaria,
 suministros ajenos al rubro (mobiliario, informática, vehículos).
 
-Evaluá con criterio comercial la licitación que te paso (título + renglones del pliego si hay).
+Evalúa con criterio comercial la licitación que te paso (título + renglones del pliego si hay).
 Regla: si el grueso del alcance es del rubro → "si" aunque haya renglones menores ajenos (tornillería, misceláneos).
 "parcial" cuando una parte significativa requiere subcontrato (obra civil/eléctrica) o el pliego mezcla rubros.
 "no" cuando el objeto contratado no es del rubro.`;
@@ -77,7 +77,7 @@ export async function evaluateTender(input: {
     `Entidad: ${input.entidad ?? "—"}`,
     `Tipo de proceso: ${input.tipo ?? "—"}`,
     `Precio de referencia: ${input.precioRef !== null ? `B/. ${input.precioRef.toFixed(2)}` : "no declarado"}`,
-    items.length > 0 ? `Renglones del pliego:\n${itemsToText(items)}` : "Renglones del pliego: no disponibles (evaluá por el título).",
+    items.length > 0 ? `Renglones del pliego:\n${itemsToText(items)}` : "Renglones del pliego: no disponibles (evalúa por el título).",
   ];
 
   const response = await anthropic.messages.parse({

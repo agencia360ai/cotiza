@@ -28,7 +28,7 @@ export default async function StandardizePage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Estandarizar nombres de cliente</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          La IA agrupa los nombres sueltos de cotizaciones y licitaciones en clientes reales. Revisás, ajustás y aplicás —
+          La IA agrupa los nombres sueltos de cotizaciones y licitaciones en clientes reales. Revisas, ajustas y aplicas —
           se crean los clientes, sus sucursales y se linkean las cotizaciones.
         </p>
       </header>

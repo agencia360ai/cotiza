@@ -170,7 +170,7 @@ export default async function ClientsListPage() {
         <div className="flex-1">
           <p className="text-sm font-semibold text-slate-900">Estandarizar nombres (IA)</p>
           <p className="text-xs text-slate-600">
-            Agrupá los nombres sueltos de las cotizaciones en clientes reales y linkealos automáticamente
+            Agrupa los nombres sueltos de las cotizaciones en clientes reales y vincúlalos automáticamente
           </p>
         </div>
         <ChevronRight className="size-5 text-amber-600 transition-transform group-hover:translate-x-1" />
@@ -186,7 +186,7 @@ export default async function ClientsListPage() {
         <div className="flex-1">
           <p className="text-sm font-semibold text-slate-900">Crear cliente con IA</p>
           <p className="text-xs text-slate-600">
-            Pegá una descripción o subí un PDF — la IA arma el cliente con sus sucursales, equipos y mantenimientos
+            Pega una descripción o sube un PDF — la IA arma el cliente con sus sucursales, equipos y mantenimientos
           </p>
         </div>
         <ChevronRight className="size-5 text-violet-600 transition-transform group-hover:translate-x-1" />
@@ -196,7 +196,7 @@ export default async function ClientsListPage() {
 
       {cards.length === 0 ? (
         <p className="mt-6 rounded-xl border border-dashed border-border py-16 text-center text-sm text-muted-foreground">
-          Sin clientes aún. Creá el primero arriba o estandarizá desde las cotizaciones.
+          Sin clientes aún. Crea el primero arriba o estandariza desde las cotizaciones.
         </p>
       ) : (
         <ClientsBoard clients={cards} />

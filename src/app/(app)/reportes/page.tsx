@@ -92,7 +92,7 @@ export default async function ReportsListPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Reportes de mantenimiento</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Revisá borradores, editá campos e items, o creá un reporte manualmente
+            Revisa borradores, edita campos e items, o crea un reporte manualmente
           </p>
         </div>
         <Link
@@ -135,7 +135,7 @@ export default async function ReportsListPage({
         </p>
       ) : subFilter === "en_revision" ? (
         <p className="mb-4 rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-800 ring-1 ring-inset ring-orange-200">
-          <strong>Listo para publicar:</strong> el personal envió, esperando que vos publiques para que el cliente lo vea.
+          <strong>Listo para publicar:</strong> el personal envió, esperando que tú publiques para que el cliente lo vea.
         </p>
       ) : null}
 

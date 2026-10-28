@@ -13,7 +13,7 @@ export async function parseClientFromInput(formData: FormData): Promise<ParseRes
   const files = formData.getAll("files") as File[];
 
   if (!text.trim() && files.length === 0) {
-    return { error: "Pegá texto o adjuntá un archivo" };
+    return { error: "Pega texto o adjunta un archivo" };
   }
 
   const attachments: { mimeType: string; data: Buffer; filename: string }[] = [];

@@ -90,9 +90,9 @@ const schema = z.object({
   ),
 });
 
-const SYSTEM = `Clasificás títulos de procesos de compra pública de Panamá para DICEC, Inc — empresa de HVAC/refrigeración.
+const SYSTEM = `Clasificas títulos de procesos de compra pública de Panamá para DICEC, Inc — empresa de HVAC/refrigeración.
 
-Para cada título: (1) asigná la categoría DOMINANTE de la lista, (2) decidí si es RELEVANTE para DICEC.
+Para cada título: (1) asigna la categoría DOMINANTE de la lista, (2) decide si es RELEVANTE para DICEC.
 
 RELEVANTE = el TRABAJO CONTRATADO en sí es sobre estos sistemas:
 - Aires acondicionados / climatización (suministro, instalación, mantenimiento, reparación)

@@ -167,7 +167,7 @@ export default async function SchedulePage({
           <Calendar className="mx-auto mb-3 size-6 text-muted-foreground" />
           <p className="text-sm font-medium">Sin mantenimientos programados</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Programalos desde el detalle de cada cliente
+            Prográmalos desde el detalle de cada cliente
           </p>
         </div>
       ) : (

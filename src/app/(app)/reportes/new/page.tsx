@@ -63,7 +63,7 @@ export default async function NewReportPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Nuevo reporte</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Creá un reporte manualmente — después editás todos sus campos e items
+            Crea un reporte manualmente — después editas todos sus campos e items
           </p>
         </div>
       </header>

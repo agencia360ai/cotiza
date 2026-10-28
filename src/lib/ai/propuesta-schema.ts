@@ -56,5 +56,5 @@ export type PropuestaIA = z.infer<typeof propuestaSchema>;
 
 export const REGLAS_PROPUESTA = `Formato PROPUESTA (el diseño de dos páginas con resumen, cifras, tabla de partidas y condiciones):
 - Cada renglón lleva "titulo": 3 a 7 palabras que nombran la partida ("Unidad autocontenida 15 TR", "Ducto de retorno"). "desc" va DEBAJO del título como detalle técnico de UNA línea (marca, especificación, alcance), sin repetir el título.
-- Agrupá en partidas por sistema o etapa (equipos, ductos, eléctrico, controles), no un renglón por tornillo.
+- Agrupa en partidas por sistema o etapa (equipos, ductos, eléctrico, controles), no un renglón por tornillo.
 - "propuesta" lleva el resumen del encabezado: solo datos reales del pedido o de los archivos. Cifras inventadas en un documento comercial son peores que no tener cifras.`;

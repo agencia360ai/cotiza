@@ -40,7 +40,7 @@ export default async function NewTechnicianProjectPage({
           ¿Qué obra estás arrancando?
         </h1>
         <p className="mt-2 text-sm text-slate-500">
-          Elegí cliente y sucursal. Después vas cargando los hitos paso a paso, con foto y video.
+          Elige cliente y sucursal. Después vas cargando los hitos paso a paso, con foto y video.
         </p>
       </header>
 

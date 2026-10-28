@@ -202,8 +202,8 @@ export function EditPersonalForm({
             Permisos
           </h2>
           <p className="mt-1 text-xs text-slate-500">
-            Por defecto puede ver todos los clientes de la organización. Si querés limitarlo,
-            seleccioná los clientes (o sucursales puntuales) a los que tiene acceso.
+            Por defecto puede ver todos los clientes de la organización. Si quieres limitarlo,
+            selecciona los clientes (o sucursales puntuales) a los que tiene acceso.
           </p>
         </header>
 

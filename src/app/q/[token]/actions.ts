@@ -43,7 +43,7 @@ export async function portalGenerate(
 ): Promise<Result<DraftBundle & { contacto: string | null }>> {
   const c = await orgFromToken(token);
   if (!c.ok) return { error: c.error };
-  if (!brief.trim() && adjuntos.length === 0) return { error: "Contame qué hay que cotizar (o adjuntá un archivo)" };
+  if (!brief.trim() && adjuntos.length === 0) return { error: "Cuéntame qué hay que cotizar (o adjunta un archivo)" };
   try {
     // Sin sesión no hay a quién atribuirle el contacto: lo escribe el ingeniero.
     return { ok: true, data: { ...(await buildQuoteDraft(c.db, c.orgId, brief.trim(), adjuntos, formato)), contacto: null } };
@@ -60,7 +60,7 @@ export async function portalRefine(
 ): Promise<Result<AjusteAplicado>> {
   const c = await orgFromToken(token);
   if (!c.ok) return { error: c.error };
-  if (!instruccion.trim() && adjuntos.length === 0) return { error: "Decime qué querés cambiar" };
+  if (!instruccion.trim() && adjuntos.length === 0) return { error: "Dime qué quieres cambiar" };
   try {
     return { ok: true, data: await refinarBorrador(c.db, c.orgId, actual, instruccion.trim(), adjuntos) };
   } catch (e) {

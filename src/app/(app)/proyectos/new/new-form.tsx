@@ -61,7 +61,7 @@ export function NewProjectForm({
   if (clients.length === 0) {
     return (
       <p className="rounded-xl border border-dashed border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-        Primero creá un cliente desde <strong>Clientes</strong>. Sin un cliente no se puede arrancar un
+        Primero crea un cliente desde <strong>Clientes</strong>. Sin un cliente no se puede arrancar un
         proyecto.
       </p>
     );

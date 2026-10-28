@@ -238,7 +238,7 @@ async function createQboAndSyncState(
 export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null; numero: string }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
+  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (configúrala en Vercel)." };
   if (!input.numero.trim() || !input.nombre.trim()) return { error: "Número y nombre del proyecto son obligatorios." };
   if (!input.parentId && !input.newParentName?.trim()) {
     return { error: "Elige el cliente de QBO o escribe el nombre del cliente nuevo." };
@@ -292,7 +292,7 @@ export async function sendQuoteToQbo(quoteId: string, input: QboSendInput): Prom
 export async function sendTenderToQbo(tenderId: string, input: QboSendInput): Promise<Result<{ qboJobId: string; nombre: string; parentCreado: string | null; numero: string }>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (setéala en Vercel)." };
+  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (configúrala en Vercel)." };
   if (!input.numero.trim() || !input.nombre.trim()) return { error: "Número y nombre del proyecto son obligatorios." };
   if (!input.parentId && !input.newParentName?.trim()) {
     return { error: "Elige el cliente de QBO o escribe el nombre del cliente nuevo." };

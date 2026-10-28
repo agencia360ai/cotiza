@@ -237,7 +237,7 @@ export function EditableItemsList({
             onChange={(e) => setSelectedEqId(e.target.value)}
             className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
           >
-            <option value="">Elegí un equipo…</option>
+            <option value="">Elige un equipo…</option>
             {available.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.brand ?? ""} {e.model ?? ""} — {e.location_label ?? e.custom_name}
@@ -382,7 +382,7 @@ function ItemEditor({
               onBlur={(e) => onChange({ observations_es: e.target.value || null })}
               rows={3}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
-              placeholder="Describí lo que observaste en este equipo…"
+              placeholder="Describe lo que observaste en este equipo…"
             />
           ) : (
             <p className="text-sm text-slate-700">{item.observations_es ?? "—"}</p>

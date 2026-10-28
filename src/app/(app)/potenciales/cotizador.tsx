@@ -170,7 +170,7 @@ async function leerAdjunto(file: File): Promise<Adjunto> {
   // .doc y .xls viejos son binarios propietarios, no ZIP: no hay nada que
   // desempaquetar. Se dice cuál es la salida en vez de "formato no soportado".
   if (/\.(doc|xls|ppt)$/i.test(file.name)) {
-    throw new Error("formato viejo — guardalo como .docx/.xlsx o PDF");
+    throw new Error("formato viejo — guárdalo como .docx/.xlsx o PDF");
   }
   throw new Error("formato no soportado (imagen, PDF, Word, Excel, HTML o texto)");
 }
@@ -245,11 +245,11 @@ function useDictado(onTexto: (t: string) => void) {
 }
 
 const EJEMPLOS_AJUSTE = [
-  "Separá el mantenimiento mensual de los add-ons de una sola vez",
-  "Acortá las descripciones para que quepa en una página",
-  "Pasalo a rubro DC y ajustá la descripción corta",
-  "Subí todos los precios 8% y redondeá a múltiplos de 5",
-  "Donde dice Precio poné Tarifa mensual",
+  "Separa el mantenimiento mensual de los add-ons de una sola vez",
+  "Acorta las descripciones para que quepa en una página",
+  "Pásalo a rubro DC y ajusta la descripción corta",
+  "Sube todos los precios 8% y redondea a múltiplos de 5",
+  "Donde dice Precio pon Tarifa mensual",
 ];
 
 /**
@@ -340,7 +340,7 @@ function AjustarConIA({
           }
         }}
         disabled={pendiente}
-        placeholder={`Decí qué cambiar. Ej: "${EJEMPLOS_AJUSTE[0]}"`}
+        placeholder={`Di qué cambiar. Ej: "${EJEMPLOS_AJUSTE[0]}"`}
         className="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm focus:border-violet-400 focus:outline-none disabled:opacity-60"
       />
 
@@ -453,10 +453,10 @@ export type RevisionEnEdicion = {
 };
 
 const FUENTE_REVISION: Record<RevisionEditable["fuente"], (original: string) => string> = {
-  carta: (o) => `Copiada de la carta de ${o}. Cambiala a mano o pedíselo a la IA arriba.`,
+  carta: (o) => `Copiada de la carta de ${o}. Cámbiala a mano o pídeselo a la IA arriba.`,
   "pdf-original": (o) =>
-    `La IA pasó a la plataforma el PDF de ${o} que está en Dropbox. Revisá renglones y precios contra el original antes de publicar.`,
-  "pdf-subido": () => "La IA pasó a la plataforma el PDF que subiste. Revisá renglones y precios antes de publicar.",
+    `La IA pasó a la plataforma el PDF de ${o} que está en Dropbox. Revisa renglones y precios contra el original antes de publicar.`,
+  "pdf-subido": () => "La IA pasó a la plataforma el PDF que subiste. Revisa renglones y precios antes de publicar.",
   resumen: (o) => `${o} no tiene carta ni PDF: arranca con su descripción y su monto en un renglón.`,
 };
 
@@ -551,7 +551,7 @@ export function CotizadorDialog({
     // pasan uno por uno y revientan el límite del server action juntos.
     const total = [...adjuntos, ...nuevos].reduce((a, x) => a + x.bytes, 0);
     if (total > MAX_BYTES) {
-      setError(`Los archivos suman ${(total / 1e6).toFixed(1)} MB y el máximo es ${MAX_BYTES / 1e6} MB. Quitá alguno.`);
+      setError(`Los archivos suman ${(total / 1e6).toFixed(1)} MB y el máximo es ${MAX_BYTES / 1e6} MB. Quita alguno.`);
       return;
     }
     if (nuevos.length) setAdjuntos((prev) => [...prev, ...nuevos]);
@@ -965,7 +965,7 @@ export function CotizadorDialog({
               ) : (
                 <div className="mx-auto mt-2 max-w-md">
                   <p className="text-xs text-slate-500">
-                    Publicá para generar el PDF con membrete y subirlo a la carpeta de cartas en Dropbox.
+                    Publica para generar el PDF con membrete y subirlo a la carpeta de cartas en Dropbox.
                   </p>
                   {pub.error ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{pub.error}</p> : null}
                   <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -1260,7 +1260,7 @@ export function CotizadorDialog({
         {phase === "review" || phase === "saving" ? (
           <footer className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
             {revision ? (
-              <span className="text-xs text-slate-400">Se guarda como borrador {numero}; después la publicás a Dropbox.</span>
+              <span className="text-xs text-slate-400">Se guarda como borrador {numero}; después la publicas a Dropbox.</span>
             ) : !initial ? (
               <button
                 type="button"

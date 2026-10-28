@@ -33,5 +33,5 @@ export async function sinAcceso(...secciones: Seccion[]): Promise<string | null>
   const ctx = await getActiveOrgContext();
   if (!ctx) return "Sin organización";
   const visibles = seccionesVisibles(ctx.role, ctx.secciones);
-  return secciones.some((s) => visibles.includes(s)) ? null : "No tenés acceso a esta sección.";
+  return secciones.some((s) => visibles.includes(s)) ? null : "No tienes acceso a esta sección.";
 }

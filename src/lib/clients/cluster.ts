@@ -34,20 +34,20 @@ const clusterSchema = z.object({
 
 export type NameCluster = z.infer<typeof clusterSchema>["clusters"][number];
 
-const SYSTEM = `Sos un asistente que estandariza nombres de clientes para DICEC (empresa HVAC en Panama).
+const SYSTEM = `Eres un asistente que estandariza nombres de clientes para DICEC (empresa HVAC en Panama).
 Recibis una lista de nombres de cliente en texto libre (como aparecieron en cotizaciones), cada uno con su cantidad de cotizaciones.
 Tu tarea: agrupar en un mismo cluster los nombres que se refieren al MISMO cliente real.
 
 Reglas:
 - Acentos y mayusculas son la misma entidad: "Cerveceria Clandestina" = "Cervecería Clandestina"; "SGS PANAMA" = "SGS Panamá".
 - Abreviaturas y nombres comerciales: "EFR" = "Esa Flaca Rica"; "STRI" = "S.T.R.I Panamá" = "Smithsonian Tropical Research Institute".
-- Sufijos legales (S.A., Inc., S. de R.L.) y palabras redundantes de pais/ciudad ("Panama", "Ciudad") NO distinguen clientes: ignoralos para agrupar.
-- Sucursales: si un nombre es una sucursal de un cliente (ej. "Esa Flaca Rica - David", "Esa Flaca Rica Costa del Este"), ponelo en el cluster del cliente padre y completá "branch" con la etiqueta de la sucursal (ej. "David", "Costa del Este").
-- Entidades publicas (CSS, hospitales): agrupá variantes del mismo edificio/entidad. Ej. "Hospital Rafael Estévez, Aguadulce" = "CSS HRRE Aguadulce" = "HRRE Aguadulce CSS".
+- Sufijos legales (S.A., Inc., S. de R.L.) y palabras redundantes de pais/ciudad ("Panama", "Ciudad") NO distinguen clientes: ignóralos para agrupar.
+- Sucursales: si un nombre es una sucursal de un cliente (ej. "Esa Flaca Rica - David", "Esa Flaca Rica Costa del Este"), ponlo en el cluster del cliente padre y completa "branch" con la etiqueta de la sucursal (ej. "David", "Costa del Este").
+- Entidades publicas (CSS, hospitales): agrupa variantes del mismo edificio/entidad. Ej. "Hospital Rafael Estévez, Aguadulce" = "CSS HRRE Aguadulce" = "HRRE Aguadulce CSS".
 - canonical: el nombre comercial limpio, SIN sucursal y SIN sufijo legal.
 - Cada nombre de entrada debe aparecer en EXACTAMENTE un cluster, con su string EXACTO en members[].name.
 - Si un nombre no tiene variantes, igual va en su propio cluster con un solo member.
-- IMPORTANTE: sé conservador. No fusiones clientes distintos solo porque se parecen (ej. dos empresas distintas con apellido comun). Ante la duda, dejalos separados y marcá confidence "baja".`;
+- IMPORTANTE: sé conservador. No fusiones clientes distintos solo porque se parecen (ej. dos empresas distintas con apellido comun). Ante la duda, déjalos separados y marca confidence "baja".`;
 
 export async function clusterClientNames(names: { name: string; count: number }[]): Promise<NameCluster[]> {
   if (names.length === 0) return [];
@@ -59,7 +59,7 @@ export async function clusterClientNames(names: { name: string; count: number }[
     messages: [
       {
         role: "user",
-        content: `Lista de nombres de cliente (con cantidad de cotizaciones entre parentesis). Agrupá los que sean el mismo cliente real.\n\n${list}`,
+        content: `Lista de nombres de cliente (con cantidad de cotizaciones entre parentesis). Agrupa los que sean el mismo cliente real.\n\n${list}`,
       },
     ],
     output_config: { format: zodOutputFormat(clusterSchema) },

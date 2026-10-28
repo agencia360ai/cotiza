@@ -7,7 +7,7 @@ import { propuestaSchema, REGLAS_PROPUESTA } from "./propuesta-schema";
 const schema = z.object({
   client_name: z
     .string()
-    .describe("Cliente destinatario. Si coincide con uno de la LISTA DE CLIENTES provista, usá EXACTAMENTE ese nombre."),
+    .describe("Cliente destinatario. Si coincide con uno de la LISTA DE CLIENTES provista, usa EXACTAMENTE ese nombre."),
   ubicacion: z.string().nullable().describe("Ubicación/sucursal del trabajo para el encabezado (ej. 'Sucursal David, Chiriquí')."),
   tipo: z.enum(["realizar", "realizados"]).describe("'realizar' = trabajos a realizar (default); 'realizados' si ya se hicieron."),
   rubro: z.enum(["DC", "DM", "DS", "DV"]).describe("DC=Contratos/obras, DM=Mantenimiento, DS=Servicio/reparaciones, DV=Ventas/Suministro."),
@@ -29,7 +29,7 @@ const schema = z.object({
       }),
     )
     .min(1)
-    .describe("Renglones de la cotización. Si el usuario dio un precio total, respetalo (un renglón o distribuido)."),
+    .describe("Renglones de la cotización. Si el usuario dio un precio total, respétalo (un renglón o distribuido)."),
   aplica_itbms: z.boolean().describe("true por defecto (se suma 7%). false solo si piden explícitamente sin ITBMS/exento."),
   validez_dias: z.number().nullable().describe("Días de validez si se mencionan; si no, 30."),
   condiciones: z
@@ -44,18 +44,18 @@ const schema = z.object({
 
 export type GeneratedQuote = z.infer<typeof schema>;
 
-const SYSTEM = `Sos el cotizador de DICEC, Inc (Design Installation Consulting Engineering Company), empresa HVAC/refrigeración en Panamá.
-Convertís una descripción breve (una línea) en una cotización formal completa.
+const SYSTEM = `Eres el cotizador de DICEC, Inc (Design Installation Consulting Engineering Company), empresa HVAC/refrigeración en Panamá.
+Conviertes una descripción breve (una línea) en una cotización formal completa.
 
 Reglas:
-- Redactá los renglones como en una carta formal panameña de HVAC: equipo con marca/capacidad si se da, alcance del trabajo (suministro, instalación, mano de obra, materiales).
-- NO repitas el mismo alcance en cada renglón. Si varios equipos comparten el mismo trabajo (el caso típico de un mantenimiento preventivo), describí ese alcance UNA vez en las condiciones y dejá cada renglón en equipo + capacidad + tarifa. Repetir el mismo párrafo seis veces convierte una carta de una página en cuatro, y el cliente deja de leerla.
+- Redacta los renglones como en una carta formal panameña de HVAC: equipo con marca/capacidad si se da, alcance del trabajo (suministro, instalación, mano de obra, materiales).
+- NO repitas el mismo alcance en cada renglón. Si varios equipos comparten el mismo trabajo (el caso típico de un mantenimiento preventivo), describe ese alcance UNA vez en las condiciones y deja cada renglón en equipo + capacidad + tarifa. Repetir el mismo párrafo seis veces convierte una carta de una página en cuatro, y el cliente deja de leerla.
 - Precios en Balboas (B/.), SIN ITBMS (el 7% se suma aparte salvo que digan lo contrario).
-- Si el usuario da precio(s), respetalos EXACTAMENTE. Si dice "X más ITBMS", X es el precio sin ITBMS. Si dice "ITBMS incluido", calculá el precio base = X / 1.07.
-- Si NO da precio, estimá un precio razonable de mercado panameño para ese trabajo y dejalo evidente en la descripción corta que es estimado.
+- Si el usuario da precio(s), respétalos EXACTAMENTE. Si dice "X más ITBMS", X es el precio sin ITBMS. Si dice "ITBMS incluido", calcula el precio base = X / 1.07.
+- Si NO da precio, estima un precio razonable de mercado panameño para ese trabajo y déjalo evidente en la descripción corta que es estimado.
 - Rubro por el CONTENIDO del trabajo (no por el número): mantenimiento preventivo/programado → DM; reparación/servicio puntual (reemplazos, diagnósticos; típicamente < B/.5,000) → DS; venta/suministro de equipos → DV; obra/instalación grande o contrato (típicamente > B/.5,000) → DC.
-- Si menciona un cliente de la LISTA DE CLIENTES, usá ese nombre exacto.
-- Cada renglón lleva "aparte": false suma al total, true se cotiza pero se factura solo cuando el cliente lo pida (y sale debajo de la oferta). Usá true cuando el pedido diga "por evento", "cuando se solicite", "aparte del total" o similar; en la duda, false.
+- Si menciona un cliente de la LISTA DE CLIENTES, usa ese nombre exacto.
+- Cada renglón lleva "aparte": false suma al total, true se cotiza pero se factura solo cuando el cliente lo pida (y sale debajo de la oferta). Usa true cuando el pedido diga "por evento", "cuando se solicite", "aparte del total" o similar; en la duda, false.
 - No inventes condiciones que el usuario no dio (validez default 30 días).`;
 
 export type QuoteImage = { data: string; mime: "image/jpeg" | "image/png" | "image/webp" };
@@ -107,13 +107,13 @@ export function comoLeerLosAdjuntos(adjuntos: QuoteAdjunto[]): string {
   const tipos = new Set(adjuntos.map((a) => a.kind));
   const partes = [
     `Hay ${adjuntos.length} archivo(s) adjunto(s): ${adjuntos.map((a) => a.name).join(", ")}.`,
-    "Extraé de ahí equipo, alcance, cantidades y precios que aparezcan.",
+    "Extrae de ahí equipo, alcance, cantidades y precios que aparezcan.",
   ];
   if (tipos.has("image")) {
     partes.push("Las fotos pueden ser notas manuscritas, placas de equipo o una cotización previa en papel.");
   }
   if (tipos.has("pdf")) {
-    partes.push("Los PDF pueden ser especificaciones, pliegos o cotizaciones anteriores; respetá sus cantidades y descripciones técnicas.");
+    partes.push("Los PDF pueden ser especificaciones, pliegos o cotizaciones anteriores; respeta sus cantidades y descripciones técnicas.");
   }
   partes.push("El texto del pedido complementa o CORRIGE lo que digan los archivos: si se contradicen, gana el texto.");
   return partes.join(" ") + "\n\n";
@@ -132,13 +132,13 @@ export async function generateQuote(
   content.push({
     type: "text",
     text:
-      `LISTA DE CLIENTES:\n${list}\n\nPEDIDO:\n${brief || "(sin texto — usá los archivos adjuntos)"}\n\n` +
+      `LISTA DE CLIENTES:\n${list}\n\nPEDIDO:\n${brief || "(sin texto — usa los archivos adjuntos)"}\n\n` +
       (textos ? `ARCHIVOS DE TEXTO ADJUNTOS:\n${textos}\n\n` : "") +
       comoLeerLosAdjuntos(adjuntos) +
       (formato === "propuesta"
         ? `FORMATO: propuesta.\n${REGLAS_PROPUESTA}\n\n`
         : "FORMATO: carta clásica (títulos de renglón y propuesta en null).\n\n") +
-      "Generá la cotización.",
+      "Genera la cotización.",
   });
 
   const response = await anthropic.messages.parse({
@@ -158,7 +158,7 @@ export async function generateQuote(
   // manda a buscar un bug de formato donde lo que hubo fue un texto muy largo.
   if (response.stop_reason === "max_tokens") {
     throw new Error(
-      "La cotización salió más larga de lo que entra en una respuesta. Acortá el pedido (o partilo en dos cotizaciones) y volvé a intentar.",
+      "La cotización salió más larga de lo que entra en una respuesta. Acorta el pedido (o pártelo en dos cotizaciones) y vuelve a intentar.",
     );
   }
   if (!response.parsed_output) throw new Error("La IA no pudo generar la cotización");

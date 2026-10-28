@@ -44,16 +44,16 @@ export function mensajeDeIA(status: number | undefined, cuerpo: unknown, proveed
     return `Se llegó al tope de gasto configurado en la cuenta de ${c.nombre}. Se sube en ${c.tope}.`;
   }
   if (status === 413 || /prompt is too long|too large|image exceeds|PDF pages/i.test(texto)) {
-    return "El archivo es demasiado grande para la IA — probá con uno más liviano o con menos páginas.";
+    return "El archivo es demasiado grande para la IA — prueba con uno más liviano o con menos páginas.";
   }
   if (status === 401) return `La clave de ${c.nombre} (${c.clave} en Vercel) es inválida o fue revocada.`;
   if (status === 403 && proveedor === "anthropic") {
-    return "La clave de Anthropic no tiene permiso para esto — revisá el workspace en console.anthropic.com.";
+    return "La clave de Anthropic no tiene permiso para esto — revisa el workspace en console.anthropic.com.";
   }
   if (status === 404) return `El modelo de IA configurado no está disponible en ${c.nombre}.`;
-  if (status === 429) return "La IA recibió demasiadas consultas a la vez — probá de nuevo en un minuto.";
+  if (status === 429) return "La IA recibió demasiadas consultas a la vez — prueba de nuevo en un minuto.";
   if (tipo === "overloaded_error" || (status ?? 0) >= 500) {
-    return `La IA de ${c.nombre} está saturada o con problemas en este momento — probá de nuevo en unos minutos.`;
+    return `La IA de ${c.nombre} está saturada o con problemas en este momento — prueba de nuevo en unos minutos.`;
   }
   return texto ? `La IA rechazó la consulta: ${texto}` : null;
 }

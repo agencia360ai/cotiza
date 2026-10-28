@@ -341,7 +341,7 @@ export async function leerRevisionPdf(quoteId: string, nombre: string, base64: s
   const original = await cargarOriginal(c.supabase as unknown as Db, c.orgId, quoteId);
   if (!original) return { error: "No encontré la cotización" };
   const base = numeroBase(original.quote_number);
-  if (!base) return { error: `${original.quote_number} no tiene la forma "COT DC 26-211": corregí el número antes de subirle una revisión` };
+  if (!base) return { error: `${original.quote_number} no tiene la forma "COT DC 26-211": corrige el número antes de subirle una revisión` };
 
   let parsed: Awaited<ReturnType<typeof parseQuotePdf>> | null = null;
   let iaError: string | null = null;
@@ -361,9 +361,9 @@ export async function leerRevisionPdf(quoteId: string, nombre: string, base64: s
   // El PDF es lo que ve el cliente: si dice otro número, que se sepa antes de subirlo.
   const aviso =
     delPdf && numeroBase(delPdf) !== base
-      ? `El PDF dice ${delPdf}, no ${base}: revisá que sea una revisión de esta cotización.`
+      ? `El PDF dice ${delPdf}, no ${base}: revisa que sea una revisión de esta cotización.`
       : delPdf && !mismoNumero(delPdf, numero)
-        ? `El PDF dice ${delPdf}; se registra como ${numero}. Si el cliente tiene que ver ${numero}, corregilo en el PDF antes de subirlo.`
+        ? `El PDF dice ${delPdf}; se registra como ${numero}. Si el cliente tiene que ver ${numero}, corrígelo en el PDF antes de subirlo.`
         : null;
 
   return {

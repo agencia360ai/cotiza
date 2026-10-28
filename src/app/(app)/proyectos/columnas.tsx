@@ -275,7 +275,7 @@ export function ColumnaTh<K extends string>({
       }}
       onClick={() => onSort(sortKey)}
       aria-sort={activo ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-      title={meta.ayuda ? `${meta.ayuda} · arrastrá para mover la columna` : "Clic para ordenar · arrastrá para mover la columna"}
+      title={meta.ayuda ? `${meta.ayuda} · arrastra para mover la columna` : "Clic para ordenar · arrastra para mover la columna"}
       className={cn(
         "group relative cursor-pointer select-none px-2.5 py-2.5 font-semibold transition-colors hover:text-slate-700",
         derecha && "text-right",
@@ -348,7 +348,7 @@ export function ColumnasMenu({ cols }: { cols: Columnas }) {
       {abierto ? (
         <div className="absolute right-0 z-30 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
           <p className="px-2 py-1.5 text-[11px] text-slate-500">
-            Arrastrá los encabezados de la tabla para cambiarlas de lugar.
+            Arrastra los encabezados de la tabla para cambiarlas de lugar.
           </p>
           <ul className="max-h-[26rem] overflow-y-auto">
             {cols.orden.map((k) => {

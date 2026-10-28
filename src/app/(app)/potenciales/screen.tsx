@@ -1300,7 +1300,7 @@ function QuoteDrawer({
           ) : null}
         </div>
         {pubErr ? <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{pubErr}</p> : null}
-        <Field label="Número" hint="editable — acomodalo como quieras">
+        <Field label="Número" hint="editable — acomódalo como quieras">
           <input className={inputCls} value={f.quote_number} onChange={(e) => set("quote_number", e.target.value)} placeholder="COT DC 26-108" />
         </Field>
         <Field label="Cliente" hint="texto original + cliente estandarizado">

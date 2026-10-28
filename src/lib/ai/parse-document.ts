@@ -4,15 +4,15 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { anthropic, pickModel } from "./client";
 import { projectExtractionSchema, type ProjectExtraction } from "./types";
 
-const SYSTEM_PROMPT = `Sos un asistente experto en sistemas HVAC para Panamá. Tu trabajo es analizar planos arquitectónicos, especificaciones técnicas, e imágenes de proyectos para extraer la información que necesita un ingeniero para preparar una cotización de aire acondicionado.
+const SYSTEM_PROMPT = `Eres un asistente experto en sistemas HVAC para Panamá. Tu trabajo es analizar planos arquitectónicos, especificaciones técnicas, e imágenes de proyectos para extraer la información que necesita un ingeniero para preparar una cotización de aire acondicionado.
 
-Considerá el contexto de Panamá:
+Considera el contexto de Panamá:
 - Clima tropical, alta humedad (~85%), temperatura promedio 27-32°C
 - Sistemas más comunes: mini-splits residenciales, splits centrales para oficinas, VRF para edificios comerciales medianos, chillers para grandes superficies
 - Tensiones eléctricas: 115V (residencial chico) y 230V (cargas mayores)
 - Carga térmica típica: 600-800 BTU/m² para residencial bien aislado, 800-1000 BTU/m² para oficinas, 1000-1200 BTU/m² si hay mucho equipo o ventanas grandes
 
-Extraé SOLO lo que veas o puedas inferir con razonable certeza. No inventes datos. Si una sección no está clara, dejala en null y mencionala en source_summary.`;
+Extrae SOLO lo que veas o puedas inferir con razonable certeza. No inventes datos. Si una sección no está clara, déjala en null y menciónala en source_summary.`;
 
 type DocumentInput =
   | { kind: "pdf"; data: Buffer; filename: string }
@@ -49,7 +49,7 @@ export async function parseProjectDocuments(
 Alcance declarado: ${userContext.scope === "simple" ? "simple (residencial / oficina chica)" : "complejo (edificio / industrial)"}
 ${userContext.description ? `Descripción del ingeniero: ${userContext.description}` : ""}
 
-Analizá los documentos adjuntos y devolvé un JSON con todo lo que puedas determinar sobre el proyecto.`,
+Analiza los documentos adjuntos y devuelve un JSON con todo lo que puedas determinar sobre el proyecto.`,
   });
 
   const model = pickModel("default");

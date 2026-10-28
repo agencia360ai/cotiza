@@ -22,6 +22,7 @@ test("cada técnico de Personal encuentra su ficha de QuickBooks", () => {
   assert.equal(emparejar("Humberto Gonzalez", qbo)?.tipo, "Vendor");
   assert.equal(emparejar("Davis Rodriguez", qbo)?.id, "339");
   assert.equal(emparejar("Ricaurte Javier Ríos", qbo), null, "no está en QuickBooks");
+  assert.equal(emparejar("Nestor Gutierrez", qbo)?.id, "400000021", "ingeniero, sin el segundo nombre");
 });
 
 test("si hay empleado y proveedor con el mismo nombre, gana el empleado (pasó a planilla)", () => {

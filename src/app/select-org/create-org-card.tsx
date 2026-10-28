@@ -52,7 +52,7 @@ export function CreateOrgCard() {
     >
       <h3 className="text-sm font-bold text-slate-900">Nueva organización</h3>
       <p className="mt-1 text-xs text-slate-500">
-        Quedás como owner. Después podés agregar miembros desde Configuración.
+        Quedas como owner. Después puedes agregar miembros desde Configuración.
       </p>
 
       <div className="mt-4 space-y-3">

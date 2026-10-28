@@ -140,7 +140,7 @@ export function ReportScreen({
 
   function handleSubmit() {
     if (items.length === 0) {
-      setError("Generá el reporte con IA primero");
+      setError("Genera el reporte con IA primero");
       return;
     }
     setError(null);
@@ -273,7 +273,7 @@ export function ReportScreen({
             </div>
           </header>
           <p className="mb-3 text-xs text-slate-500">
-            Cargá fotos, voz y notas de a poco. <strong>Cada cambio se guarda en el server al instante</strong> — podés cerrar el celular y volver mañana, no se pierde nada.
+            Carga fotos, voz y notas de a poco. <strong>Cada cambio se guarda en el server al instante</strong> — puedes cerrar el celular y volver mañana, no se pierde nada.
           </p>
 
           <div className="grid grid-cols-3 gap-2">
@@ -310,7 +310,7 @@ export function ReportScreen({
 
           {captures.length === 0 ? (
             <p className="mt-4 rounded-xl border border-dashed border-slate-300 bg-white py-8 text-center text-sm text-slate-500">
-              Capturá fotos, dictá notas de voz o escribí lo que veas.<br />
+              Captura fotos, dicta notas de voz o escribe lo que veas.<br />
               La IA las ordena por equipo automáticamente.
             </p>
           ) : (
@@ -706,7 +706,7 @@ function VoiceCaptureModal({
     <Modal title="Nota de voz" onClose={onClose}>
       {!supported ? (
         <p className="text-sm text-slate-600">
-          Tu navegador no soporta dictado de voz. Usá la opción de texto, o probá Chrome/Safari.
+          Tu navegador no soporta dictado de voz. Usa la opción de texto, o prueba Chrome/Safari.
         </p>
       ) : (
         <>
@@ -723,13 +723,13 @@ function VoiceCaptureModal({
             <Mic className="size-10" />
           </button>
           <p className="mt-3 text-center text-sm text-slate-500">
-            {listening ? "Escuchando…" : "Tocá para empezar a dictar"}
+            {listening ? "Escuchando…" : "Toca para empezar a dictar"}
           </p>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={5}
-            placeholder="La transcripción aparecerá acá. Editá si hace falta."
+            placeholder="La transcripción aparecerá acá. Edita si hace falta."
             className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
           />
           <button
@@ -761,7 +761,7 @@ function TextCaptureModal({
         onChange={(e) => setText(e.target.value)}
         rows={6}
         autoFocus
-        placeholder="Anotá lo que viste o querés transmitir al cliente…"
+        placeholder="Anota lo que viste o quieres transmitir al cliente…"
         className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
       />
       <button

@@ -567,7 +567,7 @@ export function ProjectEditor({
                 <div className="rounded-2xl border border-dashed border-border bg-card py-14 text-center">
                   <p className="text-sm font-semibold text-slate-900">Sin hitos en esta pestaña</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Cargá el primer hito (ej. &ldquo;Recepción de materiales&rdquo;).
+                    Carga el primer hito (ej. &ldquo;Recepción de materiales&rdquo;).
                   </p>
                 </div>
               );
@@ -776,7 +776,7 @@ function AddMilestoneForm({
         <div>
           <h3 className="text-sm font-bold text-slate-900">Agregar Hito</h3>
           <p className="text-xs text-slate-500">
-            Escribí lo que pasó y/o adjuntá fotos, videos, voz. Todo opcional.
+            Escribe lo que pasó y/o adjunta fotos, videos, voz. Todo opcional.
           </p>
         </div>
       </header>
@@ -809,7 +809,7 @@ function AddMilestoneForm({
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Qué pasó (ej. 'Apertura del muro lateral, llegaron 12 paneles y arrancamos el armado'). Podés dejarlo vacío si subís fotos o voz."
+          placeholder="Qué pasó (ej. 'Apertura del muro lateral, llegaron 12 paneles y arrancamos el armado'). Puedes dejarlo vacío si subes fotos o voz."
           rows={4}
           autoFocus
           className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm leading-relaxed focus:border-slate-400 focus:outline-none"

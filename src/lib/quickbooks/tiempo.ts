@@ -148,7 +148,7 @@ export async function crearRegistrosDeTiempo(qbJobId: string, lineas: LineaTiemp
       } catch (e) {
         if (e instanceof QboTransportError) {
           cortado = true;
-          out.push({ ok: false, error: "Se cortó la conexión con QuickBooks: revisá si quedó antes de volver a cargarla.", incierto: true });
+          out.push({ ok: false, error: "Se cortó la conexión con QuickBooks: revisa si quedó antes de volver a cargarla.", incierto: true });
         } else {
           out.push({ ok: false, error: e instanceof Error ? e.message.slice(0, 300) : "Error de QuickBooks", incierto: false });
         }

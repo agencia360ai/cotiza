@@ -22,9 +22,9 @@ export default function ImportClientPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Crear cliente con IA</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Pegá una descripción, una lista de equipos, o subí un PDF/foto. La IA arma el cliente
-            completo con sus sucursales, equipos y mantenimientos programados — vos revisás y
-            guardás.
+            Pega una descripción, una lista de equipos, o sube un PDF/foto. La IA arma el cliente
+            completo con sus sucursales, equipos y mantenimientos programados — tú revisas y
+            guardas.
           </p>
         </div>
       </header>

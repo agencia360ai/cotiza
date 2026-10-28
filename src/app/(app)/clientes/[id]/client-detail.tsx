@@ -295,7 +295,7 @@ function SchedulesSection({
 
   function add() {
     if (!locationId) {
-      setError("Elegí una sucursal");
+      setError("Elige una sucursal");
       return;
     }
     setError(null);
@@ -335,7 +335,7 @@ function SchedulesSection({
 
       {locations.length === 0 ? (
         <p className="px-5 py-6 text-center text-sm text-slate-500">
-          Agregá al menos una sucursal antes de programar mantenimientos
+          Agrega al menos una sucursal antes de programar mantenimientos
         </p>
       ) : null}
 
@@ -583,7 +583,7 @@ function ShareLinksSection({
           <h2 className="text-base font-semibold">Links públicos del cliente</h2>
         </div>
         <p className="mt-0.5 text-xs text-slate-500">
-          Compartilos con {clientName} para que vea el portal con sus reportes
+          Compártelos con {clientName} para que vea el portal con sus reportes
         </p>
       </header>
 
@@ -736,7 +736,7 @@ function LocationsSection({ clientId, locations }: { clientId: string; locations
             Agregar sucursal con IA
           </p>
           <p className="text-xs text-slate-600">
-            Pegá texto, voz o foto/PDF — la IA arma la sucursal con sus equipos y mantenimientos
+            Pega texto, voz o foto/PDF — la IA arma la sucursal con sus equipos y mantenimientos
           </p>
         </div>
         <Plus className="size-5 text-violet-600 transition-transform group-hover:scale-110" />

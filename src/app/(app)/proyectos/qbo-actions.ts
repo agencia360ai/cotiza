@@ -68,7 +68,7 @@ const inflight = new Map<string, Promise<QboProjectsResult>>();
  */
 function mensajeDeFallo(e: unknown): string {
   if (e instanceof QboTransportError) {
-    return `${e.message}. Se intentó 3 veces; el servicio puede estar arrancando — probá de nuevo en un minuto`;
+    return `${e.message}. Se intentó 3 veces; el servicio puede estar arrancando — prueba de nuevo en un minuto`;
   }
   return e instanceof Error ? e.message : "Error trayendo proyectos de QBO";
 }
@@ -574,7 +574,7 @@ export async function getDesgloseProyecto(qbJobId: string, traer = false): Promi
     return { ok: true, desglose: normalizarDesglose(data?.desglose), guardable: true };
   }
 
-  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
+  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (configúrala en Vercel)." };
   // El gateway se cuelga con dos pedidos a la vez: si hay un Actualizar en
   // curso, esperar a que termine.
   await inflight.get(orgId)?.catch(() => null);
@@ -603,7 +603,7 @@ export async function getQboProjects(opts?: { force?: boolean; allYears?: boolea
 
   if (!opts?.force) return loadFromDb(supabase, orgId, year, opts?.allYears); // abrir la página = base, sin QBO
 
-  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
+  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (configúrala en Vercel)." };
   const inf = inflight.get(orgId);
   if (inf) return inf;
   const p: Promise<QboProjectsResult> = (async () => {

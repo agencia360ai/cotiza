@@ -146,7 +146,7 @@ export async function generateWithAI(token: string, reportId: string): Promise<R
   const report = await loadReport(token, reportId);
   if (!report) return { error: "Reporte no encontrado" };
   if (report.report.capture_data.length === 0) {
-    return { error: "Capturá al menos una foto, voz o nota antes de generar" };
+    return { error: "Captura al menos una foto, voz o nota antes de generar" };
   }
 
   // Download photos as buffers for Claude vision

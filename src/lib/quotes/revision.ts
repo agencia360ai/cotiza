@@ -83,10 +83,10 @@ export type RevisionEditable = {
 // misma cotización con un cambio.
 function pedidoDeTranscripcion(numero: string, cliente: string): string {
   return (
-    `Este PDF es la cotización ${numero} que ya se le mandó a ${cliente}. Pasala TAL CUAL para hacerle una revisión: ` +
+    `Este PDF es la cotización ${numero} que ya se le mandó a ${cliente}. Pásala TAL CUAL para hacerle una revisión: ` +
     "los mismos renglones en el mismo orden, con sus cantidades, descripciones y precios unitarios; el mismo ITBMS, " +
     "la misma validez y las mismas condiciones o notas que tenga escritas. Los precios van sin ITBMS: si el PDF los " +
-    "muestra con el ITBMS incluido, sacáselo. No agregues, no quites ni estimes nada — los cambios de la revisión se piden después."
+    "muestra con el ITBMS incluido, sácaselo. No agregues, no quites ni estimes nada — los cambios de la revisión se piden después."
   );
 }
 
@@ -99,7 +99,7 @@ export async function armarRevision(
   const original = await cargarOriginal(db, orgId, quoteId);
   if (!original) return { error: "No encontré la cotización" };
   const revs = await revisionesDe(db, orgId, original);
-  if (!revs) return { error: `${original.quote_number} no tiene la forma "COT DC 26-211": corregí el número antes de hacerle una revisión` };
+  if (!revs) return { error: `${original.quote_number} no tiene la forma "COT DC 26-211": corrige el número antes de hacerle una revisión` };
 
   const cliente = original.client_std_name ?? original.client_name ?? "Cliente";
   const hoy = new Date().toLocaleDateString("en-CA", { timeZone: "America/Panama" });
