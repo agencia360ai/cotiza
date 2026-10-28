@@ -326,7 +326,7 @@ export function CartaEditor({
             className="order-last w-full rounded-lg bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 ring-1 ring-inset ring-amber-600/20"
             title="Las líneas punteadas sobre la hoja marcan dónde corta cada página"
           >
-            Esta carta ocupa <b>{paginas} páginas</b>. Si querés que entre en una, pedile al cotizador que acorte las
+            Esta carta ocupa <b>{paginas} páginas</b>. Si quieres que entre en una, pídele al cotizador que acorte las
             descripciones o las condiciones — los cortes están marcados sobre la hoja.
           </span>
         ) : null}

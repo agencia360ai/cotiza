@@ -132,7 +132,7 @@ export function AILocationWizard({
             <div>
               <h3 className="text-base font-semibold text-slate-900">Agregar sucursal con IA</h3>
               <p className="text-xs text-slate-500">
-                Pegá texto, dictá voz al texto o adjuntá foto/PDF — la IA estructura todo
+                Pega texto, dicta voz al texto o adjunta foto/PDF — la IA estructura todo
               </p>
             </div>
           </div>
@@ -279,7 +279,7 @@ function BatchPreview({
     <div className="space-y-3">
       <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-600/20">
         ✓ IA estructuró {batch.locations.length} sucursal
-        {batch.locations.length === 1 ? "" : "es"}. Revisá y editá antes de confirmar.
+        {batch.locations.length === 1 ? "" : "es"}. Revisa y edita antes de confirmar.
       </p>
       {batch.locations.map((loc, idx) => (
         <LocationPreview

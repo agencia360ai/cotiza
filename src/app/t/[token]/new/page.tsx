@@ -40,7 +40,7 @@ export default async function NewReportPage({
           ¿Dónde estás trabajando hoy?
         </h1>
         <p className="mt-2 text-sm text-slate-500">
-          Elegí cliente, sucursal y tipo. Después capturás fotos y notas, la IA arma el reporte.
+          Elige cliente, sucursal y tipo. Después capturas fotos y notas, la IA arma el reporte.
         </p>
       </header>
 

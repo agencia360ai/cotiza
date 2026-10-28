@@ -101,7 +101,7 @@ export function ImportWizard() {
 
   async function parse() {
     if (!text.trim() && files.length === 0) {
-      setError("Pegá texto o adjuntá un archivo");
+      setError("Pega texto o adjunta un archivo");
       return;
     }
     setParsing(true);
@@ -145,7 +145,7 @@ export function ImportWizard() {
   return (
     <div className="rounded-2xl border border-border bg-card p-6">
       <label className="text-xs font-semibold uppercase tracking-wider text-slate-600">
-        Describí cliente(s)
+        Describe cliente(s)
       </label>
       <textarea
         value={text}

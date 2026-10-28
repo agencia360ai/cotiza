@@ -117,7 +117,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <GenerateQuoteButton projectId={project.id} disabled={blockedByGaps} />
           {blockedByGaps && (
             <p className="text-xs text-muted-foreground mt-2">
-              Completá los datos críticos arriba para habilitar la generación.
+              Completa los datos críticos arriba para habilitar la generación.
             </p>
           )}
         </section>

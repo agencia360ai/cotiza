@@ -114,7 +114,7 @@ export function VigilanciaPanel({ vigiladas }: { vigiladas: Vigilada[] }) {
               {filas.length === 0
                 ? "Sin licitaciones presentadas para vigilar"
                 : conCambio.length > 0
-                  ? "El portal se movió — revisá si piden subsanar algo"
+                  ? "El portal se movió — revisa si piden subsanar algo"
                   : `${filas.length} en seguimiento · última revisión ${hace(ultimaRevision)}`}
             </p>
           </div>

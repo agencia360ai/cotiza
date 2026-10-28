@@ -71,7 +71,7 @@ export function EngineerLinkDialog({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          Compartí este link con el equipo (WhatsApp). Abre el cotizador <b>sin login</b>: escriben una línea, revisan y
+          Comparte este link con el equipo (WhatsApp). Abre el cotizador <b>sin login</b>: escriben una línea, revisan y
           publican — el PDF queda en Dropbox.
         </p>
 

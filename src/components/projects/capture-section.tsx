@@ -139,7 +139,7 @@ export function ProjectCaptureSection({
     }
     if (r.data.proposal.milestones.length === 0) {
       setError(
-        "La IA no logró armar un hito. Probá agregando una nota de texto que describa qué se ve, o agregá el hito manualmente abajo.",
+        "La IA no logró armar un hito. Prueba agregando una nota de texto que describa qué se ve, o agrega el hito manualmente abajo.",
       );
       return;
     }
@@ -302,7 +302,7 @@ export function ProjectCaptureSection({
 
         {items.length === 0 ? (
           <p className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-            Sin capturas todavía. Sumá fotos, voz y notas — la IA va estructurando.
+            Sin capturas todavía. Suma fotos, voz y notas — la IA va estructurando.
           </p>
         ) : null}
       </div>
@@ -501,7 +501,7 @@ export function VoiceCaptureModal({
     <Modal title="Nota de voz" onClose={onClose}>
       {!supported ? (
         <p className="text-sm text-slate-600">
-          Tu navegador no soporta dictado de voz. Usá Chrome/Safari, o sumá una nota de texto.
+          Tu navegador no soporta dictado de voz. Usa Chrome/Safari, o suma una nota de texto.
         </p>
       ) : (
         <>
@@ -518,13 +518,13 @@ export function VoiceCaptureModal({
             <Mic className="size-10" />
           </button>
           <p className="mt-3 text-center text-sm text-slate-500">
-            {listening ? "Escuchando…" : "Tocá para empezar a dictar"}
+            {listening ? "Escuchando…" : "Toca para empezar a dictar"}
           </p>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={5}
-            placeholder="La transcripción aparecerá acá. Editá si hace falta."
+            placeholder="La transcripción aparecerá acá. Edita si hace falta."
             className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
           />
           <button
@@ -556,7 +556,7 @@ export function TextCaptureModal({
         onChange={(e) => setText(e.target.value)}
         rows={6}
         autoFocus
-        placeholder="Anotá qué se hizo, qué se ve, qué viene…"
+        placeholder="Anota qué se hizo, qué se ve, qué viene…"
         className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none"
       />
       <button
@@ -643,10 +643,10 @@ function ProposalReview({
         </div>
         <div className="flex-1">
           <p className="text-sm font-bold text-slate-900">
-            Propuesta de la IA · revisá antes de guardar
+            Propuesta de la IA · revisa antes de guardar
           </p>
           <p className="text-xs text-slate-600">
-            Editá título, estado, fecha o texto. Si querés agregar más fotos/notas, descartá y volvé a procesar.
+            Edita título, estado, fecha o texto. Si quieres agregar más fotos/notas, descarta y vuelve a procesar.
           </p>
         </div>
       </header>

@@ -62,32 +62,32 @@ const outputSchema = z.object({
   locations: z
     .array(locationSchema)
     .describe(
-      "Lista de sucursales detectadas. Si la entrada describe UNA sola sucursal, devolvé un array de 1.",
+      "Lista de sucursales detectadas. Si la entrada describe UNA sola sucursal, devuelve un array de 1.",
     ),
 });
 
 export type ParsedLocation = z.infer<typeof locationSchema>;
 export type ParsedLocationBatch = z.infer<typeof outputSchema>;
 
-const SYSTEM_PROMPT = `Sos un asistente que estructura sucursales y sus equipos para un cliente ya existente en una plataforma de mantenimiento HVAC en Panamá.
+const SYSTEM_PROMPT = `Eres un asistente que estructura sucursales y sus equipos para un cliente ya existente en una plataforma de mantenimiento HVAC en Panamá.
 
 Tu trabajo: a partir de voz transcripta, texto, fotos o PDFs, devolver una o varias sucursales con sus equipos y mantenimientos programados.
 
 Pautas:
 - El CLIENTE ya existe — no devuelvas datos del cliente, sólo locations.
-- Si la entrada describe UNA sola sucursal, devolvé locations: [una].
-- Si menciona varias (ej: "agregale Sucursal A y Sucursal B"), devolvé una por cada una.
-- NO inventes información. Si un campo no está claro, dejalo en null.
-- Si el usuario menciona equipos sin agruparlos por sucursal, asumí una única sucursal "Sede principal" o el nombre que mejor encaje del contexto.
-- Si la entrada menciona "preventivo" sin frecuencia, asumí 'bimestral' (estándar HVAC Panamá).
+- Si la entrada describe UNA sola sucursal, devuelve locations: [una].
+- Si menciona varias (ej: "agrégale Sucursal A y Sucursal B"), devuelve una por cada una.
+- NO inventes información. Si un campo no está claro, déjalo en null.
+- Si el usuario menciona equipos sin agruparlos por sucursal, asume una única sucursal "Sede principal" o el nombre que mejor encaje del contexto.
+- Si la entrada menciona "preventivo" sin frecuencia, asume 'bimestral' (estándar HVAC Panamá).
 - Categorías de equipo válidas:
   · Refrigeración: nevera, congelador, cuarto_frio, mesa_fria, vitrina_refrigerada, ice_maker, botellero
   · Aire acondicionado: mini_split_cassette, central_ac, paquete_rooftop, chiller, manejadora, piso_techo, fan_coil
   · Otros: evaporadora, campana_extractora, otro
-- Para "AC", "A/C" o "aire acondicionado" sin más detalle → usá mini_split_cassette (lo más común en Panamá).
+- Para "AC", "A/C" o "aire acondicionado" sin más detalle → usa mini_split_cassette (lo más común en Panamá).
 - BTU típicos: A/C residencial 9000-36000, A/C comercial hasta 60000. NO BTU para refrigeración.
 - Voltajes en Panamá: 110V (chico) y 220V (mayor).
-- Si en una imagen ves placa de equipo (marca/modelo/voltaje/BTU), usá esos datos exactos.`;
+- Si en una imagen ves placa de equipo (marca/modelo/voltaje/BTU), usa esos datos exactos.`;
 
 export async function parseLocationsFromInput(input: {
   client_name: string;
@@ -117,7 +117,7 @@ export async function parseLocationsFromInput(input: {
 
   userBlocks.push({
     type: "text",
-    text: `CLIENTE: ${input.client_name}\n\n${input.text || "Estructurá la sucursal y sus equipos a partir de los archivos adjuntos."}`,
+    text: `CLIENTE: ${input.client_name}\n\n${input.text || "Estructura la sucursal y sus equipos a partir de los archivos adjuntos."}`,
   });
 
   const model = pickModel("default");

@@ -48,7 +48,7 @@ export default async function NewProjectPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Nuevo proyecto</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Cargá los datos básicos. Después agregás los hitos paso a paso, con fotos y videos.
+            Carga los datos básicos. Después agregas los hitos paso a paso, con fotos y videos.
           </p>
         </div>
       </header>

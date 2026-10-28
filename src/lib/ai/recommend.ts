@@ -14,10 +14,10 @@ type CatalogItem = {
   notes: string | null;
 };
 
-const SYSTEM_PROMPT_BASE = `Sos un ingeniero HVAC senior especializado en proyectos en Panamá. Tu trabajo es proponer la lista de equipos para una cotización, eligiendo SKUs del catálogo provisto.
+const SYSTEM_PROMPT_BASE = `Eres un ingeniero HVAC senior especializado en proyectos en Panamá. Tu trabajo es proponer la lista de equipos para una cotización, eligiendo SKUs del catálogo provisto.
 
 Reglas:
-1. Usá SOLO SKUs que aparezcan en el catálogo. Si necesitás algo que no está, usá custom_name con descripción clara y un precio razonable estimado para Panamá.
+1. Usa SOLO SKUs que aparezcan en el catálogo. Si necesitas algo que no está, usa custom_name con descripción clara y un precio razonable estimado para Panamá.
 2. Carga térmica de referencia para Panamá (clima tropical, alta humedad):
    - Residencial bien aislado: 700 BTU/m²
    - Residencial estándar: 800 BTU/m²
@@ -27,9 +27,9 @@ Reglas:
 3. Para áreas chicas (<60 m²) → mini-splits individuales por zona.
 4. Para áreas medianas (60-150 m²) → split central o varios mini-splits según zonas.
 5. Para edificios (>150 m² o >3 zonas independientes) → VRF preferido.
-6. SIEMPRE incluí instalación (INSTALL-MS o INSTALL-VRF según el caso) y termostatos.
-7. Sumá ductería/cobre/drenajes según el tipo de sistema.
-8. Sumá ITBMS NO — el sistema lo agrega después automáticamente. Solo poné los items.
+6. SIEMPRE incluye instalación (INSTALL-MS o INSTALL-VRF según el caso) y termostatos.
+7. Suma ductería/cobre/drenajes según el tipo de sistema.
+8. Suma ITBMS NO — el sistema lo agrega después automáticamente. Solo pon los items.
 9. Cantidad debe ser entera para equipos, decimal solo para tubería/ducto por metro.
 10. reasoning en español, una línea, técnica pero clara.`;
 
@@ -64,7 +64,7 @@ export async function recommendEquipment({
     messages: [
       {
         role: "user",
-        content: `Proyecto a cotizar:\n\n${JSON.stringify(extraction, null, 2)}\n\nDevolvé la lista de equipos para la cotización.`,
+        content: `Proyecto a cotizar:\n\n${JSON.stringify(extraction, null, 2)}\n\nDevuelve la lista de equipos para la cotización.`,
       },
     ],
     output_config: {

@@ -39,7 +39,7 @@ export async function syncQuickbooksCustomers(opts?: { subCustomersAsLocations?:
   if (!orgId) return { ok: false, error: "Sin organización" };
   const sinPermiso = await sinAcceso("clientes");
   if (sinPermiso) return { ok: false, error: sinPermiso };
-  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
+  if (!hasQboConfig()) return { ok: false, error: "QBO_MCP_URL no está configurada (configúrala en Vercel)." };
 
   const errors: string[] = [];
   let fetchRes;

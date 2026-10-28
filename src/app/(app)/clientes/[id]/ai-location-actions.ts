@@ -29,7 +29,7 @@ export async function parseLocationsForClient(
   const files = formData.getAll("files") as File[];
 
   if (!text.trim() && files.length === 0) {
-    return { error: "Pegá texto o adjuntá un archivo" };
+    return { error: "Pega texto o adjunta un archivo" };
   }
 
   const { supabase } = await userOrgId();

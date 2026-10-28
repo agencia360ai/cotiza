@@ -7,7 +7,7 @@ import { anthropic, pickModel } from "./client";
 const schema = z.object({
   quote_number: z
     .string()
-    .describe('Número de la cotización con el prefijo COT y su revisión si la tiene, ej. "COT DC 26-108" o "COT DC 26-108 REV 2". Si no aparece en el documento, derivalo del nombre del archivo.'),
+    .describe('Número de la cotización con el prefijo COT y su revisión si la tiene, ej. "COT DC 26-108" o "COT DC 26-108 REV 2". Si no aparece en el documento, derívalo del nombre del archivo.'),
   client_name: z.string().nullable().describe("Cliente / empresa a quien va dirigida la cotización."),
   amount_usd: z
     .number()
@@ -19,7 +19,7 @@ const schema = z.object({
     .enum(["DC", "DM", "DS", "DV"])
     .nullable()
     .describe(
-      "Clasificá por el CONTENIDO del trabajo — el número casi siempre dice 'COT DC' y eso NO es el rubro. " +
+      "Clasifica por el CONTENIDO del trabajo — el número casi siempre dice 'COT DC' y eso NO es el rubro. " +
         "DM = mantenimiento preventivo/programado. DS = servicio o reparación puntual (reemplazos, reparaciones, diagnósticos; típicamente < B/.5,000). " +
         "DV = venta/suministro de equipos sin instalación mayor. DC = contratos/obras/instalaciones grandes (proyectos, típicamente > B/.5,000).",
     ),
@@ -27,12 +27,12 @@ const schema = z.object({
 
 export type ParsedQuote = z.infer<typeof schema>;
 
-const SYSTEM = `Sos un asistente que extrae datos de cartas de cotización de DICEC (empresa HVAC en Panamá).
-Cada documento es UNA cotización. Extraé los campos pedidos con precisión.
-- El número suele estar como "COT DC YY-NNN" (puede tener sufijos: A, B, R1.1, Rev 2). Devolvelo SIEMPRE con el prefijo COT y con su revisión si la tiene: si la carta dice "Cotización DC 26-249", el número es "COT DC 26-249"; si el PDF o el nombre del archivo dicen "Rev 2", va "COT DC 26-249 REV 2". Si no está en el texto, derivalo del nombre del archivo.
-- amount_usd: el TOTAL de la propuesta (incluí ITBMS si está incluido en el total mostrado). Solo el número.
-- rubro: el prefijo del número ("COT DC ...") es de la serie de DICEC, NO indica el rubro. Clasificá por lo que ES el trabajo: mantenimiento → DM; reparación/servicio puntual → DS; venta/suministro → DV; obra/instalación/contrato grande → DC.
-- Sé conservador: si un dato no está, devolvé null. No inventes.`;
+const SYSTEM = `Eres un asistente que extrae datos de cartas de cotización de DICEC (empresa HVAC en Panamá).
+Cada documento es UNA cotización. Extrae los campos pedidos con precisión.
+- El número suele estar como "COT DC YY-NNN" (puede tener sufijos: A, B, R1.1, Rev 2). Devuélvelo SIEMPRE con el prefijo COT y con su revisión si la tiene: si la carta dice "Cotización DC 26-249", el número es "COT DC 26-249"; si el PDF o el nombre del archivo dicen "Rev 2", va "COT DC 26-249 REV 2". Si no está en el texto, derívalo del nombre del archivo.
+- amount_usd: el TOTAL de la propuesta (incluye ITBMS si está incluido en el total mostrado). Solo el número.
+- rubro: el prefijo del número ("COT DC ...") es de la serie de DICEC, NO indica el rubro. Clasifica por lo que ES el trabajo: mantenimiento → DM; reparación/servicio puntual → DS; venta/suministro → DV; obra/instalación/contrato grande → DC.
+- Sé conservador: si un dato no está, devuelve null. No inventes.`;
 
 export async function parseQuotePdf(input: {
   filename: string;
@@ -59,7 +59,7 @@ export async function parseQuotePdf(input: {
   }
   content.push({
     type: "text",
-    text: `Nombre del archivo: ${input.filename}\nExtraé los datos de esta cotización.`,
+    text: `Nombre del archivo: ${input.filename}\nExtrae los datos de esta cotización.`,
   });
 
   // Haiku: sacar seis campos de una carta no pide más, y se corre por cada

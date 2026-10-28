@@ -290,7 +290,7 @@ export default async function InicioDashboard() {
           </div>
           {topProyectos.length === 0 ? (
             <p className="px-5 py-10 text-center text-sm text-slate-500">
-              Todavía no hay números de QuickBooks. Entrá a Proyectos y tocá Actualizar.
+              Todavía no hay números de QuickBooks. Entra a Proyectos y toca Actualizar.
             </p>
           ) : (
             <div className="overflow-x-auto">

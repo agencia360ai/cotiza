@@ -22,7 +22,7 @@ export default function NewClientPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Nuevo cliente</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Cargá los datos básicos. Después agregás sucursales y equipos desde el detalle.
+            Carga los datos básicos. Después agregas sucursales y equipos desde el detalle.
           </p>
         </div>
       </header>
@@ -33,9 +33,9 @@ export default function NewClientPage() {
         <div className="flex items-start gap-3">
           <Sparkles className="mt-0.5 size-4 shrink-0 text-violet-600" />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-slate-900">¿Tenés mucho que cargar?</p>
+            <p className="text-sm font-semibold text-slate-900">¿Tienes mucho que cargar?</p>
             <p className="mt-0.5 text-xs text-slate-600">
-              Si tenés un PDF, email o lista con clientes y equipos, la IA puede armar todo de un saque.
+              Si tienes un PDF, email o lista con clientes y equipos, la IA puede armar todo de una vez.
             </p>
             <Link
               href="/clientes/import"

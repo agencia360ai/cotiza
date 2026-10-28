@@ -10,7 +10,7 @@ const structuredEntrySchema = z.object({
   occurred_on: z
     .string()
     .nullable()
-    .describe("Fecha del evento en formato YYYY-MM-DD. Si no hay info clara, usá la fecha de captura del primer ítem agrupado."),
+    .describe("Fecha del evento en formato YYYY-MM-DD. Si no hay info clara, usa la fecha de captura del primer ítem agrupado."),
   text_es: z
     .string()
     .describe("Resumen narrativo en español (1-3 oraciones) de qué pasó en este punto del tiempo. Tono profesional pero claro."),
@@ -26,13 +26,13 @@ const structuredMilestoneSchema = z.object({
     .describe("UUID del hito existente al que se agregan estas sub-entradas. null si es un hito NUEVO que la IA decide crear."),
   title: z
     .string()
-    .describe("Título corto del hito. Si milestone_id está seteado, repetí el título existente."),
+    .describe("Título corto del hito. Si milestone_id está seteado, repite el título existente."),
   description_es: z
     .string()
     .nullable()
-    .describe("Descripción del hito en general (1-2 oraciones). Solo si es un hito nuevo; null si reusás uno existente."),
+    .describe("Descripción del hito en general (1-2 oraciones). Solo si es un hito nuevo; null si reúsas uno existente."),
   status: milestoneStatusEnum.describe(
-    "Estado del hito. Si todas las sub-entradas indican que terminó, marcá completado. Si está claramente avanzando, en_progreso. Default: en_progreso.",
+    "Estado del hito. Si todas las sub-entradas indican que terminó, marca completado. Si está claramente avanzando, en_progreso. Default: en_progreso.",
   ),
   entries: z
     .array(structuredEntrySchema)
@@ -50,20 +50,20 @@ const outputSchema = z.object({
 
 export type StructuredProject = z.infer<typeof outputSchema>;
 
-const SYSTEM_PROMPT = `Sos un asistente experto que ayuda a estructurar el avance de un proyecto de obra/instalación HVAC en Panamá a partir de capturas crudas (fotos, videos, transcripciones de voz, notas) que el técnico fue tomando en el campo.
+const SYSTEM_PROMPT = `Eres un asistente experto que ayuda a estructurar el avance de un proyecto de obra/instalación HVAC en Panamá a partir de capturas crudas (fotos, videos, transcripciones de voz, notas) que el técnico fue tomando en el campo.
 
 Tu trabajo: agrupar las capturas nuevas en hitos lógicos, y dentro de cada hito, en sub-entradas cronológicas (una por día/evento chico).
 
 Reglas:
-- SIEMPRE PROCESÁ TODAS LAS CAPTURAS: tu output DEBE incluir al menos un hito (existente o nuevo) por cada captura que recibas. NO descartes capturas — el usuario subió esa foto/voz/texto a propósito. Si una foto no tiene contexto claro, igual creá una sub-entrada describiendo lo que se ve ("Llegada de materiales", "Avance de obra", "Trabajo en sitio", etc.) y poné la fecha de captured_at.
-- HITOS EXISTENTES: si una captura claramente continúa un hito que ya existe (ej. ya está creado "Instalación de paneles" y ahora hay fotos del armado), NO crees un hito nuevo: usá milestone_id del existente y agregá una sub-entrada con la fecha/contenido nuevo.
-- HITOS NUEVOS: cuando una captura trata de algo distinto a los hitos existentes (o NO hay hitos previos), creá milestone_id=null con un título descriptivo derivado de la foto/contexto.
-- DESCRIPCIÓN DE FOTOS SIN TEXTO: si la captura es solo una foto SIN texto/voz adjunto, igual describila brevemente. Mirá la imagen y resumí qué se ve: materiales, herramientas, partes del proyecto, equipos, etc. Mantenelo conservador y honesto — describí lo que ves, no inventes detalles que no estén en la imagen.
-- SUB-ENTRADAS: agrupá capturas del mismo día o evento. Cada sub-entrada tiene un texto narrativo de 1-3 oraciones.
-- FECHA: usá la fecha de captured_at de la primera captura del grupo (formato YYYY-MM-DD). Esa fecha es cuándo el usuario subió la captura, lo cual representa cuándo trabajó en ese hito.
-- CAPTURE_IDS: cada sub-entrada debe listar los IDs de TODAS las capturas que la componen. processed_capture_ids debe incluir TODAS las capturas que recibiste (procesalas todas).
-- TONO: profesional, en español neutro. No inventes detalles, pero tampoco descartes capturas — si la foto es ambigua, describí lo poco que ves de manera honesta.
-- STATUS DEL HITO: si las capturas indican explícitamente que se completó algo, marcá completado. Si recién arranca, en_progreso. Default seguro: en_progreso.
+- SIEMPRE PROCESÁ TODAS LAS CAPTURAS: tu output DEBE incluir al menos un hito (existente o nuevo) por cada captura que recibas. NO descartes capturas — el usuario subió esa foto/voz/texto a propósito. Si una foto no tiene contexto claro, igual crea una sub-entrada describiendo lo que se ve ("Llegada de materiales", "Avance de obra", "Trabajo en sitio", etc.) y pon la fecha de captured_at.
+- HITOS EXISTENTES: si una captura claramente continúa un hito que ya existe (ej. ya está creado "Instalación de paneles" y ahora hay fotos del armado), NO crees un hito nuevo: usa milestone_id del existente y agrega una sub-entrada con la fecha/contenido nuevo.
+- HITOS NUEVOS: cuando una captura trata de algo distinto a los hitos existentes (o NO hay hitos previos), crea milestone_id=null con un título descriptivo derivado de la foto/contexto.
+- DESCRIPCIÓN DE FOTOS SIN TEXTO: si la captura es solo una foto SIN texto/voz adjunto, igual descríbela brevemente. Mira la imagen y resume qué se ve: materiales, herramientas, partes del proyecto, equipos, etc. Mantenlo conservador y honesto — describe lo que ves, no inventes detalles que no estén en la imagen.
+- SUB-ENTRADAS: agrupa capturas del mismo día o evento. Cada sub-entrada tiene un texto narrativo de 1-3 oraciones.
+- FECHA: usa la fecha de captured_at de la primera captura del grupo (formato YYYY-MM-DD). Esa fecha es cuándo el usuario subió la captura, lo cual representa cuándo trabajó en ese hito.
+- CAPTURE_IDS: cada sub-entrada debe listar los IDs de TODAS las capturas que la componen. processed_capture_ids debe incluir TODAS las capturas que recibiste (procésalas todas).
+- TONO: profesional, en español neutro. No inventes detalles, pero tampoco descartes capturas — si la foto es ambigua, describe lo poco que ves de manera honesta.
+- STATUS DEL HITO: si las capturas indican explícitamente que se completó algo, marca completado. Si recién arranca, en_progreso. Default seguro: en_progreso.
 - EFICIENCIA: description_es del hito es un resumen MUY corto si es nuevo (ej. "Trabajo de instalación de paneles"). El detalle va en las entries.`;
 
 export async function structureProjectFromCaptures(input: {
@@ -155,7 +155,7 @@ A continuación van las fotos referenciadas, en el mismo orden listado arriba (c
 
   userBlocks.push({
     type: "text",
-    text: `Estructurá las capturas. Cumplí: usá milestone_id existentes cuando aplique, agrupá por día en sub-entradas, completá processed_capture_ids con TODOS los IDs que metiste en alguna sub-entrada.`,
+    text: `Estructura las capturas. Cumple: usa milestone_id existentes cuando aplique, agrupa por día en sub-entradas, completa processed_capture_ids con TODOS los IDs que metiste en alguna sub-entrada.`,
   });
 
   const model = pickModel("default");

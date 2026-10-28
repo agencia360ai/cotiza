@@ -74,7 +74,10 @@ export function CargarHoras({
   const cambiar = (key: number, patch: Partial<Linea>) => setLineas((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const porId = new Map((equipo ?? []).map((m) => [m.id, m]));
   const ordenado = [...(equipo ?? [])].sort((a, b) => a.nombre.localeCompare(b.nombre));
-  const planilla = ordenado.filter((m) => m.tipo === "Employee");
+  // Ingenieros aparte de los técnicos: los dos son planilla, pero quien carga
+  // busca a uno o a otro, no a "alguien de planilla".
+  const ingenieros = ordenado.filter((m) => m.tipo === "Employee" && m.ingeniero);
+  const planilla = ordenado.filter((m) => m.tipo === "Employee" && !m.ingeniero);
   const servicio = ordenado.filter((m) => m.tipo === "Vendor");
   const fuera = ordenado.filter((m) => !m.tipo);
 
@@ -155,7 +158,7 @@ export function CargarHoras({
         <>
           <div className="mt-3 space-y-2">
             <div className="hidden grid-cols-[minmax(0,1.4fr)_9.5rem_5.5rem_minmax(0,1fr)_2rem] gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 md:grid">
-              <span>Técnico</span>
+              <span>Persona</span>
               <span>Fecha</span>
               <span>Horas</span>
               <span>Nota (sale en QuickBooks)</span>
@@ -170,11 +173,20 @@ export function CargarHoras({
                     value={l.technicianId}
                     onChange={(e) => cambiar(l.key, { technicianId: e.target.value })}
                     disabled={guardando}
-                    aria-label={`Técnico, línea ${i + 1}`}
+                    aria-label={`Persona, línea ${i + 1}`}
                   >
-                    <option value="">Elegí el técnico…</option>
+                    <option value="">Elige a la persona…</option>
+                    {ingenieros.length ? (
+                      <optgroup label="Ingenieros">
+                        {ingenieros.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.nombre} · {p.costoHora ? `$${p.costoHora}/h` : "sin tarifa en QuickBooks"}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                     {planilla.length ? (
-                      <optgroup label="Planilla">
+                      <optgroup label="Técnicos de planilla">
                         {planilla.map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.nombre} · {p.costoHora ? `$${p.costoHora}/h` : "sin tarifa en QuickBooks"}
@@ -277,7 +289,7 @@ export function CargarHoras({
                   <span className="font-semibold tabular-nums text-slate-900">{bal(costoEstimado)}</span> de costo
                 </>
               ) : (
-                "Elegí técnico y horas"
+                "Elige persona y horas"
               )}
             </span>
             <button
@@ -290,7 +302,7 @@ export function CargarHoras({
               {guardando ? "Guardando en QuickBooks…" : "Guardar en QuickBooks"}
             </button>
           </div>
-          {incompletas ? <p className="mt-1 text-right text-[11px] text-amber-700">Cada línea necesita técnico y horas (hasta 24).</p> : null}
+          {incompletas ? <p className="mt-1 text-right text-[11px] text-amber-700">Cada línea necesita persona y horas (hasta 24).</p> : null}
         </>
       ) : null}
 

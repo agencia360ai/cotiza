@@ -72,7 +72,7 @@ export function identifyGaps(extraction: Partial<ProjectExtraction>): Gap[] {
   if (!extraction.preferred_system_type || extraction.preferred_system_type === "unspecified") {
     gaps.push({
       field: "preferred_system_type",
-      label: "Tipo de sistema preferido (si tenés preferencia)",
+      label: "Tipo de sistema preferido (si tienes preferencia)",
       priority: "helpful",
       inputType: "choice",
       options: ["mini_split", "split_central", "vrf", "chiller", "rooftop", "unspecified"],

@@ -202,7 +202,7 @@ export function ResumenProyecto({
             {difiere ? " · no cuadra exacto con los totales de arriba: son de otra lectura de QuickBooks o de otro período" : ""}
           </span>
         ) : !cargando ? (
-          <span>Todavía no hay desglose por cuenta de este proyecto: se arma al tocar Actualizar, o traelo ahora.</span>
+          <span>Todavía no hay desglose por cuenta de este proyecto: se arma al tocar Actualizar, o tráelo ahora.</span>
         ) : null}
         {sinGuardar ? <span className="text-amber-700">Falta correr la migración 0052 para que quede guardado.</span> : null}
         {error ? <span className="text-rose-600">{error}</span> : null}

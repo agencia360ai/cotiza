@@ -312,7 +312,7 @@ export async function fetchDesgloseDeProyecto(
   if (!f) {
     return {
       error: errored.has(p.id)
-        ? "QuickBooks no contestó — probá de nuevo en un minuto."
+        ? "QuickBooks no contestó — prueba de nuevo en un minuto."
         : "QuickBooks devolvió el total del cliente o de la empresa, no el de este proyecto.",
     };
   }

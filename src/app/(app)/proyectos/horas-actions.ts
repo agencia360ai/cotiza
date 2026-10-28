@@ -23,19 +23,20 @@ async function ctx(escribir = false) {
   if (sinPermiso) return { ok: false as const, error: sinPermiso };
   // Cargar horas escribe en la contabilidad: un viewer mira, no carga.
   if (escribir && !["owner", "admin", "engineer"].includes(c.role)) {
-    return { ok: false as const, error: "Tu usuario es de solo lectura: pedile a un admin que te deje cargar horas." };
+    return { ok: false as const, error: "Tu usuario es de solo lectura: pídele a un admin que te deje cargar horas." };
   }
   return { ok: true as const, supabase: await createClient(), orgId: c.orgId, userId: c.user.id };
 }
 
 function mensajeQbo(e: unknown): string {
-  if (e instanceof QboTransportError) return `${e.message}. Probá de nuevo en un minuto.`;
+  if (e instanceof QboTransportError) return `${e.message}. Prueba de nuevo en un minuto.`;
   return e instanceof Error ? e.message : "Error hablando con QuickBooks";
 }
 
 export type MiembroEquipo = {
   id: string;
   nombre: string;
+  ingeniero: boolean;
   tipo: TipoQbo | null; // null = no se encontró en QuickBooks
   qboNombre: string | null;
   costoHora: number | null;
@@ -44,6 +45,7 @@ export type MiembroEquipo = {
 type FilaTecnico = {
   id: string;
   name: string;
+  role: string | null;
   qbo_tipo: TipoQbo | null;
   qbo_id: string | null;
   qbo_nombre: string | null;
@@ -52,7 +54,7 @@ type FilaTecnico = {
   qbo_vinculado_at: string | null;
 };
 
-const COLS_TECNICO = "id, name, qbo_tipo, qbo_id, qbo_nombre, qbo_costo_hora, qbo_tarifa_factura, qbo_vinculado_at";
+const COLS_TECNICO = "id, name, role, qbo_tipo, qbo_id, qbo_nombre, qbo_costo_hora, qbo_tarifa_factura, qbo_vinculado_at";
 const n = (v: number | string | null) => (v === null ? null : Number(v));
 
 /**
@@ -108,6 +110,7 @@ export async function getEquipoHoras(revincular = false): Promise<Result<Miembro
     data: (data ?? []).map((t) => ({
       id: t.id,
       nombre: t.name,
+      ingeniero: t.role === "ingeniero",
       tipo: t.qbo_id ? t.qbo_tipo : null,
       qboNombre: t.qbo_nombre,
       costoHora: n(t.qbo_costo_hora),
@@ -194,9 +197,9 @@ export type ResultadoCarga = {
 export async function cargarHoras(qbJobId: string, lineas: LineaHoras[]): Promise<Result<ResultadoCarga>> {
   const c = await ctx(true);
   if (!c.ok) return { error: c.error };
-  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
+  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (configúrala en Vercel)." };
   if (lineas.length === 0) return { error: "No hay horas para cargar" };
-  if (lineas.length > 40) return { error: "Son demasiadas líneas para una carga: partilo en dos." };
+  if (lineas.length > 40) return { error: "Son demasiadas líneas para una carga: pártelo en dos." };
 
   for (const [i, l] of lineas.entries()) {
     const malo = validar(l);
@@ -290,7 +293,7 @@ export async function cargarHoras(qbJobId: string, lineas: LineaHoras[]): Promis
 export async function borrarHoraCargada(id: string): Promise<Result<{ horas: HorasProyecto | null }>> {
   const c = await ctx(true);
   if (!c.ok) return { error: c.error };
-  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (seteala en Vercel)." };
+  if (!hasQboConfig()) return { error: "QBO_MCP_URL no está configurada (configúrala en Vercel)." };
   const { data: fila, error } = (await c.supabase
     .from("horas_cargadas")
     .select("qb_job_id, tecnico, qbo_tipo, fecha, horas, costo_hora, qbo_time_id")

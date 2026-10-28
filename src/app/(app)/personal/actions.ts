@@ -28,10 +28,13 @@ function isMissingColumn(error: { message?: string; code?: string } | null): boo
   return /does not exist|could not find|schema cache/i.test(error.message ?? "");
 }
 
+export type RolPersonal = "tecnico" | "ingeniero";
+
 export async function createTechnician(input: {
   name: string;
   phone: string | null;
   email: string | null;
+  role?: RolPersonal;
 }): Promise<Result> {
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
@@ -46,14 +49,14 @@ export async function createTechnician(input: {
     phone: input.phone,
     wa_id: normalizeWaId(input.phone),
     email: input.email,
-    role: "tecnico",
+    role: input.role ?? "tecnico",
     active: true,
     access_token: generateToken(),
   });
   if (isMissingColumn(error)) {
     // migración 0031 (wa_id) pendiente: crear sin la columna
     const { error: e2 } = await supabase.from("technicians").insert({
-      org_id: orgId, name: input.name, phone: input.phone, email: input.email, role: "tecnico", active: true, access_token: generateToken(),
+      org_id: orgId, name: input.name, phone: input.phone, email: input.email, role: input.role ?? "tecnico", active: true, access_token: generateToken(),
     });
     if (e2) return { error: e2.message };
     revalidatePath("/personal");
@@ -66,7 +69,7 @@ export async function createTechnician(input: {
 
 export async function updateTechnician(
   id: string,
-  patch: { name?: string; phone?: string | null; email?: string | null; active?: boolean },
+  patch: { name?: string; phone?: string | null; email?: string | null; active?: boolean; role?: RolPersonal },
 ): Promise<Result> {
   const supabase = await createClient();
   // Si cambió el teléfono, re-derivar el wa_id de WhatsApp.

@@ -79,7 +79,7 @@ export async function generateQuoteDraft(
 ): Promise<Result<CotizadorDraft>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!brief.trim() && adjuntos.length === 0) return { error: "Cuéntame qué hay que cotizar (o adjuntá un archivo)" };
+  if (!brief.trim() && adjuntos.length === 0) return { error: "Cuéntame qué hay que cotizar (o adjunta un archivo)" };
   try {
     const [draft, contacto] = await Promise.all([
       buildQuoteDraft(c.supabase, c.orgId, brief.trim(), adjuntos, formato),
@@ -105,7 +105,7 @@ export async function refineQuoteDraft(
 ): Promise<Result<AjusteAplicado>> {
   const c = await ctx();
   if (!c.ok) return { error: c.error };
-  if (!instruccion.trim() && adjuntos.length === 0) return { error: "Decime qué querés cambiar" };
+  if (!instruccion.trim() && adjuntos.length === 0) return { error: "Dime qué quieres cambiar" };
   try {
     return { ok: true, data: await refinarBorrador(c.supabase, c.orgId, actual, instruccion.trim(), adjuntos) };
   } catch (e) {
@@ -247,7 +247,7 @@ export async function createQuoteSharedLink(quoteId: string): Promise<Result<{ u
     return {
       error:
         e instanceof Error && /scope|permission/i.test(e.message)
-          ? "Falta el scope sharing.write en la app de Dropbox (tildá el permiso y regenerá el refresh token)."
+          ? "Falta el scope sharing.write en la app de Dropbox (marca el permiso y regenera el refresh token)."
           : e instanceof Error
             ? e.message
             : "No se pudo crear el link",

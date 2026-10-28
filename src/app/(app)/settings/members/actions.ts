@@ -9,7 +9,7 @@ import { normalizarSecciones, rolSinRestriccion } from "@/lib/secciones";
 type Result = { error: string } | { ok: true };
 type Role = "owner" | "admin" | "engineer" | "viewer";
 
-const FALTA_0050 = "Falta la migración 0050 (secciones) — corré el SQL en Supabase y reintentá.";
+const FALTA_0050 = "Falta la migración 0050 (secciones) — corre el SQL en Supabase y reintenta.";
 
 type OrgCtx = NonNullable<Awaited<ReturnType<typeof getActiveOrgContext>>>;
 type RequireAdmin = { kind: "err"; error: string } | { kind: "ok"; ctx: OrgCtx };
@@ -297,7 +297,7 @@ export async function setMemberSecciones(memberId: string, secciones: string[] |
 
   const { data: member } = await membersTable().select("role").eq("id", memberId).eq("org_id", ctx.orgId).maybeSingle();
   if (!member?.role) return { error: "Miembro no encontrado" };
-  if (rolSinRestriccion(member.role)) return { error: "Owner y admin ven todo siempre — bajale el rol para restringirlo." };
+  if (rolSinRestriccion(member.role)) return { error: "Owner y admin ven todo siempre — bájale el rol para restringirlo." };
 
   // secciones es de la 0050 y todavía no está en los tipos generados.
   const { error } = await (membersTable() as unknown as {

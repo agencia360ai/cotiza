@@ -29,7 +29,7 @@ export async function createProject(_: { error: string } | null, formData: FormD
   if (!user) return { error: "Sesión expirada" };
 
   const orgId = await getActiveOrgId();
-  if (!orgId) return { error: "No tenés organización" };
+  if (!orgId) return { error: "No tienes organización" };
 
   const { data: project, error } = await supabase
     .from("projects")

@@ -51,7 +51,7 @@ export function PropuestaEditor({ value: p, onChange, disponibles, subirImagen, 
     const f = files?.[0];
     if (!f) return;
     if (f.type !== "image/png" && f.type !== "image/jpeg") {
-      setError("El plano tiene que ser PNG o JPG (de un PDF, sacale una captura).");
+      setError("El plano tiene que ser PNG o JPG (de un PDF, sácale una captura).");
       return;
     }
     const buf = new Uint8Array(await f.arrayBuffer());
@@ -154,7 +154,7 @@ export function PropuestaEditor({ value: p, onChange, disponibles, subirImagen, 
         largo
         onChange={(filas) => set("condiciones", filas.map(([label, texto]) => ({ label, texto })))}
       />
-      <p className="-mt-2 text-[11px] text-slate-500">La vigencia sale de &quot;Validez (días)&quot; si no la escribís acá.</p>
+      <p className="-mt-2 text-[11px] text-slate-500">La vigencia sale de &quot;Validez (días)&quot; si no la escribes acá.</p>
 
       <label className="block">
         <span className={rotulo}>Contacto (al pie)</span>

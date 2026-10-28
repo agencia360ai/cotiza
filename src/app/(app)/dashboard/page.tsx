@@ -62,7 +62,7 @@ export default async function DashboardPage() {
           <FileText className="size-6 text-muted-foreground mb-3" />
           <p className="text-sm font-medium">Sin proyectos aún</p>
           <p className="text-sm text-muted-foreground mt-1 max-w-xs mb-4">
-            Creá tu primer proyecto, cargá los planos y la IA te arma una cotización.
+            Crea tu primer proyecto, carga los planos y la IA te arma una cotización.
           </p>
           <Button asChild>
             <Link href="/projects/new">

@@ -525,7 +525,7 @@ export function TechnicianProjectScreen({
                   <Hammer className="mx-auto mb-3 size-7 text-slate-300" />
                   <p className="text-sm font-semibold text-slate-900">Sin hitos en esta pestaña</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Cargá el primer hito (ej. &ldquo;Llegada de materiales&rdquo;) con foto del momento.
+                    Carga el primer hito (ej. &ldquo;Llegada de materiales&rdquo;) con foto del momento.
                   </p>
                 </div>
               );
@@ -732,7 +732,7 @@ function AddMilestoneForm({
         <div>
           <h3 className="text-sm font-bold text-slate-900">Agregar Hito</h3>
           <p className="text-xs text-slate-500">
-            Escribí lo que pasó y/o adjuntá fotos, videos, voz. Todo opcional.
+            Escribe lo que pasó y/o adjunta fotos, videos, voz. Todo opcional.
           </p>
         </div>
       </header>
@@ -765,7 +765,7 @@ function AddMilestoneForm({
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Qué pasó (ej. 'Llegaron los paneles y arrancamos el armado'). Podés dejarlo vacío si subís fotos o voz."
+          placeholder="Qué pasó (ej. 'Llegaron los paneles y arrancamos el armado'). Puedes dejarlo vacío si subes fotos o voz."
           rows={4}
           autoFocus
           className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm leading-relaxed focus:border-slate-400 focus:outline-none"

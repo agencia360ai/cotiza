@@ -9,7 +9,7 @@ import { ACTIVE_ORG_COOKIE, listMemberships } from "@/lib/org-context";
 export async function setActiveOrg(orgId: string): Promise<{ error: string } | void> {
   const memberships = await listMemberships();
   if (!memberships.some((m) => m.org_id === orgId)) {
-    return { error: "No sos miembro de esa organización" };
+    return { error: "No eres miembro de esa organización" };
   }
   const store = await cookies();
   store.set(ACTIVE_ORG_COOKIE, orgId, {

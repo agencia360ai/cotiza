@@ -78,7 +78,7 @@ export function InviteMemberForm() {
         <div>
           <h3 className="text-sm font-semibold text-slate-900">Agregar miembro</h3>
           <p className="text-xs text-slate-600">
-            Creás la cuenta con un password genérico — después se lo pasás al miembro
+            Creas la cuenta con un password genérico — después se lo pasas al miembro
           </p>
         </div>
       </div>
@@ -198,7 +198,7 @@ export function InviteMemberForm() {
           <div className="flex items-center gap-2">
             <CheckCircle2 className="size-4 text-emerald-700" />
             <p className="text-sm font-semibold text-emerald-900">
-              Cuenta creada — copiá las credenciales y compartilas
+              Cuenta creada — copia las credenciales y compártelas
             </p>
           </div>
           <div className="mt-2 grid grid-cols-1 gap-1 text-xs font-mono sm:grid-cols-2">

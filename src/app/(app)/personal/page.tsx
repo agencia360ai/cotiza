@@ -12,6 +12,7 @@ type TechRow = {
   name: string;
   phone: string | null;
   email: string | null;
+  role: string | null;
   active: boolean;
   access_token: string;
   last_used_at: string | null;
