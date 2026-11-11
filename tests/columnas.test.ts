@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mover, sanear, ORDEN_DEFECTO, type ColKey } from "../src/app/(app)/proyectos/columnas";
+import { desdeV1, mover, sanear, ORDEN_DEFECTO, type ColKey } from "../src/app/(app)/proyectos/columnas";
 
 test("mover hacia la derecha deja la columna DESPUÉS de donde se soltó", () => {
   const o: ColKey[] = ["nombre", "cliente", "total", "cobrado"];
@@ -29,8 +29,27 @@ test("sanear: una columna nueva aparece al lado de donde va por defecto, no al f
   // Preferencia guardada antes de que existiera "Por facturar", con el orden cambiado.
   const viejo: ColKey[] = ["nombre", "total", "cliente", "cobrado", "gasto", "inicio", "fin", "estado", "margen", "cotizacion"];
   const s = sanear(viejo, ["cotizacion", "margen"]);
-  assert.deepEqual(s.orden, ["nombre", "total", "porfacturar", "cliente", "cobrado", "gasto", "inicio", "fin", "estado", "margen", "cotizacion"]);
+  assert.deepEqual(s.orden, ["nombre", "porfacturar", "total", "cliente", "cobrado", "gasto", "inicio", "fin", "estado", "margen", "cotizacion"]);
   assert.ok(!s.ocultas.includes("porfacturar"), "y se ve");
+});
+
+test("por defecto: Por facturar, Facturado y Cobrado, en ese orden", () => {
+  const i = (k: ColKey) => ORDEN_DEFECTO.indexOf(k);
+  assert.equal(i("total"), i("porfacturar") + 1);
+  assert.equal(i("cobrado"), i("total") + 1);
+});
+
+test("desdeV1: una preferencia v1 pasa Por facturar antes de Facturado y conserva lo demás", () => {
+  const v1 = JSON.stringify({
+    orden: ["nombre", "cliente", "total", "porfacturar", "cobrado", "gasto", "inicio", "fin", "estado", "margen", "cotizacion"],
+    ocultas: ["cotizacion"],
+  });
+  const g = JSON.parse(desdeV1(v1)!);
+  const s = sanear(g.orden, g.ocultas);
+  assert.deepEqual(s.orden.slice(0, 5), ["nombre", "cliente", "porfacturar", "total", "cobrado"]);
+  assert.deepEqual(s.ocultas, ["cotizacion"], "las columnas ocultas siguen ocultas");
+  assert.equal(desdeV1(null), null);
+  assert.equal(desdeV1("{roto"), null);
 });
 
 test("sanear: llaves que ya no existen se filtran, duplicados se quitan", () => {

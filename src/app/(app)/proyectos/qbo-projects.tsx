@@ -780,24 +780,32 @@ export function QboProjectsBoard() {
         </div>
       ) : null}
 
-      {/* Los cinco números que resumen la vista. Responden al rango y a los
+      {/* Los números que resumen la vista. Responden al rango y a los
           filtros activos: es el estado de LO QUE SE ESTÁ MIRANDO. */}
       {hasProjects ? (
-        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-          {/* Los tres KPIs de plata responden todos al rango; decírselo solo a
-              este hacía pensar que los otros dos no. */}
+        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4 2xl:grid-cols-7">
+          {/* Va primero porque es lo que el equipo persigue: contrato ganado que
+              todavía no se factura. No se suma al facturado. */}
           <KpiProyecto
-            label="Total facturado"
-            value={bal(vista.cobro)}
-            sub={vista.porFacturar > 0 ? `+ ${balCompact(vista.porFacturar)} por facturar (EST)` : undefined}
+            label="Por facturar"
+            value={bal(vista.porFacturar)}
+            sub={
+              vista.nPorFacturar > 0
+                ? `Facturas EST de ${vista.nPorFacturar} proyecto${vista.nPorFacturar === 1 ? "" : "s"}`
+                : "Sin facturas EST"
+            }
+            color="#0369A1"
           />
+          {/* Los KPIs de plata responden todos al rango; decírselo solo a
+              uno hacía pensar que los otros no. */}
+          <KpiProyecto label="Total facturado" value={bal(vista.cobro)} sub="Facturas normales, sin las EST" />
           {/* Lo que efectivamente entró. Se separa del total porque facturar no
               es cobrar, y en una empresa que vive del flujo esa es la diferencia
               que importa. "s/d" cuando QuickBooks no dio el pendiente. */}
           <KpiProyecto
             label="Cobrado"
             value={vista.cobrado !== null ? bal(vista.cobrado) : "s/d"}
-            sub={vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% del total` : undefined}
+            sub={vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% de lo facturado` : undefined}
             color="#047857"
             // Sin dato hay que poder ver POR QUÉ: el reporte puede no existir,
             // no traer filas, o traer ids que no son los de estos proyectos.
@@ -1005,11 +1013,16 @@ export function QboProjectsBoard() {
                   {vista.gastoNegativo} con gasto negativo
                 </span>
               ) : null}
+              {vista.porFacturar > 0 ? (
+                <span className="text-slate-500">
+                  Por facturar <span className="font-semibold tabular-nums text-sky-700">{balCompact(vista.porFacturar)}</span>
+                </span>
+              ) : null}
               <span className="text-slate-500">
-                Gasto <span className="font-semibold tabular-nums text-rose-600">{balCompact(vista.gasto)}</span>
+                Facturado <span className="font-semibold tabular-nums text-slate-900">{balCompact(vista.cobro)}</span>
               </span>
               <span className="text-slate-500">
-                Cobro <span className="font-semibold tabular-nums text-slate-900">{balCompact(vista.cobro)}</span>
+                Gasto <span className="font-semibold tabular-nums text-rose-600">{balCompact(vista.gasto)}</span>
               </span>
               {vista.margen !== null ? (
                 <span className={cn("font-semibold tabular-nums", marginTextColor(vista.margen))}>{Math.round(vista.margen * 100)}% margen</span>

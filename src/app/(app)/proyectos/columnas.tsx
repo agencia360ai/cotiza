@@ -8,7 +8,7 @@ import type { SortState } from "@/components/ui/sortable";
 // Las columnas del board de Proyectos: qué hay, en qué orden y cuáles se ven.
 //
 // El orden y la visibilidad los decide cada persona, no el diseño: quien mira
-// cobros todo el día quiere Cobrado pegado a Total, y quien persigue fechas las
+// cobros todo el día quiere Cobrado pegado a Facturado, y quien persigue fechas las
 // quiere primero. Se guarda en el navegador —es una preferencia de cómo mirar,
 // no un dato de la empresa— así que no vale la pena una tabla ni sincronizarla
 // entre dispositivos.
@@ -28,11 +28,11 @@ export const COL_META: Record<ColKey, ColMeta> = {
   nombre: { label: "Proyecto", min: 210, align: "left" },
   cliente: { label: "Cliente", min: 140, align: "left" },
   cotizacion: { label: "Cotización", min: 150, align: "left", ayuda: "Vincular cotizaciones al proyecto" },
-  total: { label: "Total", min: 118, align: "right", ayuda: "Lo facturado, con el margen debajo" },
+  total: { label: "Facturado", min: 118, align: "right", ayuda: "Facturas normales (sin las EST), con el margen debajo" },
   porfacturar: { label: "Por facturar", min: 116, align: "right", ayuda: "Facturas EST: lo que falta facturar del contrato" },
   cobrado: { label: "Cobrado", min: 106, align: "right", ayuda: "Lo que ya entró de ese total" },
   gasto: { label: "Gasto", min: 100, align: "right" },
-  margen: { label: "Margen", min: 110, align: "right", ayuda: "Como columna propia; si no, va debajo del Total" },
+  margen: { label: "Margen", min: 110, align: "right", ayuda: "Como columna propia; si no, va debajo de Facturado" },
   inicio: { label: "Inicio", min: 104, align: "left" },
   fin: { label: "Fin", min: 108, align: "left" },
   estado: { label: "Estado", min: 138, align: "left" },
@@ -56,8 +56,8 @@ export const SORT_DE_COL: Record<ColKey, string> = {
 export const ORDEN_DEFECTO: ColKey[] = [
   "nombre",
   "cliente",
-  "total",
   "porfacturar",
+  "total",
   "cobrado",
   "gasto",
   "inicio",
@@ -67,7 +67,7 @@ export const ORDEN_DEFECTO: ColKey[] = [
   "cotizacion",
 ];
 // Las dos arrancan fuera de la vista. Cotización ocupaba el ancho que les hace
-// falta a los nombres, y el margen pasó a leerse debajo del Total —que es de
+// falta a los nombres, y el margen pasó a leerse debajo de Facturado —que es de
 // donde sale—. Ninguna se borra: se prenden desde el menú, y el margen vuelve a
 // ser columna propia (con su barra) cuando alguien la quiere ordenar.
 const OCULTAS_DEFECTO: ColKey[] = ["cotizacion", "margen"];
@@ -76,9 +76,25 @@ const OCULTAS_DEFECTO: ColKey[] = ["cotizacion", "margen"];
 // de editar). Entran en el min-width para que la cuenta cierre.
 const ANCHO_FIJO = 100;
 
-const LLAVE = "cotiza.proyectos.columnas.v1";
+const LLAVE = "cotiza.proyectos.columnas.v2";
+// En v1 Por facturar iba después de Facturado; ahora va antes. Una preferencia
+// v1 se lee sin esa columna para que sanear() la ponga en su lugar nuevo —si
+// no, quien ya había movido columnas no vería nunca el orden nuevo—, y se borra
+// con la primera escritura.
+const LLAVE_V1 = "cotiza.proyectos.columnas.v1";
 
 type Guardado = { orden?: unknown; ocultas?: unknown };
+
+export function desdeV1(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const g = JSON.parse(raw) as Guardado;
+    const orden = Array.isArray(g.orden) ? g.orden.filter((k) => k !== "porfacturar") : g.orden;
+    return JSON.stringify({ ...g, orden });
+  } catch {
+    return null;
+  }
+}
 
 // Se sanea lo leído contra las columnas que existen HOY: si una se renombra o
 // se agrega, una preferencia vieja no puede dejar la tabla sin esa columna ni
@@ -87,10 +103,16 @@ export function sanear(orden: unknown, ocultas: unknown): { orden: ColKey[]; ocu
   const validas = new Set(ORDEN_DEFECTO);
   const pedido = Array.isArray(orden) ? orden.filter((k): k is ColKey => validas.has(k as ColKey)) : [];
   const resultado = [...new Set(pedido)];
-  // Una columna que no estaba (porque se agregó después) va al lado de la que
-  // la precede por defecto: al final de la tabla nadie la encontraría.
+  // Una columna que no estaba (porque se agregó después) va pegada a la que la
+  // sigue por defecto —o a la que la precede, si no hay—: al final de la tabla
+  // nadie la encontraría.
   for (const [i, k] of ORDEN_DEFECTO.entries()) {
     if (resultado.includes(k)) continue;
+    const siguiente = ORDEN_DEFECTO.slice(i + 1).find((x) => resultado.includes(x));
+    if (siguiente) {
+      resultado.splice(resultado.indexOf(siguiente), 0, k);
+      continue;
+    }
     const previa = ORDEN_DEFECTO.slice(0, i).reverse().find((x) => resultado.includes(x));
     resultado.splice(previa ? resultado.indexOf(previa) + 1 : 0, 0, k);
   }
@@ -144,7 +166,7 @@ const oyentes = new Set<() => void>();
 function leer(): Pref {
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(LLAVE);
+    raw = localStorage.getItem(LLAVE) ?? desdeV1(localStorage.getItem(LLAVE_V1));
   } catch {
     raw = null; // modo privado o storage bloqueado
   }
@@ -179,6 +201,7 @@ function escribir(p: { orden: ColKey[]; ocultas: ColKey[] } | null) {
   try {
     if (p) localStorage.setItem(LLAVE, JSON.stringify(p));
     else localStorage.removeItem(LLAVE);
+    localStorage.removeItem(LLAVE_V1);
   } catch {
     /* sin espacio o modo privado: no se puede recordar, pero nada se rompe */
   }
