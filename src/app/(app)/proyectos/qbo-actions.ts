@@ -21,6 +21,8 @@ import { codigoDeProyecto } from "@/lib/quickbooks/codigo";
 import { fetchHorasTecnicos } from "@/lib/quickbooks/horas";
 import { normalizarHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core";
 import { normalizarDesglose, type DesgloseProyecto } from "@/lib/quickbooks/desglose-core";
+import { normalizarPorFacturar, sinEstimados, type PorFacturar } from "@/lib/quickbooks/estimados-core";
+import { fetchPorFacturar } from "@/lib/quickbooks/estimados";
 
 export type QboProjectsResult =
   | {
@@ -131,6 +133,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
   const rows = res.data ?? [];
   const { porProyecto: mesesPorProyecto, desde: mesesDesde } = await loadMeses(supabase, orgId);
   const horasPorProyecto = await loadHoras(supabase, orgId);
+  const porFacturarGuardado = await loadPorFacturar(supabase, orgId);
   let syncedAt: number | null = null;
   const projects: QboProject[] = rows
     .map((r) => {
@@ -155,6 +158,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
         cost,
         margin: margenDe(income, cost, horas),
         horas,
+        porFacturar: porFacturarGuardado.get(r.qb_job_id) ?? null,
         closed: r.closed,
         // status derivado si la migración 0016 aún no corrió.
         status: (r.status ?? (r.closed ? "cerrado" : "activo")) as ProjectBizStatus,
@@ -279,6 +283,14 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     }
   }
 
+  // Facturas EST (lo que falta facturar), de todos los proyectos en una
+  // llamada. Antes que el P&L: si alguna ya cae dentro de la ventana, hay que
+  // sacarla de lo facturado. Si no se puede leer, quedan las guardadas.
+  const porFacturar = await fetchPorFacturar().catch(() => null);
+  const porFacturarGuardado = await loadPorFacturar(supabase, orgId);
+  for (const p of list) p.porFacturar = porFacturar ? (porFacturar.get(p.id) ?? null) : (porFacturarGuardado.get(p.id) ?? null);
+  const hoy = new Date().toISOString().slice(0, 10);
+
   // Financials SOLO de los abiertos.
   let financialsOk = false;
   let mesesDesde: string | null = null;
@@ -292,7 +304,8 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       mesesDesde = desde;
       for (const p of list) {
         if (p.closed) continue; // cerrados: números congelados, no se tocan
-        const f = fin.get(p.id);
+        const leido = fin.get(p.id);
+        const f = leido ? sinEstimados(leido, p.porFacturar ?? undefined, desde, hoy) : undefined;
         if (f) {
           p.income = f.income;
           p.cost = f.cost;
@@ -417,6 +430,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     await guardarMeses(supabase, orgId, list, nowIso);
     await guardarHoras(supabase, orgId, list, horasGuardadas);
     await guardarDesgloses(supabase, orgId, desgloses);
+    await guardarPorFacturar(supabase, orgId, list, porFacturarGuardado);
 
     // Reconciliar: borrar filas del año que ya NO vinieron de QBO (proyecto
     // borrado/renombrado) para que no queden huérfanas inflando conteos.
@@ -526,6 +540,42 @@ async function guardarHoras(
   }
 }
 
+// Facturas EST guardadas (0054), por proyecto. Columna aparte, como las horas:
+// sin la migración devuelve vacío y el tablero se ve como antes.
+async function loadPorFacturar(supabase: DB, orgId: string): Promise<Map<string, PorFacturar>> {
+  const out = new Map<string, PorFacturar>();
+  type Fila = { qb_job_id: string; por_facturar: unknown };
+  for (let from = 0; from < 30_000; from += 1000) {
+    const r = (await supabase
+      .from("qbo_project_state")
+      .select("qb_job_id, por_facturar")
+      .eq("org_id", orgId)
+      .not("por_facturar", "is", null)
+      .order("qb_job_id")
+      .range(from, from + 999)) as unknown as { data: Fila[] | null; error: { message: string; code?: string } | null };
+    if (r.error) return new Map();
+    for (const f of r.data ?? []) {
+      const pf = normalizarPorFacturar(f.por_facturar);
+      if (pf) out.set(f.qb_job_id, pf);
+    }
+    if ((r.data?.length ?? 0) < 1000) break;
+  }
+  return out;
+}
+
+// Solo los que cambiaron. Best-effort: sin la 0054 el resto ya quedó guardado.
+async function guardarPorFacturar(supabase: DB, orgId: string, list: QboProject[], guardado: Map<string, PorFacturar>): Promise<void> {
+  const cambios = list.filter((p) => JSON.stringify(p.porFacturar) !== JSON.stringify(guardado.get(p.id) ?? null));
+  for (let i = 0; i < cambios.length; i += 20) {
+    const res = await Promise.all(
+      cambios.slice(i, i + 20).map((p) =>
+        supabase.from("qbo_project_state").update({ por_facturar: p.porFacturar }).eq("org_id", orgId).eq("qb_job_id", p.id),
+      ),
+    );
+    if (res.some((r) => isMissingColumn(r.error))) return;
+  }
+}
+
 // Best-effort, como las horas: sin la 0052 el resto ya quedó guardado.
 async function guardarDesgloses(supabase: DB, orgId: string, desgloses: Map<string, DesgloseProyecto>): Promise<void> {
   const lista = [...desgloses];
@@ -581,6 +631,10 @@ export async function getDesgloseProyecto(qbJobId: string, traer = false): Promi
   try {
     const r = await fetchDesgloseDeProyecto(qbJobId);
     if ("error" in r) return { ok: false, error: r.error };
+    const pf = (await loadPorFacturar(supabase, orgId)).get(qbJobId);
+    r.desglose.secciones =
+      sinEstimados({ income: 0, meses: [], desglose: r.desglose.secciones }, pf, r.desglose.desde, new Date().toISOString().slice(0, 10)).desglose ??
+      r.desglose.secciones;
     const { error } = await supabase.from("qbo_project_state").update({ desglose: r.desglose }).eq("org_id", orgId).eq("qb_job_id", qbJobId);
     return { ok: true, desglose: r.desglose, guardable: !isMissingColumn(error) };
   } catch (e) {
