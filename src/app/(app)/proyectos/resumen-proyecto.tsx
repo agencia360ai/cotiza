@@ -91,6 +91,12 @@ export function ResumenProyecto({
   const ingreso = p.income ?? 0;
   const costos = gastoConHoras(p.cost, p.horas) ?? 0;
   const ganancia = ingreso - costos;
+  // Las EST: lo que falta facturar del contrato. Con eso se ve cómo cierra el
+  // proyecto, no solo cómo va hoy (un proyecto en curso con todo en EST se ve
+  // en pérdida aunque esté bien cotizado).
+  const pf = p.porFacturar;
+  const conTodo = ingreso + (pf?.neto ?? 0);
+  const margenConTodo = pf && conTodo > 0 && (p.cost ?? 0) >= 0 ? (conTodo - costos) / conTodo : null;
   const meses = gastoPorMes(desglose, p.horas, p.meses);
   const secciones = desglose?.secciones ?? [];
   const ingresos = secciones.filter((s) => !esCosto(s.tipo));
@@ -119,6 +125,21 @@ export function ResumenProyecto({
         />
       </div>
 
+      {pf ? (
+        <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 ring-1 ring-inset ring-sky-600/20">
+          <span className="font-semibold">Por facturar (EST): {bal(pf.neto)}</span>
+          {pf.cobrado > 0 ? <span className="text-emerald-700"> · {bal(pf.cobrado)} ya cobrado de anticipo</span> : null}
+          <span>
+            {" "}
+            · si se factura todo: {bal(conTodo)} − {bal(costos)} ={" "}
+            <span className={cn("font-semibold", conTodo - costos < 0 ? "text-rose-600" : "text-slate-900")}>{bal(conTodo - costos)}</span>
+            {margenConTodo !== null ? (
+              <span className={cn("font-semibold", marginTextColor(margenConTodo))}> ({Math.round(margenConTodo * 100)}% margen)</span>
+            ) : null}
+          </span>
+        </p>
+      ) : null}
+
       {rangeActive ? (
         <p className="text-[11px] text-slate-400">Este resumen es del proyecto completo, no del rango de fechas elegido.</p>
       ) : null}
@@ -130,9 +151,28 @@ export function ResumenProyecto({
           ) : ingresos.length > 0 ? (
             // Con una sola sección su título repetiría el de la columna.
             ingresos.map((s) => <Seccion key={s.tipo} s={s} sinTitulo={ingresos.length === 1} />)
-          ) : (
+          ) : pf ? null : (
             <Vacio texto={desglose ? "Sin ingresos en QuickBooks." : "Sin desglose por cuenta todavía."} />
           )}
+          {!cargando && pf ? (
+            <div>
+              <TituloSeccion titulo="Por facturar (EST)" total={pf.neto} />
+              <ul className="space-y-1.5">
+                {pf.docs.map((d) => (
+                  <Fila
+                    key={d.numero}
+                    nombre={d.numero}
+                    detalle={d.cobrado > 0 ? `${bal(d.cobrado)} cobrado` : undefined}
+                    monto={d.neto}
+                    color="#0284c7"
+                    base={Math.max(1, conTodo)}
+                    negativoEsRaro={false}
+                  />
+                ))}
+              </ul>
+              <p className="mt-1 text-[11px] text-slate-400">No suma a lo facturado hasta que se facture de verdad.</p>
+            </div>
+          ) : null}
         </Columna>
 
         <Columna titulo="Costos" total={costos}>

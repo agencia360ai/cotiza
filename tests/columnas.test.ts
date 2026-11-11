@@ -20,9 +20,17 @@ test("mover sobre sí misma o con llaves desconocidas devuelve la misma referenc
 
 test("sanear: una preferencia vieja no puede dejar la tabla sin columnas nuevas", () => {
   const s = sanear(["total", "nombre"], []);
-  assert.deepEqual(s.orden.slice(0, 2), ["total", "nombre"], "respeta el orden pedido");
-  assert.equal(s.orden.length, ORDEN_DEFECTO.length, "las que faltan se agregan al final");
+  assert.deepEqual(s.orden.filter((k) => k === "total" || k === "nombre"), ["total", "nombre"], "respeta el orden pedido");
+  assert.equal(s.orden.length, ORDEN_DEFECTO.length, "las que faltan se agregan");
   assert.deepEqual([...new Set(s.orden)], s.orden, "sin duplicados");
+});
+
+test("sanear: una columna nueva aparece al lado de donde va por defecto, no al final", () => {
+  // Preferencia guardada antes de que existiera "Por facturar", con el orden cambiado.
+  const viejo: ColKey[] = ["nombre", "total", "cliente", "cobrado", "gasto", "inicio", "fin", "estado", "margen", "cotizacion"];
+  const s = sanear(viejo, ["cotizacion", "margen"]);
+  assert.deepEqual(s.orden, ["nombre", "total", "porfacturar", "cliente", "cobrado", "gasto", "inicio", "fin", "estado", "margen", "cotizacion"]);
+  assert.ok(!s.ocultas.includes("porfacturar"), "y se ve");
 });
 
 test("sanear: llaves que ya no existen se filtran, duplicados se quitan", () => {

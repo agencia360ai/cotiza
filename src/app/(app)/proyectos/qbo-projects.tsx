@@ -98,6 +98,15 @@ function detalleHoras(h: HorasProyecto): string {
   }
   return `Horas de técnicos (QuickBooks · Time Activity)\n${lineas.join("\n")}`;
 }
+// El detalle de las EST en el tooltip: número, monto y fecha a la que se movió.
+function detallePorFacturar(p: QboProject): string {
+  const docs = p.porFacturar?.docs ?? [];
+  return [
+    "Por facturar (facturas EST en QuickBooks)",
+    ...docs.map((d) => `${d.numero}: ${bal(d.neto)}${d.cobrado > 0 ? ` · ${bal(d.cobrado)} ya cobrado` : ""}`),
+  ].join("\n");
+}
+
 function relTime(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 60) return "recién";
@@ -175,7 +184,7 @@ function rangeFor(key: RangeKey, customFrom: string, customTo: string): DateRang
   }
 }
 
-type SortKey = "nombre" | "cliente" | "cobro" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
+type SortKey = "nombre" | "cliente" | "cobro" | "porfacturar" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado" | "cotizacion";
 
 // Proyección de un proyecto dentro del rango activo.
 //
@@ -485,6 +494,8 @@ export function QboProjectsBoard() {
           return e.p.clientName.toLowerCase();
         case "cobro":
           return e.enRango ?? e.p.income;
+        case "porfacturar":
+          return e.p.porFacturar?.neto ?? null;
         case "cobrado":
           return e.cobradoRango;
         case "gasto":
@@ -633,12 +644,23 @@ export function QboProjectsBoard() {
     let gastoNegativo = 0;
     // Base del margen: solo lo facturado de proyectos con gasto confiable.
     let cobroConGasto = 0;
+    // Lo que falta facturar (EST). No depende del rango: está fechado en un
+    // mes futuro a propósito, así que filtrarlo por fecha lo escondería.
+    let porFacturar = 0;
+    let nPorFacturar = 0;
+    let porFacturarConGasto = 0;
     for (const e of sorted) {
       const g = gastoDeAgregado(e);
       cobro += e.enRango ?? 0;
       gasto += g.gasto;
+      const pf = e.p.porFacturar?.neto ?? 0;
+      if (pf > 0) {
+        porFacturar += pf;
+        nPorFacturar++;
+      }
       if (g.confiable) {
         cobroConGasto += e.enRango ?? 0;
+        porFacturarConGasto += pf;
         horas += e.horasRango;
       }
       else gastoNegativo++;
@@ -672,6 +694,13 @@ export function QboProjectsBoard() {
       nPorCobrar,
       abiertos,
       margen: cobroConGasto > 0 ? (cobroConGasto - gasto) / cobroConGasto : null,
+      porFacturar,
+      nPorFacturar,
+      // Si se factura todo lo que está en EST: el gasto ya está, el ingreso no.
+      margenConPorFacturar:
+        porFacturarConGasto > 0 && cobroConGasto + porFacturarConGasto > 0
+          ? (cobroConGasto + porFacturarConGasto - gasto) / (cobroConGasto + porFacturarConGasto)
+          : null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sorted, statusOv]);
@@ -757,7 +786,11 @@ export function QboProjectsBoard() {
         <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
           {/* Los tres KPIs de plata responden todos al rango; decírselo solo a
               este hacía pensar que los otros dos no. */}
-          <KpiProyecto label="Total facturado" value={bal(vista.cobro)} />
+          <KpiProyecto
+            label="Total facturado"
+            value={bal(vista.cobro)}
+            sub={vista.porFacturar > 0 ? `+ ${balCompact(vista.porFacturar)} por facturar (EST)` : undefined}
+          />
           {/* Lo que efectivamente entró. Se separa del total porque facturar no
               es cobrar, y en una empresa que vive del flujo esa es la diferencia
               que importa. "s/d" cuando QuickBooks no dio el pendiente. */}
@@ -779,6 +812,7 @@ export function QboProjectsBoard() {
           <KpiProyecto
             label="Margen"
             value={vista.margen !== null ? `${Math.round(vista.margen * 100)}%` : "s/d"}
+            sub={vista.margenConPorFacturar !== null ? `${Math.round(vista.margenConPorFacturar * 100)}% con lo por facturar` : undefined}
             color={vista.margen !== null && vista.margen >= 0.3 ? "#047857" : "#B45309"}
             tint="bg-[#F8FDFB]"
           />
@@ -1930,6 +1964,7 @@ function ProjectRow({
   const parcial = rangeActive && e.fraction < 1;
   const prorrateado = parcial && !e.real;
   const conDatos = e.enRango !== null || p.income !== null;
+  const pf = p.porFacturar?.neto ?? 0;
   const fuente = e.eff?.fuente ?? "sin";
   const cobro = e.enRango ?? p.income ?? 0;
   const gasto = e.gastoRango ?? p.cost ?? 0;
@@ -2071,12 +2106,38 @@ function ProjectRow({
               </div>
             ) : null}
             {margenAdentro}
+            {cols.ocultas.has("porfacturar") && pf > 0 ? (
+              <div className="mt-0.5 text-[11px] font-medium tabular-nums text-sky-700" title={detallePorFacturar(p)}>
+                + {bal(pf)} por facturar
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="text-right">
             <span className="text-[11px] italic text-slate-300">{cerrado ? "—" : "sin datos de QBO"}</span>
             <PorQueSinDatos qbJobId={p.id} cerrado={cerrado} />
           </div>
+        )}
+      </td>
+    ),
+
+    // Lo que falta facturar (EST): ingreso del proyecto que todavía no es
+    // facturado. Va aparte del total para no inflar lo facturado.
+    porfacturar: (
+      <td key="porfacturar" className="whitespace-nowrap px-2.5 py-2.5 text-right">
+        {pf > 0 ? (
+          <>
+            <div className="font-medium tabular-nums text-sky-700" title={detallePorFacturar(p)}>
+              {bal(pf)}
+            </div>
+            {(p.porFacturar?.cobrado ?? 0) > 0 ? (
+              <div className="text-[11px] tabular-nums text-emerald-700" title="Anticipos ya cobrados sobre esas EST">
+                {bal(p.porFacturar!.cobrado)} cobrado
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <span className="text-slate-300">—</span>
         )}
       </td>
     ),

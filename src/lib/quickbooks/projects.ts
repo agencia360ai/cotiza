@@ -3,6 +3,7 @@ import { fetchQboCustomers } from "./customers";
 import { listQboTools, withQboSession } from "./mcp";
 import { parsePnl, parseDesglose, desglosarPnl, type MonthPnl, type Pnl, type SeccionPnl } from "./parse";
 import type { DesgloseProyecto } from "./desglose-core";
+import type { PorFacturar } from "./estimados-core";
 import { margenConHoras, type HorasProyecto } from "./horas-core";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
@@ -38,6 +39,8 @@ export type QboProject = {
   // Horas de técnicos (Time Activity × tarifa de costo). `cost` es SOLO lo
   // contable; el gasto que se muestra es la suma de los dos (gastoConHoras).
   horas: HorasProyecto | null;
+  // Facturas EST: lo que falta facturar del contrato. NO está en `income`.
+  porFacturar: PorFacturar | null;
 };
 
 
@@ -85,6 +88,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         txnDatesSource: null,
         meses: [] as MonthPnl[],
         horas: null, // las trae horas.ts; no salen del listado de customers
+        porFacturar: null, // las trae estimados.ts
         id: p.id,
         name: leafName(p.fullyQualifiedName, p.displayName),
         fullName: p.displayName,

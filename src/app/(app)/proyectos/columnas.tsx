@@ -13,7 +13,7 @@ import type { SortState } from "@/components/ui/sortable";
 // no un dato de la empresa— así que no vale la pena una tabla ni sincronizarla
 // entre dispositivos.
 
-export type ColKey = "nombre" | "cliente" | "cotizacion" | "total" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado";
+export type ColKey = "nombre" | "cliente" | "cotizacion" | "total" | "porfacturar" | "cobrado" | "gasto" | "margen" | "inicio" | "fin" | "estado";
 
 type ColMeta = {
   label: string;
@@ -29,6 +29,7 @@ export const COL_META: Record<ColKey, ColMeta> = {
   cliente: { label: "Cliente", min: 140, align: "left" },
   cotizacion: { label: "Cotización", min: 150, align: "left", ayuda: "Vincular cotizaciones al proyecto" },
   total: { label: "Total", min: 118, align: "right", ayuda: "Lo facturado, con el margen debajo" },
+  porfacturar: { label: "Por facturar", min: 116, align: "right", ayuda: "Facturas EST: lo que falta facturar del contrato" },
   cobrado: { label: "Cobrado", min: 106, align: "right", ayuda: "Lo que ya entró de ese total" },
   gasto: { label: "Gasto", min: 100, align: "right" },
   margen: { label: "Margen", min: 110, align: "right", ayuda: "Como columna propia; si no, va debajo del Total" },
@@ -43,6 +44,7 @@ export const SORT_DE_COL: Record<ColKey, string> = {
   cliente: "cliente",
   cotizacion: "cotizacion",
   total: "cobro",
+  porfacturar: "porfacturar",
   cobrado: "cobrado",
   gasto: "gasto",
   margen: "margen",
@@ -55,6 +57,7 @@ export const ORDEN_DEFECTO: ColKey[] = [
   "nombre",
   "cliente",
   "total",
+  "porfacturar",
   "cobrado",
   "gasto",
   "inicio",
@@ -83,10 +86,16 @@ type Guardado = { orden?: unknown; ocultas?: unknown };
 export function sanear(orden: unknown, ocultas: unknown): { orden: ColKey[]; ocultas: ColKey[] } {
   const validas = new Set(ORDEN_DEFECTO);
   const pedido = Array.isArray(orden) ? orden.filter((k): k is ColKey => validas.has(k as ColKey)) : [];
-  const sinDuplicar = [...new Set(pedido)];
-  const faltantes = ORDEN_DEFECTO.filter((k) => !sinDuplicar.includes(k));
+  const resultado = [...new Set(pedido)];
+  // Una columna que no estaba (porque se agregó después) va al lado de la que
+  // la precede por defecto: al final de la tabla nadie la encontraría.
+  for (const [i, k] of ORDEN_DEFECTO.entries()) {
+    if (resultado.includes(k)) continue;
+    const previa = ORDEN_DEFECTO.slice(0, i).reverse().find((x) => resultado.includes(x));
+    resultado.splice(previa ? resultado.indexOf(previa) + 1 : 0, 0, k);
+  }
   const oc = Array.isArray(ocultas) ? ocultas.filter((k): k is ColKey => validas.has(k as ColKey)) : OCULTAS_DEFECTO;
-  return { orden: [...sinDuplicar, ...faltantes], ocultas: [...new Set(oc)] };
+  return { orden: resultado, ocultas: [...new Set(oc)] };
 }
 
 export function mover(orden: ColKey[], from: ColKey, to: ColKey): ColKey[] {
