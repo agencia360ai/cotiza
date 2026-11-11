@@ -41,6 +41,7 @@ import {
 import { gastoConHoras, horasEnRango, margenConHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core";
 import { bal, balCompact, fmtCorta, fmtHoras, marginTextColor, MESES_CORTOS } from "./formato";
 import { ResumenProyecto } from "./resumen-proyecto";
+import { GraficaMensual } from "./grafica-mensual";
 
 // Identidad visual por rubro (misma paleta que el donut del Inicio):
 // DC índigo · DM sky · DS esmeralda · DV ámbar. Ícono + color, nunca solo color.
@@ -892,9 +893,9 @@ export function QboProjectsBoard() {
         </div>
       ) : null}
 
-      {/* Cobro vs gasto mes a mes dentro del rango. */}
+      {/* Facturado y gasto mes a mes dentro del rango. */}
       {hasProjects && serieMensual.length > 1 ? (
-        <MonthlyProfitChart data={serieMensual} todoReal={sorted.every((e) => e.real)} />
+        <GraficaMensual data={serieMensual} todoReal={sorted.every((e) => e.real)} />
       ) : null}
 
       {/* Toolbar: búsqueda + rango de fechas + status + orden */}
@@ -1177,168 +1178,6 @@ export function QboProjectsBoard() {
         )}
       </div>
     </section>
-  );
-}
-
-// ── Cobro vs gasto por mes ───────────────────────────────────────────────────
-// Mismas specs que los charts del Inicio: SVG puro, grid recesivo, marcas con
-// tope redondeado ancladas a la base, tooltip por mes y texto en tokens de
-// texto (nunca del color de la serie). Cobro y gasto van LADO A LADO, igual que
-// en Inicio: las dos series arrancan de la misma base y se comparan por altura
-// sin que una tape a la otra. Antes el gasto iba dentro de la barra de cobro y
-// en los meses de gasto alto casi la llenaba, haciendo ver poco margen donde
-// había, y encima cada pantalla dibujaba lo mismo distinto.
-type PuntoMes = { month: string; cobro: number; gasto: number; cobrado: number | null };
-
-function MonthlyProfitChart({ data, todoReal }: { data: PuntoMes[]; todoReal: boolean }) {
-  const [hoverIdx, setHover] = useState<number | null>(null);
-  // Un filtro puede achicar la serie con el mouse encima: el índice viejo ya
-  // no existe y leerlo rompía la pantalla entera.
-  const hover = hoverIdx !== null && hoverIdx < data.length ? hoverIdx : null;
-  const W = 720;
-  const H = 168;
-  const PAD_L = 8;
-  const PAD_B = 20;
-  const PAD_T = 16;
-  const max = Math.max(1, ...data.map((d) => d.cobro), ...data.map((d) => d.gasto));
-  const innerW = W - PAD_L * 2;
-  const slot = innerW / data.length;
-  // Dos barras por mes: cada una toma poco menos de la mitad del espacio útil,
-  // y el gap las separa lo justo para leerlas como un par y no como dos cosas.
-  // Dos o tres barras por mes según haya serie de cobrado. El ancho se reparte
-  // entre las que haya para que el grupo ocupe siempre lo mismo.
-  const hayCobrado = data.some((d) => d.cobrado !== null);
-  const nBarras = hayCobrado ? 3 : 2;
-  const barW = Math.max(3, Math.min(13, (slot * 0.62) / nBarras));
-  const gap = Math.max(1.5, barW * 0.22);
-  const y = (v: number) => H - PAD_B - (v / max) * (H - PAD_B - PAD_T);
-  const maxIdx = data.reduce((mi, d, i) => (d.cobro > data[mi].cobro ? i : mi), 0);
-  const totalCobro = data.reduce((a, d) => a + d.cobro, 0);
-  const totalGasto = data.reduce((a, d) => a + d.gasto, 0);
-  const conCobrado = data.filter((d) => d.cobrado !== null);
-  const totalCobrado = conCobrado.length > 0 ? conCobrado.reduce((a, d) => a + (d.cobrado ?? 0), 0) : null;
-  const margen = totalCobro > 0 ? (totalCobro - totalGasto) / totalCobro : null;
-
-  // Barra con el tope redondeado. Piso de 3px: un mes de $200 al lado de uno de
-  // $50,000 se dibujaría como una raya invisible y se leería como "sin
-  // movimiento", que es justo lo contrario de lo que dice el dato.
-  const barra = (v: number, x: number, w: number): string => {
-    const base = H - PAD_B;
-    const top = Math.min(y(v), base - 3);
-    const r = Math.min(4, (base - top) / 2);
-    return `M ${x} ${base} L ${x} ${top + r} Q ${x} ${top} ${x + r} ${top} L ${x + w - r} ${top} Q ${x + w} ${top} ${x + w} ${top + r} L ${x + w} ${base} Z`;
-  };
-
-  return (
-    <div className="mb-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h3 className="text-sm font-semibold text-slate-900">
-          {hayCobrado ? "Facturado, cobrado y gasto por mes" : "Facturado y gasto por mes"}
-        </h3>
-        <div className="flex items-center gap-3 text-[11px]">
-          <span className="inline-flex items-center gap-1.5 text-slate-500">
-            <span className="size-2 rounded-full bg-[#1E293B]" /> Facturado
-            <span className="font-semibold tabular-nums text-slate-900">{balCompact(totalCobro)}</span>
-          </span>
-          {totalCobrado !== null ? (
-            <span className="inline-flex items-center gap-1.5 text-slate-500">
-              <span className="size-2 rounded-full bg-[#059669]" /> Cobrado
-              <span className="font-semibold tabular-nums text-emerald-700">{balCompact(totalCobrado)}</span>
-            </span>
-          ) : null}
-          <span className="inline-flex items-center gap-1.5 text-slate-500">
-            <span className="size-2 rounded-full bg-[#F43F5E]" /> Gasto
-            <span className="font-semibold tabular-nums text-rose-600">{balCompact(totalGasto)}</span>
-          </span>
-          {margen !== null ? (
-            <span className={cn("font-semibold tabular-nums", marginTextColor(margen))}>{Math.round(margen * 100)}% margen</span>
-          ) : null}
-        </div>
-      </div>
-      <p className="mb-2 text-[11px] text-slate-400">
-        {todoReal
-          ? "Lo que QuickBooks reporta en cada mes."
-          : "Los proyectos sin desglose mensual en QBO reparten su monto entre los meses que cubren."}
-        {hayCobrado ? " Cobrado = de lo facturado ese mes, cuánto ya entró; lo que falta hasta la barra oscura sigue por cobrar." : ""}
-      </p>
-
-      <div className="relative">
-        {/* El aria-label lleva los números, no solo el título: para un lector de
-            pantalla la gráfica es su descripción — "gráfica de barras" no dice nada. */}
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          className="w-full"
-          role="img"
-          aria-label={`${hayCobrado ? "Facturado, cobrado y gasto por mes" : "Facturado y gasto por mes"}. ${data
-            .map((d) => `${fmtCorta(d.month)}: facturado ${balCompact(d.cobro)}${d.cobrado !== null ? `, cobrado ${balCompact(d.cobrado)}` : ""}, gasto ${balCompact(d.gasto)}`)
-            .join(". ")}`}
-        >
-          {[0.25, 0.5, 0.75, 1].map((f) => (
-            <line key={f} x1={PAD_L} x2={W - PAD_L} y1={y(max * f)} y2={y(max * f)} stroke="#F1F5F9" strokeWidth="1" />
-          ))}
-          <line x1={PAD_L} x2={W - PAD_L} y1={H - PAD_B} y2={H - PAD_B} stroke="#E2E8F0" strokeWidth="1" />
-
-          {data.map((d, i) => {
-            const cx = PAD_L + slot * i + slot / 2;
-            // Grupo centrado en el mes, sea de dos barras o de tres.
-            const anchoGrupo = nBarras * barW + (nBarras - 1) * gap;
-            const x0 = cx - anchoGrupo / 2;
-            const xCobro = x0;
-            const xCobrado = hayCobrado ? x0 + barW + gap : null;
-            const xGasto = x0 + (nBarras - 1) * (barW + gap);
-            const active = hover === i;
-            const dim = hover !== null && !active;
-            return (
-              <g key={d.month} opacity={dim ? 0.4 : 1} style={{ transition: "opacity 150ms" }}>
-                <rect
-                  x={PAD_L + slot * i}
-                  y={PAD_T}
-                  width={slot}
-                  height={H - PAD_B - PAD_T}
-                  fill="transparent"
-                  onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
-                />
-                {d.cobro > 0 ? (
-                  <path d={barra(d.cobro, xCobro, barW)} fill={active ? "#0F172A" : "#1E293B"} style={{ pointerEvents: "none" }} />
-                ) : null}
-                {/* Cobrado: lo que entró ese mes. Verde porque es plata en la
-                    mano, no una promesa — y al lado del facturado la brecha
-                    entre los dos es lo que se está financiando. */}
-                {xCobrado !== null && (d.cobrado ?? 0) > 0 ? (
-                  <path d={barra(d.cobrado ?? 0, xCobrado, barW)} fill="#059669" style={{ pointerEvents: "none" }} />
-                ) : null}
-                {d.gasto > 0 ? (
-                  <path d={barra(d.gasto, xGasto, barW)} fill="#F43F5E" style={{ pointerEvents: "none" }} />
-                ) : null}
-                {/* Etiqueta directa solo en el mes más alto: da la escala sin
-                    obligar a pasar el mouse ni llenar la gráfica de números. */}
-                {i === maxIdx && d.cobro > 0 && hover === null ? (
-                  <text x={cx - barW / 2 - gap / 4} y={y(d.cobro) - 5} textAnchor="middle" className="fill-slate-600" fontSize="10" fontWeight="600">
-                    {balCompact(d.cobro)}
-                  </text>
-                ) : null}
-                <text x={cx} y={H - 6} textAnchor="middle" className="fill-slate-500" fontSize="9">
-                  {MESES_CORTOS[Number(d.month.slice(5, 7)) - 1]}
-                  {data.length > 12 && d.month.slice(5, 7) === "01" ? ` ${d.month.slice(2, 4)}` : ""}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-
-        {hover !== null ? (
-          <div
-            className="pointer-events-none absolute -top-1 z-10 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] leading-relaxed text-white shadow-lg"
-            style={{ left: `${((PAD_L + slot * hover + slot / 2) / W) * 100}%`, transform: "translateX(-50%)" }}
-          >
-            <span className="font-semibold">{fmtCorta(data[hover].month)}</span> · facturado {balCompact(data[hover].cobro)}
-            {data[hover].cobrado !== null ? ` · cobrado ${balCompact(data[hover].cobrado ?? 0)}` : ""} · gasto{" "}
-            {balCompact(data[hover].gasto)}
-          </div>
-        ) : null}
-      </div>
-    </div>
   );
 }
 

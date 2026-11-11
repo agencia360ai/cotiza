@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { AlertTriangle, Clock, Loader2, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { QboProject } from "@/lib/quickbooks/projects";
@@ -19,6 +19,8 @@ import {
 import { getDesgloseProyecto } from "./qbo-actions";
 import { CargarHoras } from "./cargar-horas";
 import { bal, balCompact, fmtCorta, fmtHoras, marginTextColor, MESES_CORTOS } from "./formato";
+import { barra, etiquetaCada, fmtEje, marcasEje, posicionTip, rellenarMeses } from "./grafica-core";
+import { Muestra, useAncho } from "./grafica-mensual";
 
 // Cada categoría de costo tiene su color en la lista de cuentas Y en la
 // gráfica: así se lee qué barra es qué sin ir a la leyenda. Paleta categórica
@@ -265,8 +267,11 @@ export function ResumenProyecto({
 function Cifra({ titulo, valor, clase, extra }: { titulo: string; valor: number; clase: string; extra?: ReactNode }) {
   return (
     <div className="min-w-0 rounded-lg border border-slate-100 bg-slate-50/60 px-2 py-2 text-center sm:px-3">
+      {/* En el celular, sin centavos: con ellos tres montos no entraban y se
+          cortaban en "$30,396....". El monto exacto queda en el title. */}
       <p className={cn("truncate text-sm font-bold tabular-nums sm:text-xl", clase)} title={bal(valor)}>
-        {bal(valor)}
+        <span className="sm:hidden">{balCompact(valor)}</span>
+        <span className="hidden sm:inline">{bal(valor)}</span>
       </p>
       <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">{titulo}</p>
       {extra ? <p className="mt-0.5 text-[11px]">{extra}</p> : null}
@@ -367,30 +372,41 @@ function Vacio({ texto }: { texto: string }) {
 
 // ── Gasto por mes, apilado por categoría ─────────────────────────────────────
 // Barras apiladas porque la pregunta es "cuánto se gastó cada mes y en qué":
-// el alto es el total del mes y los tramos lo reparten. Mismas specs que las
-// gráficas del tablero: SVG puro, grid recesivo, tope redondeado anclado a la
-// base, 2px de separación entre tramos y tooltip por mes.
-function GastoPorMes({ data }: { data: MesGasto[] }) {
-  const [hoverIdx, setHover] = useState<number | null>(null);
-  // Un filtro puede achicar la serie con el mouse encima: el índice viejo ya
-  // no existe y leerlo rompía la pantalla entera.
-  const hover = hoverIdx !== null && hoverIdx < data.length ? hoverIdx : null;
-  if (data.length === 0) return <p className="py-6 text-center text-xs text-slate-400">Sin gasto registrado por mes.</p>;
+// el alto es el total del mes y los tramos lo reparten. Mismas specs que la
+// gráfica del tablero: píxeles reales (no un viewBox estirado), eje con montos
+// redondos, tope redondeado anclado a la base, 2px de separación entre tramos
+// y detalle por mes al pasar el mouse, tocar o enfocar con el teclado.
+const G_H = 196;
+const G_PAD_L = 42;
+const G_PAD_R = 4;
+const G_PAD_T = 22;
+const G_PAD_B = 26;
+const G_BASE = G_H - G_PAD_B;
+const G_TIP = 184;
 
+function GastoPorMes({ data: crudo }: { data: MesGasto[] }) {
+  const [caja, ancho] = useAncho();
+  const [hoverIdx, setHover] = useState<number | null>(null);
+  if (crudo.length === 0) return <p className="py-6 text-center text-xs text-slate-400">Sin gasto registrado por mes.</p>;
+
+  const data = rellenarMeses(crudo, (month) => ({ month, costo_venta: 0, contable: 0, gasto: 0, horas: 0 }));
+  // Un mes con el mouse encima puede dejar de existir si cambian los datos.
+  const hover = hoverIdx !== null && hoverIdx < data.length ? hoverIdx : null;
   const series: SerieGasto[] = (["costo_venta", "contable", "gasto", "horas"] as SerieGasto[]).filter((k) => data.some((d) => d[k] > 0));
   const totalMes = (d: MesGasto) => series.reduce((a, k) => a + Math.max(0, d[k]), 0);
-  const W = 420;
-  const H = 150;
-  const PAD_X = 6;
-  const PAD_B = 20;
-  const PAD_T = 18;
-  const max = Math.max(1, ...data.map(totalMes));
-  const slot = (W - PAD_X * 2) / data.length;
-  const barW = Math.max(6, Math.min(30, slot * 0.6));
-  const y = (v: number) => H - PAD_B - (v / max) * (H - PAD_B - PAD_T);
-  const maxIdx = data.reduce((mi, d, i) => (totalMes(d) > totalMes(data[mi]) ? i : mi), 0);
   const totales = Object.fromEntries(series.map((k) => [k, data.reduce((a, d) => a + d[k], 0)])) as Record<SerieGasto, number>;
-  const total = data.reduce((a, d) => a + totalMes(d), 0);
+  const conGasto = data.filter((d) => totalMes(d) > 0);
+  const total = conGasto.reduce((a, d) => a + totalMes(d), 0);
+  const maxIdx = data.reduce((mi, d, i) => (totalMes(d) > totalMes(data[mi]) ? i : mi), 0);
+  const variosAnios = data[0].month.slice(0, 4) !== data[data.length - 1].month.slice(0, 4);
+
+  const marcas = marcasEje(Math.max(...data.map(totalMes)), 3);
+  const tope = marcas[marcas.length - 1];
+  const alto = (v: number) => (Math.max(0, v) / tope) * (G_BASE - G_PAD_T);
+  const slot = ancho > 0 ? (ancho - G_PAD_L - G_PAD_R) / data.length : 0;
+  const barW = Math.max(4, Math.min(24, slot * 0.42));
+  const cada = etiquetaCada(data.length, slot, variosAnios ? 40 : 26);
+  const centro = (i: number) => G_PAD_L + slot * i + slot / 2;
   const GAP = 2;
 
   return (
@@ -398,91 +414,140 @@ function GastoPorMes({ data }: { data: MesGasto[] }) {
       <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
         {series.map((k) => (
           <span key={k} className="inline-flex items-center gap-1.5">
-            <span className="size-2 rounded-full" style={{ background: COLOR[k] }} />
+            <Muestra color={COLOR[k]} />
             {NOMBRE_SERIE[k]} <span className="font-semibold tabular-nums text-slate-800">{balCompact(totales[k])}</span>
           </span>
         ))}
       </div>
-      <div className="relative">
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          className="w-full"
-          role="img"
-          aria-label={`Gasto por mes. ${data
-            .map((d) => `${fmtCorta(d.month)}: ${series.map((k) => `${NOMBRE_SERIE[k]} ${balCompact(d[k])}`).join(", ")}`)
-            .join(". ")}`}
-        >
-          {[0.5, 1].map((f) => (
-            <line key={f} x1={PAD_X} x2={W - PAD_X} y1={y(max * f)} y2={y(max * f)} stroke="#F1F5F9" strokeWidth="1" />
-          ))}
-          <line x1={PAD_X} x2={W - PAD_X} y1={H - PAD_B} y2={H - PAD_B} stroke="#E2E8F0" strokeWidth="1" />
-          {data.map((d, i) => {
-            const cx = PAD_X + slot * i + slot / 2;
-            const x = cx - barW / 2;
-            const tramos = series.filter((k) => d[k] > 0);
-            let base = H - PAD_B;
-            const dim = hover !== null && hover !== i;
-            return (
-              <g key={d.month} opacity={dim ? 0.4 : 1} style={{ transition: "opacity 150ms" }}>
-                <rect
-                  x={PAD_X + slot * i}
-                  y={PAD_T}
-                  width={slot}
-                  height={H - PAD_B - PAD_T}
-                  fill="transparent"
-                  onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
-                  onClick={() => setHover((h) => (h === i ? null : i))}
+      <div ref={caja} className="relative" style={{ height: G_H }} onPointerLeave={(e) => e.pointerType === "mouse" && setHover(null)}>
+        {ancho > 0 ? (
+          <svg
+            width={ancho}
+            height={G_H}
+            className="block overflow-visible"
+            role="img"
+            aria-label={`Gasto por mes. ${data
+              .map((d) => `${fmtCorta(d.month)}: ${series.map((k) => `${NOMBRE_SERIE[k]} ${balCompact(d[k])}`).join(", ")}`)
+              .join(". ")}`}
+          >
+            {marcas.map((v, k) => (
+              <g key={v}>
+                <line
+                  x1={G_PAD_L}
+                  x2={ancho - G_PAD_R}
+                  y1={G_BASE - alto(v)}
+                  y2={G_BASE - alto(v)}
+                  stroke={k === 0 ? "#E2E8F0" : "#EEF2F6"}
+                  strokeWidth="1"
                 />
-                {tramos.map((k, j) => {
-                  // Piso de 2px para que un tramo chico se vea; el gap de 2px
-                  // separa tramos sin dibujar bordes.
-                  const alto = Math.max(2, (d[k] / max) * (H - PAD_B - PAD_T));
-                  const top = base - alto;
-                  const ultimo = j === tramos.length - 1;
-                  const r = ultimo ? Math.min(4, alto / 2) : 0;
-                  const path = `M ${x} ${base} L ${x} ${top + r} Q ${x} ${top} ${x + r} ${top} L ${x + barW - r} ${top} Q ${x + barW} ${top} ${x + barW} ${top + r} L ${x + barW} ${base} Z`;
-                  base = top - GAP;
-                  return <path key={k} d={path} fill={COLOR[k]} style={{ pointerEvents: "none" }} />;
-                })}
-                {i === maxIdx && hover === null ? (
-                  <text x={cx} y={y(totalMes(d)) - (tramos.length - 1) * GAP - 5} textAnchor="middle" className="fill-slate-600" fontSize="11" fontWeight="600">
-                    {balCompact(totalMes(d))}
-                  </text>
-                ) : null}
-                <text x={cx} y={H - 6} textAnchor="middle" className="fill-slate-500" fontSize="10">
-                  {MESES_CORTOS[Number(d.month.slice(5, 7)) - 1]}
-                  {data.length > 6 && i > 0 && d.month.slice(0, 4) !== data[i - 1].month.slice(0, 4) ? ` ${d.month.slice(2, 4)}` : ""}
+                <text x={G_PAD_L - 8} y={G_BASE - alto(v)} dy="0.32em" textAnchor="end" fontSize="11" fill="#94A3B8" className="tabular-nums">
+                  {fmtEje(v)}
                 </text>
               </g>
-            );
-          })}
-        </svg>
-        {hover !== null ? (
+            ))}
+            {data.map((d, i) => {
+              const cx = centro(i);
+              const x = cx - barW / 2;
+              const tramos = series.filter((k) => d[k] > 0);
+              const activo = hover === i;
+              const mes = Number(d.month.slice(5, 7)) - 1;
+              let base = G_BASE;
+              return (
+                <g
+                  key={d.month}
+                  tabIndex={0}
+                  role="img"
+                  aria-label={`${fmtCorta(d.month)}: ${bal(totalMes(d))}`}
+                  onPointerEnter={() => setHover(i)}
+                  onPointerDown={() => setHover(i)}
+                  onFocus={() => setHover(i)}
+                  onBlur={() => setHover(null)}
+                  className="outline-none"
+                >
+                  <rect x={G_PAD_L + slot * i} y={0} width={slot} height={G_BASE} fill="transparent" />
+                  {activo ? (
+                    <rect
+                      x={cx - Math.max(barW / 2 + 8, slot * 0.36)}
+                      y={G_PAD_T - 16}
+                      width={Math.max(barW + 16, slot * 0.72)}
+                      height={G_BASE - G_PAD_T + 16}
+                      rx="8"
+                      fill="#E8EDF3"
+                    />
+                  ) : null}
+                  <g className="barra-crece pointer-events-none" style={{ animationDelay: `${Math.min(i, 24) * 22}ms` }}>
+                    {tramos.map((k, j) => {
+                      // Piso de 2px para que un tramo chico se vea; los 2px de
+                      // separación hacen de borde sin dibujar uno.
+                      const h = Math.max(2, alto(d[k]));
+                      const top = base - h;
+                      const path = barra(x, barW, top, base, j === tramos.length - 1);
+                      base = top - GAP;
+                      return <path key={k} d={path} fill={COLOR[k]} />;
+                    })}
+                  </g>
+                  {mes % cada === 0 || (cada === 1 && i === 0) ? (
+                    <text
+                      x={cx}
+                      y={G_H - 8}
+                      textAnchor="middle"
+                      fontSize="11"
+                      fill={activo ? "#0F172A" : "#64748B"}
+                      fontWeight={activo ? 600 : 400}
+                      className="pointer-events-none"
+                    >
+                      {MESES_CORTOS[mes]}
+                      {variosAnios && (mes === 0 || i === 0) ? ` ${d.month.slice(2, 4)}` : ""}
+                    </text>
+                  ) : null}
+                </g>
+              );
+            })}
+            {hover === null && totalMes(data[maxIdx]) > 0 ? (
+              <text
+                x={Math.min(Math.max(centro(maxIdx), G_PAD_L + 24), ancho - G_PAD_R - 24)}
+                y={G_BASE - alto(totalMes(data[maxIdx])) - (series.filter((k) => data[maxIdx][k] > 0).length - 1) * GAP - 7}
+                textAnchor="middle"
+                fontSize="11"
+                fontWeight="600"
+                fill="#475569"
+                className="pointer-events-none tabular-nums"
+              >
+                {balCompact(totalMes(data[maxIdx]))}
+              </text>
+            ) : null}
+          </svg>
+        ) : null}
+        {hover !== null && ancho > 0 ? (
           <div
-            className="pointer-events-none absolute -top-1 z-10 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] leading-relaxed text-white shadow-lg"
-            style={{
-              left: `${Math.min(80, Math.max(20, ((PAD_X + slot * hover + slot / 2) / W) * 100))}%`,
-              transform: "translateX(-50%)",
-            }}
+            className="pointer-events-none absolute top-0 z-10 rounded-xl bg-slate-900/95 px-3 py-2.5 text-[11px] text-white shadow-xl ring-1 ring-white/10"
+            style={{ left: posicionTip(centro(hover), barW / 2, ancho, G_TIP), width: G_TIP }}
           >
-            <p className="font-semibold">
-              {fmtCorta(data[hover].month)} · {bal(totalMes(data[hover]))}
+            <p className="mb-1.5 flex justify-between gap-2 font-semibold">
+              <span>{fmtCorta(data[hover].month)}</span>
+              <span className="tabular-nums">{balCompact(totalMes(data[hover]))}</span>
             </p>
-            {series
-              .filter((k) => data[hover][k] !== 0)
-              .map((k) => (
-                <p key={k} className="whitespace-nowrap">
-                  {NOMBRE_SERIE[k]}: {bal(data[hover][k])}
-                </p>
-              ))}
+            <div className="grid grid-cols-[10px_1fr_auto] items-center gap-x-2 gap-y-1">
+              {series
+                .filter((k) => data[hover][k] !== 0)
+                .map((k) => (
+                  <Fragment key={k}>
+                    <Muestra color={COLOR[k]} />
+                    <span className="text-slate-300">{NOMBRE_SERIE[k]}</span>
+                    <span className="text-right tabular-nums">{balCompact(data[hover][k])}</span>
+                  </Fragment>
+                ))}
+              {totalMes(data[hover]) === 0 ? <span className="col-span-3 text-slate-400">Sin gasto este mes</span> : null}
+            </div>
           </div>
         ) : null}
       </div>
-      <p className="mt-1.5 text-[11px] text-slate-500">
-        Mes con más gasto: <span className="font-semibold text-slate-800">{fmtCorta(data[maxIdx].month)}</span> ({balCompact(totalMes(data[maxIdx]))}) · promedio{" "}
-        {balCompact(total / data.length)} en {data.length} {data.length === 1 ? "mes" : "meses"} con gasto
-      </p>
+      {conGasto.length > 0 ? (
+        <p className="mt-1.5 text-[11px] text-slate-500">
+          Mes con más gasto: <span className="font-semibold text-slate-800">{fmtCorta(data[maxIdx].month)}</span> ({balCompact(totalMes(data[maxIdx]))}) ·
+          promedio {balCompact(total / conGasto.length)} en {conGasto.length} {conGasto.length === 1 ? "mes" : "meses"} con gasto
+        </p>
+      ) : null}
     </div>
   );
 }
