@@ -114,3 +114,18 @@
     cursor: pointer;
   }
 }
+
+/* Barras de las gráficas que crecen desde la base al aparecer. Solo si la
+   persona no pidió menos movimiento en su sistema. */
+@media (prefers-reduced-motion: no-preference) {
+  .barra-crece {
+    transform-box: fill-box;
+    transform-origin: bottom;
+    animation: barra-crece 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+@keyframes barra-crece {
+  from {
+    transform: scaleY(0);
+  }
+}
