@@ -520,7 +520,7 @@ function GastoPorMes({ data: crudo }: { data: MesGasto[] }) {
         ) : null}
         {hover !== null && ancho > 0 ? (
           <div
-            className="pointer-events-none absolute top-0 z-10 rounded-xl bg-slate-900/95 px-3 py-2.5 text-[11px] text-white shadow-xl ring-1 ring-white/10"
+            className="pointer-events-none absolute top-0 z-10 rounded-xl bg-slate-900 px-3 py-2.5 text-[11px] text-white shadow-xl ring-1 ring-white/10"
             style={{ left: posicionTip(centro(hover), barW / 2, ancho, G_TIP), width: G_TIP }}
           >
             <p className="mb-1.5 flex justify-between gap-2 font-semibold">
