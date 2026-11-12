@@ -652,11 +652,11 @@ export function QboProjectsBoard() {
     // dice "s/d" en vez de un cero que se leería como "no cobramos nada".
     let cobrado = 0;
     let conCobrado = 0;
-    // Por cobrar = lo facturado que todavía no entró, de los proyectos con dato
-    // de cobro. Sin dato no se suma: "no sé" no es "debe todo".
-    let porCobrar = 0;
+    // Proyectos con saldo pendiente, y lo facturado de los que no tienen dato
+    // de cobro (pasa hasta el primer Actualizar después de que cambió algo).
     let nPorCobrar = 0;
     let cobroConCobrado = 0;
+    let nSinDatoCobro = 0;
     // Proyectos cuyo gasto QBO devuelve negativo: cuentan como 0 en las sumas y
     // quedan fuera del margen. El badge dice cuántos son, para que nadie lea el
     // margen de la vista como si estuviera completo.
@@ -687,12 +687,8 @@ export function QboProjectsBoard() {
         cobrado += e.cobradoRango;
         conCobrado++;
         cobroConCobrado += e.enRango ?? 0;
-        const debe = Math.max(0, (e.enRango ?? 0) - e.cobradoRango);
-        if (debe > 0.5) {
-          porCobrar += debe;
-          nPorCobrar++;
-        }
-      }
+        if ((e.enRango ?? 0) - e.cobradoRango > 0.5) nPorCobrar++;
+      } else if ((e.enRango ?? 0) > 0) nSinDatoCobro++;
       if (!e.real && e.fraction < 1) prorrateados++;
     }
     // Abiertos es del proyecto ENTERO, no de la porción en rango.
@@ -706,9 +702,12 @@ export function QboProjectsBoard() {
       prorrateados,
       gastoNegativo,
       cobrado: conCobrado > 0 ? cobrado : null,
-      cobroConCobrado,
-      porCobrar: conCobrado > 0 ? porCobrar : null,
+      // Por cobrar = facturado − cobrado, tal cual: la resta tiene que cerrar
+      // con los dos números que están en pantalla.
+      porCobrar: conCobrado > 0 ? Math.max(0, cobro - cobrado) : null,
       nPorCobrar,
+      sinDatoCobro: Math.max(0, cobro - cobroConCobrado),
+      nSinDatoCobro,
       abiertos,
       porFacturar,
       nPorFacturar,
@@ -769,7 +768,11 @@ export function QboProjectsBoard() {
             <h2 className="text-sm font-semibold text-slate-900">
               Proyectos en QuickBooks <span className="text-slate-400">· {RANGE_LABEL[rangeKey]}</span>
             </h2>
-            {res?.ok && res.syncedAt ? <p className="text-[11px] text-slate-400">Actualizado {relTime(res.syncedAt)}</p> : null}
+            <p className="text-[11px] text-slate-400">
+              {res?.ok && res.syncedAt ? `Actualizado ${relTime(res.syncedAt)}` : null}
+              {res?.ok && res.syncedAt && hasProjects ? " · " : null}
+              {hasProjects ? `${vista.abiertos} abiertos de ${sorted.length} en la vista` : null}
+            </p>
           </div>
         </div>
         <button
@@ -801,28 +804,35 @@ export function QboProjectsBoard() {
       {/* Los números que resumen la vista. Responden al rango y a los
           filtros activos: es el estado de LO QUE SE ESTÁ MIRANDO. */}
       {hasProjects ? (
-        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4 3xl:grid-cols-8">
-          {/* Primero los ingresos: lo que falta facturar (EST), lo facturado y
-              la suma de los dos. Después el gasto y el margen sobre esa suma, y
-              al final la cobranza. Todos responden al rango y a los filtros. */}
-          <KpiProyecto
-            label="Por facturar"
-            value={bal(vista.porFacturar)}
-            sub={
-              vista.nPorFacturar > 0
-                ? `Facturas EST de ${vista.nPorFacturar} proyecto${vista.nPorFacturar === 1 ? "" : "s"}`
-                : "Sin facturas EST"
-            }
-            color="#0369A1"
+        <div className="mb-3 grid grid-cols-2 gap-2.5 xl:grid-cols-5">
+          {/* Dos sumas que se leen como cuentas: por facturar + facturado =
+              ingresos previstos, y cobrado + por cobrar = facturado. Con los
+              sumandos a la vista nadie tiene que restar para ver si cierra. */}
+          <KpiSuma
+            className="col-span-2"
+            partes={[
+              {
+                label: "Por facturar",
+                value: bal(vista.porFacturar),
+                sub:
+                  vista.nPorFacturar > 0
+                    ? `Facturas EST de ${vista.nPorFacturar} proyecto${vista.nPorFacturar === 1 ? "" : "s"}`
+                    : "Sin facturas EST",
+                color: "#0369A1",
+              },
+              { label: "Facturado", value: bal(vista.cobro), sub: "Facturas normales, sin las EST" },
+            ]}
+            total={{
+              label: "Ingresos previstos",
+              value: bal(vista.previstos),
+              grande: true,
+              ayuda: "Lo facturado en el rango más lo que está en facturas EST de esos proyectos.",
+            }}
           />
-          <KpiProyecto label="Facturado" value={bal(vista.cobro)} sub="Facturas normales, sin las EST" />
-          <KpiProyecto
-            label="Ingresos previstos"
-            value={bal(vista.previstos)}
-            sub="Facturado + por facturar"
-            tint="bg-sky-50/60"
-            ayuda="Lo facturado en el rango más lo que está en facturas EST de esos proyectos."
-          />
+          {/* Gasto y margen: lado a lado en pantallas chicas, uno sobre otro al
+              medio de las dos cuentas en las grandes (así las tres columnas
+              tienen el mismo alto y nada queda estirado). */}
+          <div className="col-span-2 grid grid-cols-2 gap-2.5 xl:col-span-1 xl:grid-cols-1 xl:grid-rows-2">
           <KpiProyecto
             label="Gasto"
             value={bal(vista.gasto)}
@@ -837,34 +847,46 @@ export function QboProjectsBoard() {
             tint="bg-[#F8FDFB]"
             ayuda="(Ingresos previstos − gasto) / ingresos previstos. Bruto: solo los costos cargados a los proyectos, sin los gastos generales de la empresa (oficina, administración)."
           />
-          {/* Lo que efectivamente entró. Facturar no es cobrar, y en una empresa
-              que vive del flujo esa es la diferencia que importa. "s/d" cuando
-              QuickBooks no dio el pendiente. */}
-          <KpiProyecto
-            label="Cobrado"
-            value={vista.cobrado !== null ? bal(vista.cobrado) : "s/d"}
-            sub={
-              vista.cobrado !== null && vista.cobroConCobrado > 0
-                ? `${Math.round((vista.cobrado / vista.cobroConCobrado) * 100)}% de lo facturado`
-                : undefined
-            }
-            color="#047857"
-            // Sin dato hay que poder ver POR QUÉ: el reporte puede no existir,
-            // no traer filas, o traer ids que no son los de estos proyectos.
-            extra={vista.cobrado === null ? <PorQueSinCobrado /> : null}
+          </div>
+          {/* Lo que efectivamente entró y lo que falta. Facturar no es cobrar,
+              y en una empresa que vive del flujo esa es la diferencia que
+              importa. "s/d" cuando QuickBooks no dio el pendiente. */}
+          <KpiSuma
+            className="col-span-2"
+            partes={[
+              {
+                label: "Cobrado",
+                value: vista.cobrado !== null ? bal(vista.cobrado) : "s/d",
+                sub: vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% de lo facturado` : undefined,
+                color: "#047857",
+                // Sin dato hay que poder ver POR QUÉ: el reporte puede no existir,
+                // no traer filas, o traer ids que no son los de estos proyectos.
+                extra: vista.cobrado === null ? <PorQueSinCobrado /> : null,
+              },
+              {
+                label: "Por cobrar",
+                value: vista.porCobrar !== null ? bal(vista.porCobrar) : "s/d",
+                sub:
+                  vista.porCobrar !== null ? `${vista.nPorCobrar} proyecto${vista.nPorCobrar === 1 ? "" : "s"} con saldo` : undefined,
+                color: "#B45309",
+                ayuda: "Facturado − cobrado: facturas normales que el cliente todavía no pagó, según las cuentas por cobrar de QuickBooks.",
+                // Un proyecto sin dato de cobro suma todo su facturado acá. Se
+                // dice cuánto es, para que nadie lo lea como deuda real.
+                extra:
+                  vista.porCobrar !== null && vista.nSinDatoCobro > 0 ? (
+                    <p className="mt-0.5 text-[11px] font-medium text-amber-700">
+                      Incluye {balCompact(vista.sinDatoCobro)} de {vista.nSinDatoCobro} proyecto{vista.nSinDatoCobro === 1 ? "" : "s"} sin dato de
+                      cobro: dale Actualizar
+                    </p>
+                  ) : null,
+              },
+            ]}
+            total={{
+              label: "Facturado",
+              value: bal(vista.cobro),
+              barra: vista.cobrado !== null && vista.cobro > 0 ? vista.cobrado / vista.cobro : null,
+            }}
           />
-          <KpiProyecto
-            label="Por cobrar"
-            value={vista.porCobrar !== null ? bal(vista.porCobrar) : "s/d"}
-            sub={
-              vista.porCobrar !== null
-                ? `${vista.nPorCobrar} proyecto${vista.nPorCobrar === 1 ? "" : "s"} con saldo`
-                : undefined
-            }
-            color="#B45309"
-            ayuda="Facturas normales que el cliente todavía no pagó (facturado − cobrado), según las cuentas por cobrar de QuickBooks."
-          />
-          <KpiProyecto label="Abiertos" value={String(vista.abiertos)} sub={`de ${sorted.length} en la vista`} />
         </div>
       ) : null}
 
@@ -1219,6 +1241,78 @@ export function QboProjectsBoard() {
 // Barra de rentabilidad: gasto (rosa) vs margen (verde) como % del cobro.
 // KPI de la cabecera de Proyectos. El valor va con clamp y nowrap: cinco
 // montos en fila no se pueden pisar entre sí en pantallas angostas.
+type ParteSuma = { label: string; value: string; sub?: string; color?: string; ayuda?: string; extra?: React.ReactNode };
+
+/**
+ * Dos KPIs que suman un tercero, armados como una cuenta: los sumandos arriba
+ * con un "+" entre ellos y el resultado abajo, después de un "=". `grande`
+ * para el total que manda (ingresos previstos); `barra` para mostrar qué parte
+ * del total es el primer sumando (cuánto de lo facturado ya se cobró).
+ */
+function KpiSuma({
+  partes,
+  total,
+  className,
+}: {
+  partes: [ParteSuma, ParteSuma];
+  total: { label: string; value: string; grande?: boolean; barra?: number | null; ayuda?: string };
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex flex-col overflow-hidden rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]", className)}>
+      <div className="relative grid flex-1 grid-cols-2 divide-x divide-slate-100">
+        {partes.map((p) => (
+          <div key={p.label} className="min-w-0 px-4 py-3" title={p.ayuda}>
+            <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">{p.label}</p>
+            <p
+              className="mt-0.5 whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"
+              style={{ fontSize: "clamp(18px, 1.3vw, 24px)", ...(p.color ? { color: p.color } : {}) }}
+            >
+              {p.value}
+            </p>
+            {p.sub ? <p className="text-[11px] text-slate-500">{p.sub}</p> : null}
+            {p.extra}
+          </div>
+        ))}
+        <span
+          aria-hidden
+          className="absolute left-1/2 top-1/2 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-white text-xs font-bold text-slate-400 ring-1 ring-slate-200"
+        >
+          +
+        </span>
+      </div>
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-slate-100 px-4",
+          total.grande ? "bg-sky-50/70 py-3" : "bg-slate-50/70 py-2",
+        )}
+        title={total.ayuda}
+      >
+        <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">
+          <span className="mr-1.5 text-sm font-semibold text-slate-400">=</span>
+          {total.label}
+        </p>
+        <div className="flex min-w-0 items-center gap-3">
+          {total.barra !== undefined && total.barra !== null ? (
+            <span
+              className="hidden h-1.5 w-20 overflow-hidden rounded-full bg-amber-200 sm:block"
+              title={`${Math.round(total.barra * 100)}% cobrado`}
+            >
+              <span className="block h-full rounded-full bg-emerald-600" style={{ width: `${Math.min(100, Math.max(0, total.barra * 100))}%` }} />
+            </span>
+          ) : null}
+          <p
+            className="whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"
+            style={{ fontSize: total.grande ? "clamp(22px, 1.9vw, 32px)" : "clamp(15px, 1vw, 18px)" }}
+          >
+            {total.value}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KpiProyecto({
   label,
   value,
@@ -1227,6 +1321,7 @@ function KpiProyecto({
   tint,
   extra,
   ayuda,
+  className,
 }: {
   label: string;
   value: string;
@@ -1236,9 +1331,10 @@ function KpiProyecto({
   extra?: React.ReactNode;
   /** Qué es y cómo se calcula, al pasar el mouse. */
   ayuda?: string;
+  className?: string;
 }) {
   return (
-    <div className={cn("rounded-card border border-line bg-surface px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,.04)]", tint)} title={ayuda}>
+    <div className={cn("rounded-card border border-line bg-surface px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,.04)]", tint, className)} title={ayuda}>
       <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">{label}</p>
       <p
         className="mt-0.5 whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"

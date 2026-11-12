@@ -48,13 +48,6 @@
   --ring: oklch(0.556 0 0);
 }
 
-/* Pantallas de escritorio grandes (≥1760px): las 8 tarjetas de Proyectos
-   entran en una fila sin cortar montos. Como breakpoint del tema y no como
-   min-[1760px]: Tailwind ordena los arbitrarios ANTES que sm: y perdían. */
-@theme {
-  --breakpoint-3xl: 110rem;
-}
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
