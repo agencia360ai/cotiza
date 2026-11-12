@@ -109,6 +109,11 @@ function margenDeProyecto(p: QboProject): number | null {
   return margenBruto(p.income, p.porFacturar?.neto ?? 0, gastoConHoras(p.cost, p.horas));
 }
 
+// Anticipos: lo que el cliente ya pagó contra facturas EST. Es plata que
+// entró aunque todavía no sea "facturado", así que va en el cobrado del
+// proyecto. No depende del rango, igual que lo por facturar.
+const anticipoDe = (p: QboProject): number => p.porFacturar?.cobrado ?? 0;
+
 function detallePorFacturar(p: QboProject): string {
   const docs = p.porFacturar?.docs ?? [];
   return [
@@ -507,7 +512,7 @@ export function QboProjectsBoard() {
         case "porfacturar":
           return e.p.porFacturar?.neto ?? null;
         case "cobrado":
-          return e.cobradoRango;
+          return e.cobradoRango === null && anticipoDe(e.p) <= 0 ? null : (e.cobradoRango ?? 0) + anticipoDe(e.p);
         case "gasto":
           return e.gastoRango ?? gastoConHoras(e.p.cost, e.p.horas);
         case "margen":
@@ -651,6 +656,7 @@ export function QboProjectsBoard() {
     // El cobrado solo suma donde HAY dato. Si ningún proyecto lo tiene, el KPI
     // dice "s/d" en vez de un cero que se leería como "no cobramos nada".
     let cobrado = 0;
+    let anticipos = 0;
     let conCobrado = 0;
     // Proyectos con saldo pendiente, y lo facturado de los que no tienen dato
     // de cobro (pasa hasta el primer Actualizar después de que cambió algo).
@@ -673,6 +679,7 @@ export function QboProjectsBoard() {
       cobro += e.enRango ?? 0;
       gasto += g.gasto;
       const pf = e.p.porFacturar?.neto ?? 0;
+      anticipos += anticipoDe(e.p);
       if (pf > 0) {
         porFacturar += pf;
         nPorFacturar++;
@@ -701,7 +708,11 @@ export function QboProjectsBoard() {
       horas,
       prorrateados,
       gastoNegativo,
+      // Cobrado de facturas normales; null si QuickBooks no dio ningún saldo.
       cobrado: conCobrado > 0 ? cobrado : null,
+      anticipos,
+      // Todo lo que entró: facturas cobradas + anticipos de EST.
+      cobradoTotal: conCobrado > 0 || anticipos > 0 ? (conCobrado > 0 ? cobrado : 0) + anticipos : null,
       // Por cobrar = facturado − cobrado, tal cual: la resta tiene que cerrar
       // con los dos números que están en pantalla.
       porCobrar: conCobrado > 0 ? Math.max(0, cobro - cobrado) : null,
@@ -856,9 +867,15 @@ export function QboProjectsBoard() {
             partes={[
               {
                 label: "Cobrado",
-                value: vista.cobrado !== null ? bal(vista.cobrado) : "s/d",
-                sub: vista.cobrado !== null && vista.cobro > 0 ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% de lo facturado` : undefined,
+                value: vista.cobradoTotal !== null ? bal(vista.cobradoTotal) : "s/d",
+                sub:
+                  vista.anticipos > 0
+                    ? `Facturas ${vista.cobrado !== null ? balCompact(vista.cobrado) : "s/d"} + anticipos ${balCompact(vista.anticipos)}`
+                    : vista.cobrado !== null && vista.cobro > 0
+                      ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% de lo facturado`
+                      : undefined,
                 color: "#047857",
+                ayuda: "Todo lo que entró: facturas normales pagadas más los anticipos cobrados contra facturas EST.",
                 // Sin dato hay que poder ver POR QUÉ: el reporte puede no existir,
                 // no traer filas, o traer ids que no son los de estos proyectos.
                 extra: vista.cobrado === null ? <PorQueSinCobrado /> : null,
@@ -882,9 +899,14 @@ export function QboProjectsBoard() {
               },
             ]}
             total={{
-              label: "Facturado",
-              value: bal(vista.cobro),
-              barra: vista.cobrado !== null && vista.cobro > 0 ? vista.cobrado / vista.cobro : null,
+              // Con anticipos la cuenta es cobrado + por cobrar = facturado +
+              // anticipos: el anticipo entró, pero no es parte de lo facturado.
+              label: vista.anticipos > 0 ? "Facturado + anticipos" : "Facturado",
+              value: bal(vista.cobro + vista.anticipos),
+              barra:
+                vista.cobradoTotal !== null && vista.cobro + vista.anticipos > 0
+                  ? vista.cobradoTotal / (vista.cobro + vista.anticipos)
+                  : null,
             }}
           />
         </div>
@@ -1951,6 +1973,7 @@ function ProjectRow({
   const prorrateado = parcial && !e.real;
   const conDatos = e.enRango !== null || p.income !== null;
   const pf = p.porFacturar?.neto ?? 0;
+  const anticipo = anticipoDe(p);
   const fuente = e.eff?.fuente ?? "sin";
   const cobro = e.enRango ?? p.income ?? 0;
   // El margen es del proyecto entero (como el %), no de la porción en rango.
@@ -2131,23 +2154,30 @@ function ProjectRow({
       </td>
     ),
 
-    // Cobrado: lo que entró de verdad. En gris cuando falta el dato, para no
-    // confundir "no sé" con "no cobraron".
+    // Cobrado: lo que entró de verdad, facturas pagadas más anticipos de EST.
+    // En gris cuando falta el dato, para no confundir "no sé" con "no cobraron".
     cobrado: (
       <td key="cobrado" className="whitespace-nowrap px-2.5 py-2.5 text-right">
-        {!conDatos ? (
+        {!conDatos && anticipo <= 0 ? (
           <span className="text-slate-300">—</span>
-        ) : e.cobradoRango === null ? (
+        ) : e.cobradoRango === null && anticipo <= 0 ? (
           <span className="text-[11px] italic text-slate-400" title="QuickBooks no reportó el saldo pendiente de este proyecto">
             s/d
           </span>
         ) : (
-          <span
-            className="font-medium tabular-nums text-emerald-700"
-            title={parcial && p.paid !== null ? `${bal(p.paid)} cobrados en todo el proyecto` : undefined}
-          >
-            {bal(e.cobradoRango)}
-          </span>
+          <>
+            <div
+              className="font-medium tabular-nums text-emerald-700"
+              title={parcial && p.paid !== null ? `${bal(p.paid)} cobrados en todo el proyecto` : undefined}
+            >
+              {bal((e.cobradoRango ?? 0) + anticipo)}
+            </div>
+            {anticipo > 0 ? (
+              <div className="text-[11px] tabular-nums text-slate-400" title={detallePorFacturar(p)}>
+                {e.cobradoRango === null ? "anticipo · facturas s/d" : e.cobradoRango > 0.5 ? `incl. ${bal(anticipo)} anticipo` : "anticipo de EST"}
+              </div>
+            ) : null}
+          </>
         )}
       </td>
     ),
