@@ -136,7 +136,7 @@ export function ResumenProyecto({
             · si se factura todo: {bal(conTodo)} − {bal(costos)} ={" "}
             <span className={cn("font-semibold", conTodo - costos < 0 ? "text-rose-600" : "text-slate-900")}>{bal(conTodo - costos)}</span>
             {margenConTodo !== null ? (
-              <span className={cn("font-semibold", marginTextColor(margenConTodo))}> ({Math.round(margenConTodo * 100)}% margen)</span>
+              <span className={cn("font-semibold", marginTextColor(margenConTodo))}> ({Math.round(margenConTodo * 100)}% margen bruto)</span>
             ) : null}
           </span>
         </p>

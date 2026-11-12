@@ -361,14 +361,17 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // pendiente. Un solo reporte con todos los clientes: no se consulta por
   // proyecto. Si el gateway no lo expone, `paid` queda null y la UI dice "s/d"
   // — el resto de la sincronización no se pierde por esto.
+  //
+  // Va para TODOS, cerrados incluidos: su facturado está congelado, pero lo
+  // que deben no. Antes solo se calculaba para los abiertos y un cerrado sin
+  // dato se sumaba como "por cobrar" (DC26-04: $41,450 ya pagados).
   try {
-    const abiertos = list.filter((p) => !p.closed);
-    const { porProyecto } = await fetchSaldosPendientes(abiertos.map((p) => p.id));
+    const { porProyecto } = await fetchSaldosPendientes(list.map((p) => p.id));
     // El reporte se leyó bien si devolvió aunque sea un saldo: ahí la AUSENCIA
     // de un proyecto pasa a significar "no debe nada", no "no sé".
     const reporteOk = porProyecto.size > 0;
     if (reporteOk) {
-      for (const p of abiertos) p.paid = calcularCobrado(p.income, porProyecto.get(p.id), true);
+      for (const p of list) p.paid = calcularCobrado(p.income, porProyecto.get(p.id), true);
     }
   } catch {
     /* sin cobrado: los demás números siguen valiendo */
