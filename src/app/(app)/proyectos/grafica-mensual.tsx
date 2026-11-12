@@ -366,7 +366,7 @@ function Tip({
   const futuro = d.month.slice(0, 7) > mesHoy;
   return (
     <div
-      className="pointer-events-none absolute top-0 z-10 rounded-xl bg-slate-900/95 px-3 py-2.5 text-[11px] text-white shadow-xl ring-1 ring-white/10"
+      className="pointer-events-none absolute top-0 z-10 rounded-xl bg-slate-900 px-3 py-2.5 text-[11px] text-white shadow-xl ring-1 ring-white/10"
       style={{ left, width: ANCHO_TIP }}
     >
       <p className="mb-1.5 flex items-baseline justify-between gap-2 font-semibold">

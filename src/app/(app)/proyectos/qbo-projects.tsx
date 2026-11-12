@@ -845,12 +845,14 @@ export function QboProjectsBoard() {
               tienen el mismo alto y nada queda estirado). */}
           <div className="col-span-2 grid grid-cols-2 gap-2.5 xl:col-span-1 xl:grid-cols-1 xl:grid-rows-2">
           <KpiProyecto
+            className="flex flex-col items-center justify-center text-center"
             label="Gasto"
             value={bal(vista.gasto)}
             sub={vista.horas > 0 ? `${balCompact(vista.horas)} en horas de técnicos` : undefined}
             color="#BE123C"
           />
           <KpiProyecto
+            className="flex flex-col items-center justify-center text-center"
             label="Margen bruto"
             value={vista.margenBruto !== null ? `${Math.round(vista.margenBruto * 100)}%` : "s/d"}
             sub={vista.margenFacturado !== null ? `Solo lo facturado: ${Math.round(vista.margenFacturado * 100)}%` : undefined}
@@ -1168,7 +1170,7 @@ export function QboProjectsBoard() {
               <div ref={scrollerRef} onScroll={onScrollTabla} className="overflow-x-auto rounded-b-2xl">
                 <table className="w-full text-[13px]" style={{ minWidth: cols.minWidth }}>
                 <thead>
-                  <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500">
+                  <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wider text-slate-500 [&>th.text-right+th:not(.text-right)]:pl-7">
                     <th className="w-10 px-2 py-2.5"></th>
                     {cols.visibles.map((k) => (
                       <ColumnaTh
@@ -1284,7 +1286,7 @@ function KpiSuma({
     <div className={cn("flex flex-col overflow-hidden rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]", className)}>
       <div className="relative grid flex-1 grid-cols-2 divide-x divide-slate-100">
         {partes.map((p) => (
-          <div key={p.label} className="min-w-0 px-4 py-3" title={p.ayuda}>
+          <div key={p.label} className="flex min-w-0 flex-col items-center justify-center px-4 py-3 text-center" title={p.ayuda}>
             <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">{p.label}</p>
             <p
               className="mt-0.5 whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"
@@ -1303,33 +1305,34 @@ function KpiSuma({
           +
         </span>
       </div>
+      {/* El resultado, centrado debajo de la cuenta. Alto fijo: así los
+          totales de los dos bloques quedan a la misma altura, uno al lado
+          del otro, aunque uno tenga barra y el otro no. */}
       <div
         className={cn(
-          "flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-slate-100 px-4",
-          total.grande ? "bg-sky-50/70 py-3" : "bg-slate-50/70 py-2",
+          "flex min-h-[88px] flex-col items-center justify-center gap-1 border-t border-slate-100 px-4 py-3 text-center",
+          total.grande ? "bg-sky-50/70" : "bg-slate-50/70",
         )}
         title={total.ayuda}
       >
         <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">
-          <span className="mr-1.5 text-sm font-semibold text-slate-400">=</span>
+          <span className="mr-1.5 text-slate-400">=</span>
           {total.label}
         </p>
-        <div className="flex min-w-0 items-center gap-3">
-          {total.barra !== undefined && total.barra !== null ? (
-            <span
-              className="hidden h-1.5 w-20 overflow-hidden rounded-full bg-amber-200 sm:block"
-              title={`${Math.round(total.barra * 100)}% cobrado`}
-            >
+        <p
+          className="whitespace-nowrap font-bold leading-none tracking-[-0.03em] tabular-nums text-slate-900"
+          style={{ fontSize: total.grande ? "clamp(26px, 2vw, 34px)" : "clamp(18px, 1.3vw, 22px)" }}
+        >
+          {total.value}
+        </p>
+        {total.barra !== undefined && total.barra !== null ? (
+          <span className="mt-1 flex items-center gap-2 text-[10px] font-semibold text-slate-500" title={`${Math.round(total.barra * 100)}% cobrado`}>
+            <span className="h-1.5 w-28 overflow-hidden rounded-full bg-amber-200">
               <span className="block h-full rounded-full bg-emerald-600" style={{ width: `${Math.min(100, Math.max(0, total.barra * 100))}%` }} />
             </span>
-          ) : null}
-          <p
-            className="whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"
-            style={{ fontSize: total.grande ? "clamp(22px, 1.9vw, 32px)" : "clamp(15px, 1vw, 18px)" }}
-          >
-            {total.value}
-          </p>
-        </div>
+            {Math.round(total.barra * 100)}% cobrado
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -2287,7 +2290,7 @@ function ProjectRow({
           onToggleDetalle();
         }}
         className={cn(
-          "cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60",
+          "cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50/60 [&>td.text-right+td:not(.text-right)]:pl-7",
           cerrado && !detalle && "opacity-60",
           detalle && "border-slate-100 bg-slate-50/60",
         )}
