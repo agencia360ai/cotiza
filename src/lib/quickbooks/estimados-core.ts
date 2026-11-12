@@ -120,3 +120,18 @@ export function normalizarPorFacturar(v: unknown): PorFacturar | null {
   if (docs.length === 0) return null;
   return { neto: r2(docs.reduce((a, d) => a + d.neto, 0)), cobrado: r2(docs.reduce((a, d) => a + d.cobrado, 0)), docs };
 }
+
+/**
+ * Margen BRUTO sobre lo que el proyecto va a facturar en total: lo ya
+ * facturado más lo que está en EST, contra todo lo gastado en el proyecto.
+ * Bruto porque no descuenta los gastos generales de la empresa (oficina,
+ * administración): solo los costos cargados al proyecto.
+ *
+ * null cuando no hay ingreso previsto o el gasto no es confiable (negativo:
+ * suele ser el ITBMS acreditado a una cuenta de costo).
+ */
+export function margenBruto(facturado: number | null, porFacturar: number, gasto: number | null): number | null {
+  const previsto = (facturado ?? 0) + Math.max(0, porFacturar);
+  if (previsto <= 0 || gasto === null || gasto < 0) return null;
+  return (previsto - gasto) / previsto;
+}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agruparEstimados, esEstimado, normalizarPorFacturar, sinEstimados } from "../src/lib/quickbooks/estimados-core";
+import { agruparEstimados, esEstimado, margenBruto, normalizarPorFacturar, sinEstimados } from "../src/lib/quickbooks/estimados-core";
 import { extractEntities } from "../src/lib/quickbooks/parse";
 
 // Como las devuelve search_invoices (montos inventados).
@@ -77,3 +77,19 @@ test("lo guardado en la base se valida", () => {
   assert.deepEqual(pf, { neto: 100, cobrado: 7, docs: [{ numero: "ESTDC26-23", fecha: "2026-12-01", neto: 100, total: 107, cobrado: 7, cuentas: [] }] });
 });
 
+
+test("margenBruto: facturado + por facturar contra el gasto total", () => {
+  // Totales del tablero del 12/11: 263,948 facturado + 356,564 EST − 315,440 gasto.
+  assert.equal(Math.round(margenBruto(263948, 356564, 315440)! * 100), 49);
+  // DC26-23: todo en EST.
+  assert.equal(Math.round(margenBruto(0, 48200, 32534.47)! * 100), 33);
+  // Sin EST es el margen de siempre.
+  assert.equal(margenBruto(1000, 0, 600), 0.4);
+});
+
+test("margenBruto: sin ingreso previsto o con gasto negativo no hay margen", () => {
+  assert.equal(margenBruto(0, 0, 500), null);
+  assert.equal(margenBruto(null, 0, 500), null);
+  assert.equal(margenBruto(1000, 0, -50), null);
+  assert.equal(margenBruto(1000, 0, null), null);
+});

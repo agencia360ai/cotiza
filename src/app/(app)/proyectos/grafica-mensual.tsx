@@ -9,8 +9,9 @@ import { barra, etiquetaCada, fmtEje, marcasEje, posicionTip, rellenarMeses } fr
 // ── Facturado y gasto por mes ────────────────────────────────────────────────
 // Dos barras por mes, lado a lado desde la misma base: lo facturado y el gasto.
 // Lo cobrado va DENTRO de lo facturado (es una parte de eso, nunca más): la
-// parte sólida ya entró y la clara falta cobrar. Antes eran tres barras sueltas
-// y había que restar a ojo para ver cuánto faltaba.
+// parte sólida ya entró y la clara está por cobrar. Antes eran tres barras
+// sueltas y había que restar a ojo para ver cuánto faltaba. Si un proyecto no
+// tiene dato de cobro, su parte va en gris: "no sé" no es "debe".
 //
 // Se dibuja en píxeles reales del contenedor, no con un viewBox que se estira:
 // estirado, en una pantalla ancha las letras del eje medían 20px y en el
@@ -20,9 +21,23 @@ import { barra, etiquetaCada, fmtEje, marcasEje, posicionTip, rellenarMeses } fr
 // sí significan "entró" y "salió". El par pasa el validador de daltonismo
 // (ΔE 8.3 deutan); además la posición en el par y la leyenda los distinguen.
 
-export type PuntoMes = { month: string; cobro: number; gasto: number; cobrado: number | null };
+export type PuntoMes = {
+  month: string;
+  cobro: number;
+  gasto: number;
+  cobrado: number | null;
+  /** Lo facturado sin cobrar, solo de proyectos con dato de cobro. */
+  porCobrar: number | null;
+};
 
-const COLOR = { cobrado: "#059669", falta: "#A7F3D0", gasto: "#F43F5E" };
+const COLOR = { cobrado: "#059669", porCobrar: "#A7F3D0", sinDato: "#E2E8F0", gasto: "#F43F5E" };
+
+// Las tres partes de lo facturado en un mes. Suman exactamente lo facturado.
+function partes(d: PuntoMes): { cobrado: number; porCobrar: number; sinDato: number } {
+  const cobrado = Math.min(Math.max(0, d.cobrado ?? 0), d.cobro);
+  const porCobrar = Math.min(Math.max(0, d.porCobrar ?? 0), d.cobro - cobrado);
+  return { cobrado, porCobrar, sinDato: Math.max(0, d.cobro - cobrado - porCobrar) };
+}
 const MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
 const H = 248;
@@ -59,15 +74,20 @@ export function GraficaMensual({ data: crudo, todoReal }: { data: PuntoMes[]; to
   const [vista, setVista] = useState<Vista>("grafica");
 
   const hayCobrado = crudo.some((d) => d.cobrado !== null);
-  const data = rellenarMeses(crudo, (month) => ({ month, cobro: 0, gasto: 0, cobrado: hayCobrado ? 0 : null }));
+  const data = rellenarMeses(crudo, (month) => ({ month, cobro: 0, gasto: 0, cobrado: hayCobrado ? 0 : null, porCobrar: hayCobrado ? 0 : null }));
   // Un filtro puede achicar la serie con el mouse encima: el índice viejo ya
   // no existe y leerlo rompía la pantalla entera.
   const hover = hoverIdx !== null && hoverIdx < data.length ? hoverIdx : null;
 
   const totalCobro = data.reduce((a, d) => a + d.cobro, 0);
   const totalGasto = data.reduce((a, d) => a + d.gasto, 0);
-  const totalCobrado = hayCobrado ? data.reduce((a, d) => a + Math.min(d.cobrado ?? 0, d.cobro), 0) : null;
-  const margen = totalCobro > 0 ? (totalCobro - totalGasto) / totalCobro : null;
+  const tot = data.reduce(
+    (a, d) => {
+      const x = partes(d);
+      return { cobrado: a.cobrado + x.cobrado, porCobrar: a.porCobrar + x.porCobrar, sinDato: a.sinDato + x.sinDato };
+    },
+    { cobrado: 0, porCobrar: 0, sinDato: 0 },
+  );
   const variosAnios = data.length > 0 && data[0].month.slice(0, 4) !== data[data.length - 1].month.slice(0, 4);
   const mesHoy = new Date().toISOString().slice(0, 7);
 
@@ -83,17 +103,6 @@ export function GraficaMensual({ data: crudo, todoReal }: { data: PuntoMes[]; to
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {margen !== null ? (
-            <span
-              className={cn(
-                "rounded-full bg-slate-50 px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset ring-slate-200",
-                marginTextColor(margen),
-              )}
-              title="(facturado − gasto) / facturado, en el rango"
-            >
-              {Math.round(margen * 100)}% margen
-            </span>
-          ) : null}
           <div className="inline-flex rounded-lg bg-slate-100 p-0.5" role="group" aria-label="Cómo ver los datos">
             {(
               [
@@ -124,8 +133,9 @@ export function GraficaMensual({ data: crudo, todoReal }: { data: PuntoMes[]; to
         {hayCobrado ? (
           <>
             <Leyenda muestra={<MuestraFacturado />} nombre="Facturado" valor={totalCobro} />
-            <Leyenda muestra={<Muestra color={COLOR.cobrado} />} nombre="Cobrado" valor={totalCobrado ?? 0} />
-            <Leyenda muestra={<Muestra color={COLOR.falta} />} nombre="Falta cobrar" valor={Math.max(0, totalCobro - (totalCobrado ?? 0))} />
+            <Leyenda muestra={<Muestra color={COLOR.cobrado} />} nombre="Cobrado" valor={tot.cobrado} />
+            <Leyenda muestra={<Muestra color={COLOR.porCobrar} />} nombre="Por cobrar" valor={tot.porCobrar} />
+            {tot.sinDato > 0.5 ? <Leyenda muestra={<Muestra color={COLOR.sinDato} />} nombre="Sin dato de cobro" valor={tot.sinDato} /> : null}
           </>
         ) : (
           <Leyenda muestra={<Muestra color={COLOR.cobrado} />} nombre="Facturado" valor={totalCobro} />
@@ -286,9 +296,9 @@ function Plano({
   );
 }
 
-// Lo facturado, partido en lo cobrado (sólido, desde la base) y lo que falta
-// (claro, arriba). Sin dato de cobro en el mes, la barra va entera en claro:
-// pintarla sólida diría que se cobró.
+// Lo facturado, apilado desde la base: lo cobrado (sólido), lo que está por
+// cobrar (claro) y, si falta el dato, el resto en gris. Sin serie de cobro en
+// toda la vista, la barra va entera en verde y la leyenda dice "Facturado".
 function BarraFacturado({
   d,
   x,
@@ -307,21 +317,32 @@ function BarraFacturado({
   if (d.cobro <= 0) return null;
   // Piso de 3px: un mes de $200 al lado de uno de $50,000 se vería como una
   // raya invisible y se leería como "sin movimiento".
-  const yTope = Math.min(y(d.cobro), BASE - 3);
-  if (!hayCobrado) return <path d={barra(x, w, yTope, BASE, true)} fill={COLOR.cobrado} />;
-  if (d.cobrado === null) return <path d={barra(x, w, yTope, BASE, true)} fill={COLOR.falta} />;
-  const cobrado = Math.min(d.cobrado, d.cobro);
-  const yCobrado = y(cobrado);
-  const alturaFalta = yCobrado - gap - yTope;
-  // Un tramo de menos de 2px no se ve como tramo, se ve como un error.
-  if (cobrado <= 0 || BASE - yCobrado < 2) return <path d={barra(x, w, yTope, BASE, true)} fill={COLOR.falta} />;
-  if (alturaFalta < 2) return <path d={barra(x, w, yTope, BASE, true)} fill={COLOR.cobrado} />;
-  return (
-    <>
-      <path d={barra(x, w, yCobrado, BASE, false)} fill={COLOR.cobrado} />
-      <path d={barra(x, w, yTope, yCobrado - gap, true)} fill={COLOR.falta} />
-    </>
-  );
+  if (!hayCobrado) return <path d={barra(x, w, Math.min(y(d.cobro), BASE - 3), BASE, true)} fill={COLOR.cobrado} />;
+  const x3 = partes(d);
+  const alto = (v: number) => BASE - y(v);
+  // Un tramo de menos de 2px no se ve como tramo, se ve como un error: se
+  // suma al de abajo para que el total siga midiendo lo facturado.
+  const tramos: { v: number; color: string }[] = [];
+  for (const [v, color] of [
+    [x3.cobrado, COLOR.cobrado],
+    [x3.porCobrar, COLOR.porCobrar],
+    [x3.sinDato, COLOR.sinDato],
+  ] as const) {
+    if (v <= 0) continue;
+    if (alto(v) < 2 && tramos.length > 0) tramos[tramos.length - 1].v += v;
+    else tramos.push({ v, color });
+  }
+  const paths = [];
+  let base = BASE;
+  let acumulado = 0;
+  for (const [j, t] of tramos.entries()) {
+    acumulado += t.v;
+    const ultimo = j === tramos.length - 1;
+    const top = ultimo ? Math.min(y(acumulado), BASE - 3) : y(acumulado);
+    paths.push(<path key={t.color} d={barra(x, w, Math.min(top, base - 1), base, ultimo)} fill={t.color} />);
+    base = top - gap;
+  }
+  return <>{paths}</>;
 }
 
 function Tip({
@@ -340,7 +361,7 @@ function Tip({
   mesHoy: string;
 }) {
   const left = posicionTip(cx, grupoW / 2, ancho, ANCHO_TIP);
-  const cobrado = d.cobrado === null ? null : Math.min(d.cobrado, d.cobro);
+  const x3 = partes(d);
   const m = d.cobro > 0 ? (d.cobro - d.gasto) / d.cobro : null;
   const futuro = d.month.slice(0, 7) > mesHoy;
   return (
@@ -361,14 +382,19 @@ function Tip({
             <Muestra color={COLOR.cobrado} />
             <span className="text-slate-300">Cobrado</span>
             <span className="text-right tabular-nums">
-              {cobrado === null ? "s/d" : balCompact(cobrado)}
-              {cobrado !== null && d.cobro > 0 ? (
-                <span className="ml-1 text-slate-400">{Math.round((cobrado / d.cobro) * 100)}%</span>
-              ) : null}
+              {balCompact(x3.cobrado)}
+              {d.cobro > 0 ? <span className="ml-1 text-slate-400">{Math.round((x3.cobrado / d.cobro) * 100)}%</span> : null}
             </span>
-            <Muestra color={COLOR.falta} />
-            <span className="text-slate-300">Falta cobrar</span>
-            <span className="text-right tabular-nums">{cobrado === null ? "s/d" : balCompact(d.cobro - cobrado)}</span>
+            <Muestra color={COLOR.porCobrar} />
+            <span className="text-slate-300">Por cobrar</span>
+            <span className="text-right tabular-nums">{balCompact(x3.porCobrar)}</span>
+            {x3.sinDato > 0.5 ? (
+              <>
+                <Muestra color={COLOR.sinDato} />
+                <span className="text-slate-300">Sin dato de cobro</span>
+                <span className="text-right tabular-nums">{balCompact(x3.sinDato)}</span>
+              </>
+            ) : null}
           </>
         ) : null}
         <Muestra color={COLOR.gasto} />
@@ -387,22 +413,21 @@ function Tip({
 
 function TablaMensual({ data, hayCobrado, mesHoy }: { data: PuntoMes[]; hayCobrado: boolean; mesHoy: string }) {
   const tot = data.reduce(
-    (a, d) => ({
-      cobro: a.cobro + d.cobro,
-      gasto: a.gasto + d.gasto,
-      cobrado: a.cobrado + Math.min(d.cobrado ?? 0, d.cobro),
-    }),
-    { cobro: 0, gasto: 0, cobrado: 0 },
+    (a, d) => {
+      const x = partes(d);
+      return { cobro: a.cobro + d.cobro, gasto: a.gasto + d.gasto, cobrado: a.cobrado + x.cobrado, porCobrar: a.porCobrar + x.porCobrar };
+    },
+    { cobro: 0, gasto: 0, cobrado: 0, porCobrar: 0 },
   );
-  const fila = (cobro: number, gasto: number, cobrado: number | null) => {
+  const fila = (cobro: number, gasto: number, cobrado: number, porCobrar: number) => {
     const m = cobro > 0 ? (cobro - gasto) / cobro : null;
     return (
       <>
         <td className="px-3 py-2 text-right font-medium text-slate-900">{balCompact(cobro)}</td>
         {hayCobrado ? (
           <>
-            <td className="px-3 py-2 text-right text-emerald-700">{cobrado === null ? "s/d" : balCompact(cobrado)}</td>
-            <td className="px-3 py-2 text-right text-slate-500">{cobrado === null ? "s/d" : balCompact(cobro - cobrado)}</td>
+            <td className="px-3 py-2 text-right text-emerald-700">{balCompact(cobrado)}</td>
+            <td className="px-3 py-2 text-right text-amber-700">{balCompact(porCobrar)}</td>
           </>
         ) : null}
         <td className="px-3 py-2 text-right text-rose-600">{balCompact(gasto)}</td>
@@ -422,7 +447,7 @@ function TablaMensual({ data, hayCobrado, mesHoy }: { data: PuntoMes[]; hayCobra
             {hayCobrado ? (
               <>
                 <th className="px-3 py-2 text-right">Cobrado</th>
-                <th className="px-3 py-2 text-right">Falta cobrar</th>
+                <th className="px-3 py-2 text-right">Por cobrar</th>
               </>
             ) : null}
             <th className="px-3 py-2 text-right">Gasto</th>
@@ -436,14 +461,14 @@ function TablaMensual({ data, hayCobrado, mesHoy }: { data: PuntoMes[]; hayCobra
                 {fmtMes(d.month, true)}
                 {d.month.slice(0, 7) > mesHoy ? <span className="ml-1.5 text-[10px] normal-case text-slate-400">estimado</span> : null}
               </td>
-              {fila(d.cobro, d.gasto, d.cobrado === null ? null : Math.min(d.cobrado, d.cobro))}
+              {fila(d.cobro, d.gasto, partes(d).cobrado, partes(d).porCobrar)}
             </tr>
           ))}
         </tbody>
         <tfoot className="sticky bottom-0 border-t border-slate-200 bg-white font-semibold">
           <tr>
             <td className="px-3 py-2 text-slate-900">Total</td>
-            {fila(tot.cobro, tot.gasto, hayCobrado ? tot.cobrado : null)}
+            {fila(tot.cobro, tot.gasto, tot.cobrado, tot.porCobrar)}
           </tr>
         </tfoot>
       </table>
@@ -465,11 +490,11 @@ export function Muestra({ color }: { color: string }) {
   return <span aria-hidden className="inline-block size-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: color }} />;
 }
 
-// La barra de facturado en chico: abajo lo cobrado, arriba lo que falta.
+// La barra de facturado en chico: abajo lo cobrado, arriba lo por cobrar.
 function MuestraFacturado() {
   return (
     <span aria-hidden className="inline-flex size-2.5 shrink-0 flex-col overflow-hidden rounded-[3px]">
-      <span className="flex-1" style={{ backgroundColor: COLOR.falta }} />
+      <span className="flex-1" style={{ backgroundColor: COLOR.porCobrar }} />
       <span className="flex-1" style={{ backgroundColor: COLOR.cobrado }} />
     </span>
   );
