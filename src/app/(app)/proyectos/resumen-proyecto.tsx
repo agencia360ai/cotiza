@@ -129,7 +129,7 @@ export function ResumenProyecto({
 
       {pf ? (
         <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 ring-1 ring-inset ring-sky-600/20">
-          <span className="font-semibold">Por facturar (EST): {bal(pf.neto)}</span>
+          <span className="font-semibold">Por facturar (EST y P26): {bal(pf.neto)}</span>
           {pf.cobrado > 0 ? <span className="text-emerald-700"> · {bal(pf.cobrado)} ya cobrado de anticipo</span> : null}
           <span>
             {" "}
@@ -158,7 +158,7 @@ export function ResumenProyecto({
           )}
           {!cargando && pf ? (
             <div>
-              <TituloSeccion titulo="Por facturar (EST)" total={pf.neto} />
+              <TituloSeccion titulo="Por facturar (EST y P26)" total={pf.neto} />
               <ul className="space-y-1.5">
                 {pf.docs.map((d) => (
                   <Fila

@@ -4,6 +4,7 @@ import { listQboTools, withQboSession } from "./mcp";
 import { parsePnl, parseDesglose, desglosarPnl, type MonthPnl, type Pnl, type SeccionPnl } from "./parse";
 import type { DesgloseProyecto } from "./desglose-core";
 import type { PorFacturar } from "./estimados-core";
+import type { CobroMes } from "./cobros-core";
 import { margenConHoras, type HorasProyecto } from "./horas-core";
 
 // Un proyecto en QBO = un customer con IsProject=true (bajo el cliente padre).
@@ -41,6 +42,8 @@ export type QboProject = {
   horas: HorasProyecto | null;
   // Facturas EST: lo que falta facturar del contrato. NO está en `income`.
   porFacturar: PorFacturar | null;
+  /** Por mes de factura: facturado y cobrado con ITBMS, de los pagos de QuickBooks. null = sin leer. */
+  cobros: CobroMes[] | null;
 };
 
 
@@ -89,6 +92,7 @@ export async function fetchQboProjectsList(opts?: { year?: number }): Promise<Qb
         meses: [] as MonthPnl[],
         horas: null, // las trae horas.ts; no salen del listado de customers
         porFacturar: null, // las trae estimados.ts
+        cobros: null, // los trae fechas.ts, de las mismas facturas
         id: p.id,
         name: leafName(p.fullyQualifiedName, p.displayName),
         fullName: p.displayName,

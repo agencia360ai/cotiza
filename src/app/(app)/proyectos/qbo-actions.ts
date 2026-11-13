@@ -23,6 +23,7 @@ import { normalizarHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core
 import { normalizarDesglose, type DesgloseProyecto } from "@/lib/quickbooks/desglose-core";
 import { normalizarPorFacturar, sinEstimados, type PorFacturar } from "@/lib/quickbooks/estimados-core";
 import { fetchPorFacturar } from "@/lib/quickbooks/estimados";
+import { normalizarCobros, type CobroMes } from "@/lib/quickbooks/cobros-core";
 
 export type QboProjectsResult =
   | {
@@ -134,6 +135,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
   const { porProyecto: mesesPorProyecto, desde: mesesDesde } = await loadMeses(supabase, orgId);
   const horasPorProyecto = await loadHoras(supabase, orgId);
   const porFacturarGuardado = await loadPorFacturar(supabase, orgId);
+  const cobrosGuardados = await loadCobros(supabase, orgId);
   let syncedAt: number | null = null;
   const projects: QboProject[] = rows
     .map((r) => {
@@ -159,6 +161,7 @@ const COLS_0037 = `${BASE_COLS}, progress, status, start_date, end_date, contrac
         margin: margenDe(income, cost, horas),
         horas,
         porFacturar: porFacturarGuardado.get(r.qb_job_id) ?? null,
+        cobros: cobrosGuardados.get(r.qb_job_id) ?? null,
         closed: r.closed,
         // status derivado si la migración 0016 aún no corrió.
         status: (r.status ?? (r.closed ? "cerrado" : "activo")) as ProjectBizStatus,
@@ -342,10 +345,15 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // no una por proyecto: agrupar en memoria es lo que hace que esto quepa.
   //
   // Si falla, las fechas por mes que ya están siguen valiendo: esto solo mejora.
+  //
+  // De esas mismas facturas salen los cobros (lo pagado de cada una), y esos
+  // van para TODOS los proyectos, cerrados incluidos: lo que deben no se
+  // congela con el proyecto.
+  let cobrosLeidos: Map<string, CobroMes[]> | null = null;
   try {
     const abiertos = list.filter((p) => !p.closed);
     const desde = `${year - 2}-01-01`; // cubre contratos arrastrados de años previos
-    const { porProyecto } = await fetchFechasReales(abiertos.map((p) => p.id), desde);
+    const { porProyecto, cobros } = await fetchFechasReales(list.map((p) => p.id), desde);
     for (const p of abiertos) {
       const r = porProyecto.get(p.id);
       if (!r) continue;
@@ -353,8 +361,15 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       p.lastTxnDate = r.ultima;
       p.txnDatesSource = "transaccion";
     }
+    cobrosLeidos = cobros;
   } catch {
     /* sin fechas reales: quedan las del reporte mensual */
+  }
+  const cobrosGuardados = await loadCobros(supabase, orgId);
+  for (const p of list) {
+    // Leídas las facturas, un proyecto sin ninguna tiene [] (nada cobrado), no
+    // "sin dato". Sin lectura, quedan los cobros guardados.
+    p.cobros = cobrosLeidos ? (cobrosLeidos.get(p.id) ?? []) : (cobrosGuardados.get(p.id) ?? null);
   }
 
   // Cobrado. Va DESPUÉS del P&L porque necesita lo facturado para restarle el
@@ -365,16 +380,24 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // Va para TODOS, cerrados incluidos: su facturado está congelado, pero lo
   // que deben no. Antes solo se calculaba para los abiertos y un cerrado sin
   // dato se sumaba como "por cobrar" (DC26-04: $41,450 ya pagados).
-  try {
-    const { porProyecto } = await fetchSaldosPendientes(list.map((p) => p.id));
-    // El reporte se leyó bien si devolvió aunque sea un saldo: ahí la AUSENCIA
-    // de un proyecto pasa a significar "no debe nada", no "no sé".
-    const reporteOk = porProyecto.size > 0;
-    if (reporteOk) {
-      for (const p of list) p.paid = calcularCobrado(p.income, porProyecto.get(p.id), true);
+  //
+  // Con los cobros leídos de las facturas, `paid` es la suma de lo pagado (con
+  // ITBMS). El reporte de cuentas por cobrar queda solo de respaldo para los
+  // proyectos que todavía no tienen cobros: deducía el cobrado y daba por
+  // pagado lo que no aparecía en él.
+  for (const p of list) if (p.cobros) p.paid = Math.round(p.cobros.reduce((a, m) => a + m.cobrado, 0) * 100) / 100;
+  if (list.some((p) => !p.cobros)) {
+    try {
+      const { porProyecto } = await fetchSaldosPendientes(list.map((p) => p.id));
+      // El reporte se leyó bien si devolvió aunque sea un saldo: ahí la AUSENCIA
+      // de un proyecto pasa a significar "no debe nada", no "no sé".
+      const reporteOk = porProyecto.size > 0;
+      if (reporteOk) {
+        for (const p of list) if (!p.cobros) p.paid = calcularCobrado(p.income, porProyecto.get(p.id), true);
+      }
+    } catch {
+      /* sin cobrado: los demás números siguen valiendo */
     }
-  } catch {
-    /* sin cobrado: los demás números siguen valiendo */
   }
 
   // Horas de técnicos: una sola llamada para todos. Los abiertos toman lo que
@@ -434,6 +457,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
     await guardarHoras(supabase, orgId, list, horasGuardadas);
     await guardarDesgloses(supabase, orgId, desgloses);
     await guardarPorFacturar(supabase, orgId, list, porFacturarGuardado);
+    await guardarCobros(supabase, orgId, list, cobrosGuardados);
 
     // Reconciliar: borrar filas del año que ya NO vinieron de QBO (proyecto
     // borrado/renombrado) para que no queden huérfanas inflando conteos.
@@ -564,6 +588,42 @@ async function loadPorFacturar(supabase: DB, orgId: string): Promise<Map<string,
     if ((r.data?.length ?? 0) < 1000) break;
   }
   return out;
+}
+
+// Cobros por mes guardados (0055). Sin la migración devuelve vacío y el
+// tablero usa el cobrado de antes.
+async function loadCobros(supabase: DB, orgId: string): Promise<Map<string, CobroMes[]>> {
+  const out = new Map<string, CobroMes[]>();
+  type Fila = { qb_job_id: string; cobros: unknown };
+  for (let from = 0; from < 30_000; from += 1000) {
+    const r = (await supabase
+      .from("qbo_project_state")
+      .select("qb_job_id, cobros")
+      .eq("org_id", orgId)
+      .not("cobros", "is", null)
+      .order("qb_job_id")
+      .range(from, from + 999)) as unknown as { data: Fila[] | null; error: { message: string; code?: string } | null };
+    if (r.error) return new Map();
+    for (const f of r.data ?? []) {
+      const c = normalizarCobros(f.cobros);
+      if (c) out.set(f.qb_job_id, c);
+    }
+    if ((r.data?.length ?? 0) < 1000) break;
+  }
+  return out;
+}
+
+// Solo los que cambiaron. Best-effort: sin la 0055 el resto ya quedó guardado.
+async function guardarCobros(supabase: DB, orgId: string, list: QboProject[], guardado: Map<string, CobroMes[]>): Promise<void> {
+  const cambios = list.filter((p) => p.cobros && JSON.stringify(p.cobros) !== JSON.stringify(guardado.get(p.id) ?? null));
+  for (let i = 0; i < cambios.length; i += 20) {
+    const res = await Promise.all(
+      cambios.slice(i, i + 20).map((p) =>
+        supabase.from("qbo_project_state").update({ cobros: p.cobros }).eq("org_id", orgId).eq("qb_job_id", p.id),
+      ),
+    );
+    if (res.some((r) => isMissingColumn(r.error))) return;
+  }
 }
 
 // Solo los que cambiaron. Best-effort: sin la 0054 el resto ya quedó guardado.
