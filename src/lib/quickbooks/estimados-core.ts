@@ -1,5 +1,6 @@
 import type { SeccionDesglose } from "./desglose-core";
 import type { MonthPnl } from "./parse";
+import { aplicadoEnPlata } from "./pagos-core";
 
 // Lo que el proyecto todavía no facturó: las "facturas" EST de QuickBooks y
 // cualquier otra fechada en el futuro (las P26-…).
@@ -39,7 +40,7 @@ export function esPorFacturar(f: Record<string, unknown>, hoy?: string): boolean
 }
 
 /** Las facturas por facturar (EST y fechadas a futuro), agrupadas por proyecto (CustomerRef). */
-export function agruparEstimados(facturas: Record<string, unknown>[], hoy?: string): Map<string, PorFacturar> {
+export function agruparEstimados(facturas: Record<string, unknown>[], hoy?: string, plata?: Map<string, number>): Map<string, PorFacturar> {
   const out = new Map<string, PorFacturar>();
   const vistas = new Set<string>();
   for (const f of facturas) {
@@ -61,13 +62,17 @@ export function agruparEstimados(facturas: Record<string, unknown>[], hoy?: stri
       if (ya) ya.monto = r2(ya.monto + num(l.Amount));
       else cuentas.push({ cuenta, monto: r2(num(l.Amount)) });
     }
+    // Anticipo = solo la plata de los pagos. Lo cerrado con una nota de
+    // crédito es una EST anulada: tampoco está por facturar.
+    const a = aplicadoEnPlata(f, plata);
+    const vigente = total > 0 ? (total - a.credito) / total : 0;
     const doc: DocEstimado = {
       numero: typeof f.DocNumber === "string" ? f.DocNumber.trim() : "(sin número)",
       fecha: typeof f.TxnDate === "string" ? f.TxnDate.slice(0, 10) : "",
-      neto: r2(total - impuesto),
-      total: r2(total),
-      cobrado: r2(Math.max(0, total - num(f.Balance ?? total))),
-      cuentas,
+      neto: r2((total - impuesto) * vigente),
+      total: r2(total - a.credito),
+      cobrado: a.plata,
+      cuentas: vigente < 1 ? cuentas.map((c) => ({ ...c, monto: r2(c.monto * vigente) })) : cuentas,
     };
     const p = out.get(cliente) ?? { neto: 0, cobrado: 0, docs: [] };
     p.docs.push(doc);

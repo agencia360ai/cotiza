@@ -23,6 +23,7 @@ import { normalizarHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core
 import { normalizarDesglose, type DesgloseProyecto } from "@/lib/quickbooks/desglose-core";
 import { normalizarPorFacturar, sinEstimados, type PorFacturar } from "@/lib/quickbooks/estimados-core";
 import { fetchPorFacturar } from "@/lib/quickbooks/estimados";
+import { fetchPlataPorFactura } from "@/lib/quickbooks/pagos";
 import { normalizarCobros, type CobroMes } from "@/lib/quickbooks/cobros-core";
 
 export type QboProjectsResult =
@@ -289,7 +290,11 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   // Facturas EST (lo que falta facturar), de todos los proyectos en una
   // llamada. Antes que el P&L: si alguna ya cae dentro de la ventana, hay que
   // sacarla de lo facturado. Si no se puede leer, quedan las guardadas.
-  const porFacturar = await fetchPorFacturar().catch(() => null);
+  // La plata de los pagos, factura por factura: separa lo cobrado de verdad
+  // de lo que se cerró con notas de crédito. La usan lo por facturar
+  // (anticipos) y los cobros de más abajo.
+  const plata = await fetchPlataPorFactura().catch(() => null);
+  const porFacturar = await fetchPorFacturar(plata ?? undefined).catch(() => null);
   const porFacturarGuardado = await loadPorFacturar(supabase, orgId);
   for (const p of list) p.porFacturar = porFacturar ? (porFacturar.get(p.id) ?? null) : (porFacturarGuardado.get(p.id) ?? null);
   const hoy = new Date().toISOString().slice(0, 10);
@@ -353,7 +358,7 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
   try {
     const abiertos = list.filter((p) => !p.closed);
     const desde = `${year - 2}-01-01`; // cubre contratos arrastrados de años previos
-    const { porProyecto, cobros } = await fetchFechasReales(list.map((p) => p.id), desde);
+    const { porProyecto, cobros } = await fetchFechasReales(list.map((p) => p.id), desde, plata ?? undefined);
     for (const p of abiertos) {
       const r = porProyecto.get(p.id);
       if (!r) continue;
@@ -361,7 +366,9 @@ async function refresh(supabase: DB, orgId: string, year: number): Promise<QboPr
       p.lastTxnDate = r.ultima;
       p.txnDatesSource = "transaccion";
     }
-    cobrosLeidos = cobros;
+    // Sin los pagos no se sabe qué fue plata y qué nota de crédito: mejor
+    // conservar los cobros guardados que volver a contar créditos como cobro.
+    cobrosLeidos = plata ? cobros : null;
   } catch {
     /* sin fechas reales: quedan las del reporte mensual */
   }
