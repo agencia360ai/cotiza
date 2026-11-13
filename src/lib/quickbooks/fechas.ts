@@ -65,6 +65,7 @@ function variantes(desde: string): Record<string, unknown>[] {
 export async function fetchFechasReales(
   idsDeProyectos: string[],
   desde: string,
+  plata?: Map<string, number>,
 ): Promise<FechasReales> {
   const conocidos = new Set(idsDeProyectos);
   if (conocidos.size === 0) return VACIO;
@@ -110,7 +111,7 @@ export async function fetchFechasReales(
         }
       }
       const hoy = new Date().toISOString().slice(0, 10);
-      const cobros = facturas ? agruparCobros(facturas, recibos, conocidos, hoy) : null;
+      const cobros = facturas ? agruparCobros(facturas, recibos, conocidos, hoy, plata) : null;
       return { porProyecto, fuentes, cobros };
     });
   } catch {

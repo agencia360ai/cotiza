@@ -8,10 +8,12 @@ const HERRAMIENTA = /^(search|find|query)_?invoices$/i;
 /**
  * Lo por facturar de todos los proyectos: las EST y las facturas fechadas
  * después de hoy (P26-…). Dos consultas chicas, no una por proyecto.
+ * `plata`: lo pagado en dinero por factura; con eso un anticipo cuenta solo la
+ * plata, no las notas de crédito.
  * null = no se pudo leer alguna de las dos: quien llama conserva lo guardado,
  * para que un hipo del gateway no haga desaparecer la mitad de lo por facturar.
  */
-export async function fetchPorFacturar(): Promise<Map<string, PorFacturar> | null> {
+export async function fetchPorFacturar(plata?: Map<string, number>): Promise<Map<string, PorFacturar> | null> {
   let tool: string | undefined;
   try {
     tool = (await listQboTools()).find((t) => HERRAMIENTA.test(t.name))?.name;
@@ -29,7 +31,7 @@ export async function fetchPorFacturar(): Promise<Map<string, PorFacturar> | nul
       if (est.isError) return null;
       const futuras = await call(tool, { params: { criteria: [{ field: "TxnDate", value: hoy, operator: ">" }, { field: "fetchAll", value: true }] } });
       if (futuras.isError) return null;
-      return agruparEstimados([...extractEntities(est, "Invoice"), ...extractEntities(futuras, "Invoice")], hoy);
+      return agruparEstimados([...extractEntities(est, "Invoice"), ...extractEntities(futuras, "Invoice")], hoy, plata);
     });
   } catch {
     return null;
