@@ -44,6 +44,7 @@ import { cobrosEnRango } from "@/lib/quickbooks/cobros-core";
 import { bal, balCompact, fmtCorta, fmtHoras, marginTextColor, MESES_CORTOS } from "./formato";
 import { ResumenProyecto } from "./resumen-proyecto";
 import { GraficaMensual } from "./grafica-mensual";
+import { DesgloseCobranza, type FilaCobranza } from "./desglose-cobranza";
 
 // Identidad visual por rubro (misma paleta que el donut del Inicio):
 // DC índigo · DM sky · DS esmeralda · DV ámbar. Ícono + color, nunca solo color.
@@ -655,6 +656,24 @@ export function QboProjectsBoard() {
     })).sort((a, b) => a.month.localeCompare(b.month));
   }, [sorted, range]);
 
+  // El desglose de la tarjeta de cobranza: los mismos proyectos y montos que
+  // suma la tarjeta, proyecto por proyecto.
+  const [desglose, setDesglose] = useState<null | "cobrado" | "porcobrar">(null);
+  const filasCobranza = useMemo<FilaCobranza[]>(
+    () =>
+      sorted
+        .map((e) => ({
+          id: e.p.id,
+          nombre: e.p.name,
+          cliente: e.p.clientName,
+          cobrado: e.cobradoRango !== null && e.porCobrarRango !== null ? e.cobradoRango : 0,
+          porCobrar: e.cobradoRango !== null && e.porCobrarRango !== null ? e.porCobrarRango : 0,
+          anticipos: (e.p.porFacturar?.docs ?? []).filter((d) => d.cobrado > 0).map((d) => ({ numero: d.numero, monto: d.cobrado })),
+        }))
+        .filter((f) => f.cobrado > 0.5 || f.porCobrar > 0.5 || f.anticipos.length > 0),
+    [sorted],
+  );
+
   // Totales de la vista actual. `prorrateados` cuenta los que NO tienen desglose
   // mensual de QBO y por lo tanto llevan un monto repartido por días — es el
   // aviso de "este número es una estimación", no un dato de QuickBooks.
@@ -878,6 +897,7 @@ export function QboProjectsBoard() {
               importa. "s/d" cuando QuickBooks no dio el pendiente. */}
           <KpiSuma
             className="col-span-2"
+            onAbrir={(i) => setDesglose(i === 1 ? "porcobrar" : "cobrado")}
             partes={[
               {
                 label: "Cobrado",
@@ -925,6 +945,22 @@ export function QboProjectsBoard() {
             }}
           />
         </div>
+      ) : null}
+
+      {desglose ? (
+        <DesgloseCobranza
+          filas={filasCobranza}
+          rango={RANGE_LABEL[rangeKey]}
+          inicial={desglose}
+          onCerrar={() => setDesglose(null)}
+          onElegir={(f) => {
+            // Lo busca en la tabla y baja hasta ella: tocar un proyecto en el
+            // desglose es querer verlo.
+            setQ(codigoDeProyecto(f.nombre) ?? f.nombre);
+            setDesglose(null);
+            requestAnimationFrame(() => document.getElementById("proyectos-buscar")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+          }}
+        />
       ) : null}
 
       {/* Filtros por rubro. Se COMBINAN: contratos + mantenimiento, contratos +
@@ -992,7 +1028,7 @@ export function QboProjectsBoard() {
 
       {/* Toolbar: búsqueda + rango de fechas + status + orden */}
       {hasProjects ? (
-        <div className="mb-3 space-y-2">
+        <div id="proyectos-buscar" className="mb-3 scroll-mt-4 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-[200px] flex-1">
               <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
@@ -1290,16 +1326,43 @@ function KpiSuma({
   partes,
   total,
   className,
+  onAbrir,
 }: {
   partes: [ParteSuma, ParteSuma];
   total: { label: string; value: string; grande?: boolean; barra?: number | null; ayuda?: string };
   className?: string;
+  /** Si está, tocar un sumando (0 o 1) o el total abre su detalle. */
+  onAbrir?: (i: 0 | 1) => void;
 }) {
+  // Un div con rol de botón y no un <button>: adentro hay párrafos, y un
+  // botón solo admite texto en línea.
+  const tocable = (i: 0 | 1) =>
+    onAbrir
+      ? {
+          role: "button" as const,
+          tabIndex: 0,
+          onClick: () => onAbrir(i),
+          onKeyDown: (ev: React.KeyboardEvent) => {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              onAbrir(i);
+            }
+          },
+        }
+      : {};
   return (
     <div className={cn("flex flex-col overflow-hidden rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]", className)}>
       <div className="relative grid flex-1 grid-cols-2 divide-x divide-slate-100">
-        {partes.map((p) => (
-          <div key={p.label} className="flex min-w-0 flex-col items-center justify-center px-4 py-3 text-center" title={p.ayuda}>
+        {partes.map((p, i) => (
+          <div
+            key={p.label}
+            {...tocable(i as 0 | 1)}
+            className={cn(
+              "flex min-w-0 flex-col items-center justify-center px-4 py-3 text-center",
+              onAbrir && "cursor-pointer outline-none transition-colors hover:bg-slate-50 focus-visible:bg-slate-50",
+            )}
+            title={p.ayuda}
+          >
             <p className="text-[10px] font-bold uppercase tracking-[0.09em] text-slate-500">{p.label}</p>
             <p
               className="mt-0.5 whitespace-nowrap font-bold tracking-[-0.03em] tabular-nums text-slate-900"
@@ -1322,9 +1385,11 @@ function KpiSuma({
           totales de los dos bloques quedan a la misma altura, uno al lado
           del otro, aunque uno tenga barra y el otro no. */}
       <div
+        {...tocable(0)}
         className={cn(
           "flex min-h-[88px] flex-col items-center justify-center gap-1 border-t border-slate-100 px-4 py-3 text-center",
           total.grande ? "bg-sky-50/70" : "bg-slate-50/70",
+          onAbrir && "cursor-pointer outline-none transition-colors hover:bg-slate-100/70 focus-visible:bg-slate-100/70",
         )}
         title={total.ayuda}
       >
@@ -1346,6 +1411,7 @@ function KpiSuma({
             {Math.round(total.barra * 100)}% cobrado
           </span>
         ) : null}
+        {onAbrir ? <span className="text-[10px] font-semibold text-sky-700">Ver desglose ›</span> : null}
       </div>
     </div>
   );
@@ -2154,16 +2220,11 @@ function ProjectRow({
     porfacturar: (
       <td key="porfacturar" className="whitespace-nowrap px-2.5 py-2.5 text-right">
         {pf > 0 ? (
-          <>
-            <div className="font-medium tabular-nums text-sky-700" title={detallePorFacturar(p)}>
-              {bal(pf)}
-            </div>
-            {(p.porFacturar?.cobrado ?? 0) > 0 ? (
-              <div className="text-[11px] tabular-nums text-emerald-700" title="Anticipos ya cobrados sobre esas facturas EST/P26">
-                {bal(p.porFacturar!.cobrado)} cobrado
-              </div>
-            ) : null}
-          </>
+          // Lo ya cobrado de estas facturas (anticipo) va en la columna Cobrado;
+          // repetirlo acá era leer el mismo número dos veces en la fila.
+          <div className="font-medium tabular-nums text-sky-700" title={detallePorFacturar(p)}>
+            {bal(pf)}
+          </div>
         ) : (
           <span className="text-slate-300">—</span>
         )}
