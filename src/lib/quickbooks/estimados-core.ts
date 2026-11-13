@@ -1,12 +1,15 @@
 import type { SeccionDesglose } from "./desglose-core";
 import type { MonthPnl } from "./parse";
 
-// Lo que el proyecto todavía no facturó: las "facturas" EST de QuickBooks.
+// Lo que el proyecto todavía no facturó: las "facturas" EST de QuickBooks y
+// cualquier otra fechada en el futuro (las P26-…).
 //
 // El equipo carga como factura el monto del contrato que falta facturar, con
 // número EST… ("ESTDC26-23", "EST DS26-01", "Est06") y fecha en un mes
-// futuro, para que no entre en la contabilidad del mes. Son ingresos por venir
-// del proyecto, no facturado: se muestran aparte y, si alguna vez su fecha cae
+// futuro, para que no entre en la contabilidad del mes. Las P26-… (y alguna
+// 0090-…) se movieron igual a diciembre y, según el equipo, son lo mismo: por
+// facturar, y lo que ya pagaron es anticipo. Son ingresos por venir del
+// proyecto, no facturado: se muestran aparte y, si alguna vez su fecha cae
 // dentro de lo que se lee, se descuentan del facturado. Sin red: se prueba solo.
 
 export type DocEstimado = {
@@ -26,12 +29,21 @@ export const esEstimado = (numero: unknown): boolean => typeof numero === "strin
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0);
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
-/** Las EST de una lista de facturas de QuickBooks, agrupadas por proyecto (CustomerRef). */
-export function agruparEstimados(facturas: Record<string, unknown>[]): Map<string, PorFacturar> {
+/**
+ * ¿Esta factura es "por facturar"? Una EST siempre; cualquier otra, si está
+ * fechada después de `hoy` (YYYY-MM-DD). Sin `hoy`, solo las EST.
+ */
+export function esPorFacturar(f: Record<string, unknown>, hoy?: string): boolean {
+  if (esEstimado(f.DocNumber)) return true;
+  return !!hoy && typeof f.TxnDate === "string" && f.TxnDate.slice(0, 10) > hoy;
+}
+
+/** Las facturas por facturar (EST y fechadas a futuro), agrupadas por proyecto (CustomerRef). */
+export function agruparEstimados(facturas: Record<string, unknown>[], hoy?: string): Map<string, PorFacturar> {
   const out = new Map<string, PorFacturar>();
   const vistas = new Set<string>();
   for (const f of facturas) {
-    if (!esEstimado(f.DocNumber)) continue;
+    if (!esPorFacturar(f, hoy)) continue;
     const cliente = (f.CustomerRef as { value?: unknown } | undefined)?.value;
     if (typeof cliente !== "string") continue;
     const id = typeof f.Id === "string" ? f.Id : null;
@@ -50,7 +62,7 @@ export function agruparEstimados(facturas: Record<string, unknown>[]): Map<strin
       else cuentas.push({ cuenta, monto: r2(num(l.Amount)) });
     }
     const doc: DocEstimado = {
-      numero: (f.DocNumber as string).trim(),
+      numero: typeof f.DocNumber === "string" ? f.DocNumber.trim() : "(sin número)",
       fecha: typeof f.TxnDate === "string" ? f.TxnDate.slice(0, 10) : "",
       neto: r2(total - impuesto),
       total: r2(total),

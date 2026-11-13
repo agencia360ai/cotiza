@@ -30,6 +30,11 @@ export type PuntoMes = {
   porCobrar: number | null;
 };
 
+const pct = (v: number, de: number) => (de > 0 ? `${Math.round((v / de) * 100)}%` : "—");
+
+// Lo cobrado va en PORCENTAJE de lo facturado, no en montos: el cobrado sale de
+// los pagos (con ITBMS) y la barra es lo facturado (sin ITBMS), así que un
+// monto al lado del otro no cerraría. Los montos están en las tarjetas.
 const COLOR = { cobrado: "#059669", porCobrar: "#A7F3D0", sinDato: "#E2E8F0", gasto: "#F43F5E" };
 
 // Las tres partes de lo facturado en un mes. Suman exactamente lo facturado.
@@ -133,9 +138,9 @@ export function GraficaMensual({ data: crudo, todoReal }: { data: PuntoMes[]; to
         {hayCobrado ? (
           <>
             <Leyenda muestra={<MuestraFacturado />} nombre="Facturado" valor={totalCobro} />
-            <Leyenda muestra={<Muestra color={COLOR.cobrado} />} nombre="Cobrado" valor={tot.cobrado} />
-            <Leyenda muestra={<Muestra color={COLOR.porCobrar} />} nombre="Por cobrar" valor={tot.porCobrar} />
-            {tot.sinDato > 0.5 ? <Leyenda muestra={<Muestra color={COLOR.sinDato} />} nombre="Sin dato de cobro" valor={tot.sinDato} /> : null}
+            <Leyenda muestra={<Muestra color={COLOR.cobrado} />} nombre="Cobrado" texto={pct(tot.cobrado, totalCobro)} />
+            <Leyenda muestra={<Muestra color={COLOR.porCobrar} />} nombre="Por cobrar" texto={pct(tot.porCobrar, totalCobro)} />
+            {tot.sinDato > 0.5 ? <Leyenda muestra={<Muestra color={COLOR.sinDato} />} nombre="Sin dato de cobro" texto={pct(tot.sinDato, totalCobro)} /> : null}
           </>
         ) : (
           <Leyenda muestra={<Muestra color={COLOR.cobrado} />} nombre="Facturado" valor={totalCobro} />
@@ -381,18 +386,15 @@ function Tip({
           <>
             <Muestra color={COLOR.cobrado} />
             <span className="text-slate-300">Cobrado</span>
-            <span className="text-right tabular-nums">
-              {balCompact(x3.cobrado)}
-              {d.cobro > 0 ? <span className="ml-1 text-slate-400">{Math.round((x3.cobrado / d.cobro) * 100)}%</span> : null}
-            </span>
+            <span className="text-right tabular-nums">{pct(x3.cobrado, d.cobro)}</span>
             <Muestra color={COLOR.porCobrar} />
             <span className="text-slate-300">Por cobrar</span>
-            <span className="text-right tabular-nums">{balCompact(x3.porCobrar)}</span>
+            <span className="text-right tabular-nums">{pct(x3.porCobrar, d.cobro)}</span>
             {x3.sinDato > 0.5 ? (
               <>
                 <Muestra color={COLOR.sinDato} />
                 <span className="text-slate-300">Sin dato de cobro</span>
-                <span className="text-right tabular-nums">{balCompact(x3.sinDato)}</span>
+                <span className="text-right tabular-nums">{pct(x3.sinDato, d.cobro)}</span>
               </>
             ) : null}
           </>
@@ -419,15 +421,14 @@ function TablaMensual({ data, hayCobrado, mesHoy }: { data: PuntoMes[]; hayCobra
     },
     { cobro: 0, gasto: 0, cobrado: 0, porCobrar: 0 },
   );
-  const fila = (cobro: number, gasto: number, cobrado: number, porCobrar: number) => {
+  const fila = (cobro: number, gasto: number, cobrado: number) => {
     const m = cobro > 0 ? (cobro - gasto) / cobro : null;
     return (
       <>
         <td className="px-3 py-2 text-right font-medium text-slate-900">{balCompact(cobro)}</td>
         {hayCobrado ? (
           <>
-            <td className="px-3 py-2 text-right text-emerald-700">{balCompact(cobrado)}</td>
-            <td className="px-3 py-2 text-right text-amber-700">{balCompact(porCobrar)}</td>
+            <td className="px-3 py-2 text-right text-emerald-700">{pct(cobrado, cobro)}</td>
           </>
         ) : null}
         <td className="px-3 py-2 text-right text-rose-600">{balCompact(gasto)}</td>
@@ -446,8 +447,7 @@ function TablaMensual({ data, hayCobrado, mesHoy }: { data: PuntoMes[]; hayCobra
             <th className="px-3 py-2 text-right">Facturado</th>
             {hayCobrado ? (
               <>
-                <th className="px-3 py-2 text-right">Cobrado</th>
-                <th className="px-3 py-2 text-right">Por cobrar</th>
+                <th className="px-3 py-2 text-right" title="Qué parte de lo facturado ya se pagó">Cobrado</th>
               </>
             ) : null}
             <th className="px-3 py-2 text-right">Gasto</th>
@@ -461,14 +461,14 @@ function TablaMensual({ data, hayCobrado, mesHoy }: { data: PuntoMes[]; hayCobra
                 {fmtMes(d.month, true)}
                 {d.month.slice(0, 7) > mesHoy ? <span className="ml-1.5 text-[10px] normal-case text-slate-400">estimado</span> : null}
               </td>
-              {fila(d.cobro, d.gasto, partes(d).cobrado, partes(d).porCobrar)}
+              {fila(d.cobro, d.gasto, partes(d).cobrado)}
             </tr>
           ))}
         </tbody>
         <tfoot className="sticky bottom-0 border-t border-slate-200 bg-white font-semibold">
           <tr>
             <td className="px-3 py-2 text-slate-900">Total</td>
-            {fila(tot.cobro, tot.gasto, tot.cobrado, tot.porCobrar)}
+            {fila(tot.cobro, tot.gasto, tot.cobrado)}
           </tr>
         </tfoot>
       </table>
@@ -476,12 +476,12 @@ function TablaMensual({ data, hayCobrado, mesHoy }: { data: PuntoMes[]; hayCobra
   );
 }
 
-function Leyenda({ muestra, nombre, valor }: { muestra: React.ReactNode; nombre: string; valor: number }) {
+function Leyenda({ muestra, nombre, valor, texto }: { muestra: React.ReactNode; nombre: string; valor?: number; texto?: string }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-slate-500">
       {muestra}
       {nombre}
-      <span className="font-semibold tabular-nums text-slate-900">{balCompact(valor)}</span>
+      <span className="font-semibold tabular-nums text-slate-900">{texto ?? balCompact(valor ?? 0)}</span>
     </span>
   );
 }

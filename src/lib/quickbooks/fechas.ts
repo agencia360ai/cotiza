@@ -2,6 +2,9 @@ import "server-only";
 import { listQboTools, withQboSession } from "./mcp";
 import { desenvolver } from "./cobrado-core";
 import { cosecharFechas, fusionar, type RangoTxn } from "./fechas-core";
+import { agruparCobros, type CobroMes } from "./cobros-core";
+import { extractEntities } from "./parse";
+import type { QboToolResult } from "./mcp";
 
 // Fechas reales de actividad por proyecto, leídas de las TRANSACCIONES.
 //
@@ -16,9 +19,16 @@ export type FechasReales = {
   porProyecto: Map<string, RangoTxn>;
   /** Qué herramientas dieron datos. Vacío = no se pudo leer nada. */
   fuentes: string[];
+  /**
+   * Cobros por proyecto y mes, de las MISMAS facturas y recibos (no cuesta
+   * otra llamada). null = las facturas no se leyeron completas: quien llama
+   * conserva lo que tenía, porque una lista cortada daría proyectos "sin
+   * cobrar" que sí están cobrados.
+   */
+  cobros: Map<string, CobroMes[]> | null;
 };
 
-const VACIO: FechasReales = { porProyecto: new Map(), fuentes: [] };
+const VACIO: FechasReales = { porProyecto: new Map(), fuentes: [], cobros: null };
 
 // Las cuatro cosas que marcan que un proyecto está vivo: lo que se le facturó
 // al cliente y lo que se gastó en él. Los pagos de facturas quedan afuera a
@@ -75,8 +85,12 @@ export async function fetchFechasReales(
     return await withQboSession(async (call) => {
       const porProyecto = new Map<string, RangoTxn>();
       const fuentes: string[] = [];
+      // Para los cobros solo sirve una lectura COMPLETA: las variantes con
+      // fetchAll (la 0 y la 2). Las otras pueden venir cortadas en 100.
+      let facturas: Record<string, unknown>[] | null = null;
+      let recibos: Record<string, unknown>[] = [];
       for (const f of elegidas) {
-        for (const v of variantes(desde)) {
+        for (const [i, v] of variantes(desde).entries()) {
           let raw: unknown;
           try {
             raw = await call(f.tool.name, v);
@@ -88,11 +102,16 @@ export async function fetchFechasReales(
           if (parcial.size > 0) {
             fusionar(porProyecto, parcial);
             fuentes.push(f.nombre);
+            const completa = i === 0 || i === 2;
+            if (f.nombre === "facturas" && completa) facturas = extractEntities(raw as QboToolResult, "Invoice");
+            if (f.nombre === "recibos" && completa) recibos = extractEntities(raw as QboToolResult, "SalesReceipt");
             break; // esta fuente ya dio; pasar a la siguiente
           }
         }
       }
-      return { porProyecto, fuentes };
+      const hoy = new Date().toISOString().slice(0, 10);
+      const cobros = facturas ? agruparCobros(facturas, recibos, conocidos, hoy) : null;
+      return { porProyecto, fuentes, cobros };
     });
   } catch {
     return VACIO;

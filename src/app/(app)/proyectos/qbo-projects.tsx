@@ -40,6 +40,7 @@ import {
 } from "@/lib/quickbooks/prorate";
 import { gastoConHoras, horasEnRango, margenConHoras, type HorasProyecto } from "@/lib/quickbooks/horas-core";
 import { margenBruto } from "@/lib/quickbooks/estimados-core";
+import { cobrosEnRango } from "@/lib/quickbooks/cobros-core";
 import { bal, balCompact, fmtCorta, fmtHoras, marginTextColor, MESES_CORTOS } from "./formato";
 import { ResumenProyecto } from "./resumen-proyecto";
 import { GraficaMensual } from "./grafica-mensual";
@@ -117,7 +118,7 @@ const anticipoDe = (p: QboProject): number => p.porFacturar?.cobrado ?? 0;
 function detallePorFacturar(p: QboProject): string {
   const docs = p.porFacturar?.docs ?? [];
   return [
-    "Por facturar (facturas EST en QuickBooks)",
+    "Por facturar (facturas EST y P26 en QuickBooks)",
     ...docs.map((d) => `${d.numero}: ${bal(d.neto)}${d.cobrado > 0 ? ` · ${bal(d.cobrado)} ya cobrado` : ""}`),
   ].join("\n");
 }
@@ -222,10 +223,12 @@ type Enriched = {
   gastoRango: number | null;
   contableRango: number | null;
   horasRango: number;
-  // Lo cobrado que cae en el rango. QuickBooks solo da el saldo pendiente de
-  // HOY, así que `paid` es una foto sin fecha: para recortarlo al rango se
-  // reparte según qué porción de lo FACTURADO cae adentro. Null = sin dato.
+  // Lo cobrado de lo facturado en el rango y lo que de eso sigue sin pagar,
+  // CON ITBMS, de los pagos registrados en QuickBooks (por mes de factura).
+  // Sin esos cobros (antes del primer Actualizar) se cae al cobrado viejo,
+  // repartido según qué porción de lo facturado cae adentro. Null = sin dato.
   cobradoRango: number | null;
+  porCobrarRango: number | null;
   meses: MesMonto[]; // desglose del proyecto (vacío si no hay)
 };
 
@@ -405,6 +408,13 @@ export function QboProjectsBoard() {
       // repartir, y usar su monto inflaría la barra verde.
       const cobradoDe = (share: number): number | null =>
         p.paid === null ? null : round2(p.paid * Math.min(1, Math.max(0, share)));
+      const delMes = (m: string) => (range ? overlapFraction(m, finDeMes(m), range) : 1);
+      const cobros = p.cobros ? cobrosEnRango(p.cobros, delMes) : null;
+      const cobranza = (enRango: number | null, share: number) => {
+        if (cobros) return { cobradoRango: cobros.cobrado, porCobrarRango: round2(Math.max(0, cobros.facturado - cobros.cobrado)) };
+        const c = cobradoDe(share);
+        return { cobradoRango: c, porCobrarRango: c === null ? null : round2(Math.max(0, (enRango ?? 0) - c)) };
+      };
 
       // Camino real: sumar los meses del rango. Se usa cuando hay desglose y no
       // hay un total de contrato que mande (un contrato firmado se devenga a lo
@@ -427,7 +437,7 @@ export function QboProjectsBoard() {
           gastoRango: round2(s.cost + horasR),
           contableRango: s.cost,
           horasRango: horasR,
-          cobradoRango: cobradoDe(p.income && p.income > 0 ? s.income / p.income : 1),
+          ...cobranza(s.income, p.income && p.income > 0 ? s.income / p.income : 1),
           meses,
         };
       }
@@ -452,7 +462,7 @@ export function QboProjectsBoard() {
         gastoRango: p.cost === null ? null : round2(p.cost * fraction + horasEnRango(p.horas, range)),
         contableRango: p.cost === null ? null : round2(p.cost * fraction),
         horasRango: horasEnRango(p.horas, range),
-        cobradoRango: cobradoDe(fraction),
+        ...cobranza(totalBase === null ? null : round2(totalBase * fraction), fraction),
         meses,
       };
     });
@@ -600,8 +610,8 @@ export function QboProjectsBoard() {
     for (const e of sorted) {
       // El cobrado se reparte en la MISMA proporción que lo facturado, para que
       // la serie sume el total de la columna por construcción y no por suerte.
-      const porcion = (parte: number): number | null =>
-        e.cobradoRango === null || !e.enRango ? null : (parte / e.enRango) * e.cobradoRango;
+      const base = e.cobradoRango === null || e.porCobrarRango === null ? 0 : e.cobradoRango + e.porCobrarRango;
+      const porcion = (parte: number): number | null => (base > 0 ? (parte * (e.cobradoRango ?? 0)) / base : null);
       // Las horas van al mes en que se trabajaron, en los dos caminos. Las de
       // un proyecto con gasto contable negativo quedan fuera, igual que en los
       // KPIs, para que la gráfica no sume algo que el total no suma.
@@ -630,7 +640,7 @@ export function QboProjectsBoard() {
           mes,
           (e.enRango ?? 0) * porMes,
           (e.contableRango ?? 0) * porMes,
-          e.cobradoRango === null ? null : e.cobradoRango * porMes,
+          porcion((e.enRango ?? 0) * porMes),
         );
       }
     }
@@ -661,7 +671,7 @@ export function QboProjectsBoard() {
     // Proyectos con saldo pendiente, y lo facturado de los que no tienen dato
     // de cobro (pasa hasta el primer Actualizar después de que cambió algo).
     let nPorCobrar = 0;
-    let cobroConCobrado = 0;
+    let porCobrar = 0;
     let nSinDatoCobro = 0;
     // Proyectos cuyo gasto QBO devuelve negativo: cuentan como 0 en las sumas y
     // quedan fuera del margen. El badge dice cuántos son, para que nadie lea el
@@ -690,11 +700,11 @@ export function QboProjectsBoard() {
         horas += e.horasRango;
       }
       else gastoNegativo++;
-      if (e.cobradoRango !== null) {
+      if (e.cobradoRango !== null && e.porCobrarRango !== null) {
         cobrado += e.cobradoRango;
+        porCobrar += e.porCobrarRango;
         conCobrado++;
-        cobroConCobrado += e.enRango ?? 0;
-        if ((e.enRango ?? 0) - e.cobradoRango > 0.5) nPorCobrar++;
+        if (e.porCobrarRango > 0.5) nPorCobrar++;
       } else if ((e.enRango ?? 0) > 0) nSinDatoCobro++;
       if (!e.real && e.fraction < 1) prorrateados++;
     }
@@ -713,11 +723,13 @@ export function QboProjectsBoard() {
       anticipos,
       // Todo lo que entró: facturas cobradas + anticipos de EST.
       cobradoTotal: conCobrado > 0 || anticipos > 0 ? (conCobrado > 0 ? cobrado : 0) + anticipos : null,
-      // Por cobrar = facturado − cobrado, tal cual: la resta tiene que cerrar
-      // con los dos números que están en pantalla.
-      porCobrar: conCobrado > 0 ? Math.max(0, cobro - cobrado) : null,
+      // Lo facturado que el cliente todavía no pagó, con ITBMS: saldo de las
+      // facturas en QuickBooks. Cobrado + por cobrar = facturado con ITBMS.
+      porCobrar: conCobrado > 0 ? porCobrar : null,
+      // Lo facturado con ITBMS de los proyectos con dato: la base de la cuenta
+      // de cobranza (cobrado de facturas + por cobrar).
+      facturadoBruto: cobrado + porCobrar,
       nPorCobrar,
-      sinDatoCobro: Math.max(0, cobro - cobroConCobrado),
       nSinDatoCobro,
       abiertos,
       porFacturar,
@@ -827,17 +839,17 @@ export function QboProjectsBoard() {
                 value: bal(vista.porFacturar),
                 sub:
                   vista.nPorFacturar > 0
-                    ? `Facturas EST de ${vista.nPorFacturar} proyecto${vista.nPorFacturar === 1 ? "" : "s"}`
-                    : "Sin facturas EST",
+                    ? `Facturas EST y P26 de ${vista.nPorFacturar} proyecto${vista.nPorFacturar === 1 ? "" : "s"}`
+                    : "Sin facturas EST ni P26",
                 color: "#0369A1",
               },
-              { label: "Facturado", value: bal(vista.cobro), sub: "Facturas normales, sin las EST" },
+              { label: "Facturado", value: bal(vista.cobro), sub: "Facturas normales, sin EST ni P26" },
             ]}
             total={{
               label: "Ingresos previstos",
               value: bal(vista.previstos),
               grande: true,
-              ayuda: "Lo facturado en el rango más lo que está en facturas EST de esos proyectos.",
+              ayuda: "Lo facturado en el rango más lo que está en facturas EST y P26 (fechadas a futuro) de esos proyectos.",
             }}
           />
           {/* Gasto y margen: lado a lado en pantallas chicas, uno sobre otro al
@@ -873,11 +885,10 @@ export function QboProjectsBoard() {
                 sub:
                   vista.anticipos > 0
                     ? `Facturas ${vista.cobrado !== null ? balCompact(vista.cobrado) : "s/d"} + anticipos ${balCompact(vista.anticipos)}`
-                    : vista.cobrado !== null && vista.cobro > 0
-                      ? `${Math.round((vista.cobrado / vista.cobro) * 100)}% de lo facturado`
-                      : undefined,
+                    : "Pagos registrados en QuickBooks",
                 color: "#047857",
-                ayuda: "Todo lo que entró: facturas normales pagadas más los anticipos cobrados contra facturas EST.",
+                ayuda:
+                  "Solo los pagos registrados en QuickBooks, con ITBMS (lo que entró al banco): lo pagado de las facturas más los anticipos pagados contra facturas EST o P26.",
                 // Sin dato hay que poder ver POR QUÉ: el reporte puede no existir,
                 // no traer filas, o traer ids que no son los de estos proyectos.
                 extra: vista.cobrado === null ? <PorQueSinCobrado /> : null,
@@ -888,27 +899,29 @@ export function QboProjectsBoard() {
                 sub:
                   vista.porCobrar !== null ? `${vista.nPorCobrar} proyecto${vista.nPorCobrar === 1 ? "" : "s"} con saldo` : undefined,
                 color: "#B45309",
-                ayuda: "Facturado − cobrado: facturas normales que el cliente todavía no pagó, según las cuentas por cobrar de QuickBooks.",
-                // Un proyecto sin dato de cobro suma todo su facturado acá. Se
-                // dice cuánto es, para que nadie lo lea como deuda real.
+                ayuda: "Todo lo facturado que no tiene un pago registrado en QuickBooks: el saldo de cada factura, con ITBMS.",
+                // Un proyecto sin dato de cobro no suma acá (no se sabe qué
+                // debe). Se dice cuántos son, para que nadie lea el total como
+                // completo.
                 extra:
                   vista.porCobrar !== null && vista.nSinDatoCobro > 0 ? (
                     <p className="mt-0.5 text-[11px] font-medium text-amber-700">
-                      Incluye {balCompact(vista.sinDatoCobro)} de {vista.nSinDatoCobro} proyecto{vista.nSinDatoCobro === 1 ? "" : "s"} sin dato de
-                      cobro: dale Actualizar
+                      Faltan {vista.nSinDatoCobro} proyecto{vista.nSinDatoCobro === 1 ? "" : "s"} sin dato de cobro: dale Actualizar
                     </p>
                   ) : null,
               },
             ]}
             total={{
-              // Con anticipos la cuenta es cobrado + por cobrar = facturado +
-              // anticipos: el anticipo entró, pero no es parte de lo facturado.
-              label: vista.anticipos > 0 ? "Facturado + anticipos" : "Facturado",
-              value: bal(vista.cobro + vista.anticipos),
+              // Todo con ITBMS, como en QuickBooks: cobrado + por cobrar =
+              // facturado con ITBMS + anticipos. Por eso no es el mismo número
+              // que el Facturado de la izquierda, que va sin ITBMS.
+              label: vista.anticipos > 0 ? "Facturado con ITBMS + anticipos" : "Facturado con ITBMS",
+              value: bal(vista.facturadoBruto + vista.anticipos),
               barra:
-                vista.cobradoTotal !== null && vista.cobro + vista.anticipos > 0
-                  ? vista.cobradoTotal / (vista.cobro + vista.anticipos)
+                vista.cobradoTotal !== null && vista.facturadoBruto + vista.anticipos > 0
+                  ? vista.cobradoTotal / (vista.facturadoBruto + vista.anticipos)
                   : null,
+              ayuda: "Con ITBMS, como en QuickBooks. El Facturado de la izquierda va sin ITBMS, por eso no es el mismo número.",
             }}
           />
         </div>
@@ -1994,7 +2007,7 @@ function ProjectRow({
       margen s/d
     </div>
   ) : margen !== null ? (
-    <div className="mt-1 flex items-center justify-end gap-1.5" title={pf > 0 ? "Margen bruto con lo por facturar (EST)" : "Margen bruto"}>
+    <div className="mt-1 flex items-center justify-end gap-1.5" title={pf > 0 ? "Margen bruto con lo por facturar (EST y P26)" : "Margen bruto"}>
       <span className="w-12">
         <ProfitBar income={ingresoPrevisto} cost={gastoTotal} />
       </span>
@@ -2146,7 +2159,7 @@ function ProjectRow({
               {bal(pf)}
             </div>
             {(p.porFacturar?.cobrado ?? 0) > 0 ? (
-              <div className="text-[11px] tabular-nums text-emerald-700" title="Anticipos ya cobrados sobre esas EST">
+              <div className="text-[11px] tabular-nums text-emerald-700" title="Anticipos ya cobrados sobre esas facturas EST/P26">
                 {bal(p.porFacturar!.cobrado)} cobrado
               </div>
             ) : null}
@@ -2177,7 +2190,7 @@ function ProjectRow({
             </div>
             {anticipo > 0 ? (
               <div className="text-[11px] tabular-nums text-slate-400" title={detallePorFacturar(p)}>
-                {e.cobradoRango === null ? "anticipo · facturas s/d" : e.cobradoRango > 0.5 ? `incl. ${bal(anticipo)} anticipo` : "anticipo de EST"}
+                {e.cobradoRango === null ? "anticipo · facturas s/d" : e.cobradoRango > 0.5 ? `incl. ${bal(anticipo)} anticipo` : "anticipo (EST/P26)"}
               </div>
             ) : null}
           </>
@@ -2235,7 +2248,7 @@ function ProjectRow({
         ) : (
           <>
             {margen !== null ? (
-              <div className={cn("text-xs font-semibold tabular-nums", marginTextColor(margen))} title={pf > 0 ? "Margen bruto con lo por facturar (EST)" : "Margen bruto"}>
+              <div className={cn("text-xs font-semibold tabular-nums", marginTextColor(margen))} title={pf > 0 ? "Margen bruto con lo por facturar (EST y P26)" : "Margen bruto"}>
                 {Math.round(margen * 100)}%
               </div>
             ) : (
