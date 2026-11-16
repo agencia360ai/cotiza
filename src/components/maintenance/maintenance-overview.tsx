@@ -59,7 +59,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
       </section>
 
       {/* Distribution + urgent actions */}
-      <section className="grid gap-4 lg:grid-cols-3">
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)] p-5 lg:col-span-2">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-700">Distribución de estados</h2>
@@ -209,7 +209,7 @@ export async function MaintenanceOverview({ orgId }: { orgId: string }) {
       </section>
 
       {/* Recent reports + upcoming */}
-      <section className="grid gap-4 lg:grid-cols-2">
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(15,23,42,.04)]">
           <header className="flex items-center justify-between border-b border-border px-5 py-3">
             <div className="flex items-center gap-2">
