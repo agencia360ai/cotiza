@@ -33,6 +33,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen bg-canvas md:flex">
+      <a href="#contenido" className="sr-only z-[60] rounded-lg bg-white p-3 text-blue-700 focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Saltar al contenido</a>
       <AppSidebar
         org={{ name: org.name }}
         user={{ email: user.email ?? null }}
@@ -41,7 +42,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         secciones={secciones}
         verConfiguracion={verConfiguracion(ctx.role, ctx.secciones)}
       />
-      <main className="min-w-0 flex-1">{children}</main>
+      <main id="contenido" className="min-w-0 flex-1">{children}</main>
     </div>
   );
 }

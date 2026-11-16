@@ -233,7 +233,7 @@ type Enriched = {
   meses: MesMonto[]; // desglose del proyecto (vacío si no hay)
 };
 
-export function QboProjectsBoard() {
+export function QboProjectsBoard({ initialQuery = "" }: { initialQuery?: string }) {
   const [res, setRes] = useState<QboProjectsResult | null>(null);
   const [loading, setLoading] = useState(true);
   // Rubros seleccionados. Vacío = todos. Es un SET, no una pestaña: el equipo
@@ -251,14 +251,14 @@ export function QboProjectsBoard() {
   const refreshTimer = useRef<number | null>(null);
 
   // Filtros / orden / búsqueda / rango.
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuery);
   const [statusFiltro, setStatusFiltro] = useState<ProjectBizStatus | "all">("all");
   const [sort, setSort] = useState<SortState<SortKey>>({ key: "cobro", dir: "desc" });
   // Orden y visibilidad de las columnas: preferencia de cada quien, guardada en
   // el navegador. `arrastrando` es solo el estado del gesto en curso.
   const cols = useColumnas();
   const [arrastrando, setArrastrando] = useState<ColKey | null>(null);
-  const [rangeKey, setRangeKey] = useState<RangeKey>("year");
+  const [rangeKey, setRangeKey] = useState<RangeKey>(initialQuery ? "all" : "year");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [editingDates, setEditingDates] = useState<string | null>(null);

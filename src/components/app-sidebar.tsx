@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -104,18 +105,22 @@ function Pastilla({ n, alerta }: { n: number; alerta?: boolean }) {
 export function AppSidebar({ org, user, showOrgSwitcher = false, counts, secciones, verConfiguracion }: Props) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const closeOnDesktop = () => { if (desktop.matches) setOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
   const grupos = GRUPOS.map((g) => ({ ...g, items: g.items.filter((i) => secciones.includes(i.seccion)) })).filter(
     (g) => g.items.length > 0,
   );
 
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
-
   const navContent = (
     <>
-      <div className="flex items-center justify-between px-5 py-5">
-        <div className="min-w-0">
+      <div className="flex items-center justify-between gap-3 px-5 py-7">
+        <span aria-hidden="true" className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-lg font-bold text-white shadow-lg shadow-blue-950/40">{org.name.trim().slice(0, 1).toUpperCase()}</span>
+        <div className="min-w-0 flex-1">
           {showOrgSwitcher ? (
             <Link href="/select-org" className="group inline-flex items-center gap-1.5" title="Cambiar organización">
               <span className="max-w-[150px] truncate text-[15px] font-bold tracking-tight text-white">{org.name}</span>
@@ -131,17 +136,17 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts, seccion
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="-mr-2 flex size-9 items-center justify-center rounded-lg text-slate-400 hover:bg-sidebar-hover hover:text-white md:hidden"
+          className="-mr-2 flex size-11 items-center justify-center rounded-lg text-slate-400 hover:bg-sidebar-hover hover:text-white md:hidden"
           aria-label="Cerrar menú"
         >
           <X className="size-5" />
         </button>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-3">
+      <nav aria-label="Navegación principal" className="flex-1 overflow-y-auto px-3 pb-3">
         {grupos.map((grupo) => (
           <div key={grupo.label} className="mb-1.5">
-            <p className="px-3 pb-1 pt-3 text-[9px] font-bold uppercase tracking-[0.12em] text-sidebar-label">
+            <p className="px-3 pb-2 pt-5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
               {grupo.label}
             </p>
             <div className="flex flex-col gap-0.5">
@@ -156,9 +161,9 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts, seccion
                     onClick={() => setOpen(false)}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors",
+                      "flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-blue-400",
                       active
-                        ? "bg-sidebar-active font-semibold text-white shadow-[inset_2px_0_0_#2563EB]"
+                        ? "bg-blue-600 font-semibold text-white shadow-sm shadow-blue-950/20"
                         : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
                     )}
                   >
@@ -182,7 +187,7 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts, seccion
             href="/settings"
             onClick={() => setOpen(false)}
             className={cn(
-              "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors",
+              "flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-blue-400",
               pathname.startsWith("/settings")
                 ? "bg-sidebar-active font-semibold text-white"
                 : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
@@ -195,7 +200,7 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts, seccion
         <form action="/logout" method="post">
           <button
             type="submit"
-            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-300 transition-colors hover:bg-sidebar-hover hover:text-white"
+            className="flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-300 transition-colors hover:bg-sidebar-hover hover:text-white focus-visible:outline-2 focus-visible:outline-blue-400"
           >
             <LogOut className="size-4" />
             Cerrar sesión
@@ -213,9 +218,12 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts, seccion
       <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-white/5 bg-sidebar-bg px-4 py-3 md:hidden">
         <button
           type="button"
+          ref={menuButton}
           onClick={() => setOpen(true)}
-          className="-ml-2 flex size-9 items-center justify-center rounded-lg text-white hover:bg-sidebar-hover"
+          className="-ml-2 flex size-11 items-center justify-center rounded-lg text-white hover:bg-sidebar-hover focus-visible:outline-2 focus-visible:outline-blue-400"
           aria-label="Abrir menú"
+          aria-expanded={open}
+          aria-controls="mobile-navigation"
         >
           <Menu className="size-5" />
         </button>
@@ -232,22 +240,18 @@ export function AppSidebar({ org, user, showOrgSwitcher = false, counts, seccion
       </header>
 
       {/* Sidebar de escritorio */}
-      <aside className="hidden w-[236px] shrink-0 flex-col bg-sidebar-bg md:flex">{navContent}</aside>
+      <aside className="sticky top-0 hidden h-dvh w-[224px] shrink-0 flex-col bg-sidebar-bg md:flex 2xl:w-[248px]">{navContent}</aside>
 
       {/* Drawer móvil */}
-      {open ? (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            type="button"
-            aria-label="Cerrar menú"
-            onClick={() => setOpen(false)}
-            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
-          />
-          <aside className="absolute bottom-0 left-0 top-0 flex w-72 max-w-[85vw] flex-col bg-sidebar-bg shadow-xl">
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm md:hidden" />
+          <Dialog.Content id="mobile-navigation" aria-describedby={undefined} onCloseAutoFocus={(event) => { event.preventDefault(); menuButton.current?.focus(); }} className="fixed inset-y-0 left-0 z-50 flex w-80 max-w-[90vw] flex-col bg-sidebar-bg shadow-xl focus:outline-none md:hidden">
+            <Dialog.Title className="sr-only">Menú de {org.name}</Dialog.Title>
             {navContent}
-          </aside>
-        </div>
-      ) : null}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   );
 }

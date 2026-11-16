@@ -181,7 +181,7 @@ function emptyByStatus<T extends string>(keys: T[]): Record<T, { count: number; 
  * org no tiene cotizaciones en el año, devuelve un pipeline vacío (ceros) — NO
  * el snapshot demo, para no mostrar cifras fabricadas. Misma forma de datos.
  */
-export async function getPipelineData(orgId: string, year = 2026): Promise<PipelineData> {
+export async function getPipelineData(orgId: string, year = 2026, options: { throwOnError?: boolean } = {}): Promise<PipelineData> {
   if (!orgId) return emptyPipelineData(year);
   try {
     const supabase = await createClient();
@@ -272,7 +272,8 @@ export async function getPipelineData(orgId: string, year = 2026): Promise<Pipel
         },
       },
     };
-  } catch {
+  } catch (error) {
+    if (options.throwOnError) throw error;
     // Ante un error, ceros (no cifras demo). La UI muestra un tablero vacío,
     // que es honesto, en vez de datos fabricados.
     return emptyPipelineData(year);

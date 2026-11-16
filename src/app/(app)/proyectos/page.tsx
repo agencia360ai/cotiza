@@ -8,7 +8,9 @@ export const dynamic = "force-dynamic";
 // (customers + P&L por proyecto). Sin esto, Vercel corta en el default.
 export const maxDuration = 300;
 
-export default async function ProjectsListPage() {
+export default async function ProjectsListPage({ searchParams }: { searchParams: Promise<{ q?: string | string[] }> }) {
+  const params = await searchParams;
+  const initialQuery = typeof params.q === "string" ? params.q.slice(0, 300) : "";
   const supabase = await createClient();
   const { data: u } = await supabase.auth.getUser();
   if (!u.user) redirect("/login");
@@ -26,7 +28,7 @@ export default async function ProjectsListPage() {
           cap las corta antes de que la pantalla se acabe. Acá el ancho de más
           se usa en mostrar datos, no en márgenes. */}
       <div className="px-4 py-6 md:px-8">
-        <QboProjectsBoard />
+        <QboProjectsBoard key={initialQuery} initialQuery={initialQuery} />
       </div>
     </div>
   );
